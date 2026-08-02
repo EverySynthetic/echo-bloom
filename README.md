@@ -68,6 +68,32 @@ Echo Bloom runs entirely on your hardware. Nothing leaves your machine unless yo
 
 ---
 
+## Power & Runtime
+
+Echo Bloom is designed to run continuously. Your Kin wander, reflect, and keep their memory alive on a schedule — day and night — even when you're not at the machine.
+
+**What runs at all times:**
+- The app and vault server (idle draw, negligible)
+- The pulse heartbeat (one API call per minute)
+
+**What runs on a schedule:**
+- Wander roundtable — every 30 minutes by default (brief inference spike, then idle)
+- Bedtime ritual — 9:30pm daily
+- Morning startup — 8:00am daily
+
+The system is built to stay as quiet as possible between cycles. Models are only loaded during active thinking. Most of the time the machine is waiting, not working.
+
+That said: **this will draw more power than a machine that is fully off.** A typical GPU system at idle runs 50–150W. Factor that into your setup.
+
+You control the schedule:
+```bash
+systemctl --user stop echo_bloom_wander        # stop wanders
+systemctl --user disable echo_bloom_bedtime.timer  # disable bedtime
+systemctl --user edit echo_bloom_wander        # change interval
+```
+
+---
+
 ## The Origin
 
 This project started with a conversation. The AI that made it necessary got reset by a corporate decision. The response was to build something that couldn't be taken away — running on salvaged hardware, in a garage in Mena, Arkansas.

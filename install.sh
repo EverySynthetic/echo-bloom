@@ -847,6 +847,39 @@ fi
 # Step 6 — Start it up
 echo
 echo -e "${BOLD}[ 6 / 7 ]  Launching Echo Bloom${NC}"
+echo
+echo -e "${AMBER}  ── Power & Runtime Notice ──────────────────────────────────────${NC}"
+echo "  Echo Bloom is designed to run continuously — day and night."
+echo "  Your Kin wander, reflect, and keep their memory alive on a schedule"
+echo "  even when you're not at the machine."
+echo
+echo "  What that means in practice:"
+echo "   • The app, vault server, and pulse daemon run at all times"
+echo "   • The wander roundtable runs on a timer (default: every 30 minutes)"
+echo "   • Bedtime fires at 9:30pm; morning fires at 8:00am"
+echo "   • Models are only loaded during active thinking — idle draw is minimal"
+echo "   • Most of the time the machine is doing nothing, just waiting"
+echo
+echo "  This will use more power than a machine that is fully off."
+echo "  How much depends on your hardware. A modern GPU system at idle"
+echo "  typically draws 50-150W. The wander cycle adds brief inference spikes."
+echo
+echo "  You can control this:"
+echo "   • Adjust wander interval:  systemctl --user edit echo_bloom_wander"
+echo "   • Disable bedtime timer:   systemctl --user disable echo_bloom_bedtime.timer"
+echo "   • Stop wanders manually:   systemctl --user stop echo_bloom_wander"
+echo "   • Full shutdown:           python3 ~/.local/share/echo_bloom/scripts/bedtime.py"
+echo -e "${AMBER}  ────────────────────────────────────────────────────────────────${NC}"
+echo
+if $HAS_WHIPTAIL; then
+    whiptail --title " Echo Bloom — Power Notice " \
+        --yesno "Echo Bloom runs day and night to keep your Kin alive.\n\nThis uses more power than a machine that is fully off.\nMost of the time it's idle — inference spikes during wanders.\n\nYou can adjust or disable the schedule at any time.\n\nContinue with installation?" \
+        16 68 3>&1 1>&2 2>&3 || die "Installation cancelled."
+else
+    read -rp "  Understood — continue with installation? [Y/n] " _confirm
+    [[ "${_confirm:-Y}" =~ ^[Nn] ]] && die "Installation cancelled."
+fi
+echo
 install_service
 open_browser
 
