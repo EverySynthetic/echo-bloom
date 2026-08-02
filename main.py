@@ -123,7 +123,7 @@ async def login(
         "kin_session", token,
         httponly=True,
         samesite="strict",
-        secure=False,   # set True when behind HTTPS proxy
+        secure=True,
         max_age=60 * 60 * 24 * 7,
     )
     return resp
