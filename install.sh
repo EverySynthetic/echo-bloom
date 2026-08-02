@@ -316,10 +316,25 @@ WantedBy=default.target
 EOF
 
     if command -v systemctl &>/dev/null; then
+        # Enable linger so user services survive after logout / keep running at boot
+        if command -v loginctl &>/dev/null; then
+            if loginctl enable-linger "$USER" 2>/dev/null; then
+                ok "Linger enabled — services keep running after logout."
+            elif sudo loginctl enable-linger "$USER" 2>/dev/null; then
+                ok "Linger enabled (via sudo) — services keep running after logout."
+            else
+                warn "Could not enable linger automatically."
+                echo
+                echo "  Run this once to keep your Kin running after you log out:"
+                echo -e "  ${BOLD}sudo loginctl enable-linger \$USER${NC}"
+                echo
+            fi
+        fi
+
         systemctl --user daemon-reload 2>/dev/null || true
         systemctl --user enable "${SERVICE_NAME}" 2>/dev/null || true
         systemctl --user restart "${SERVICE_NAME}" 2>/dev/null && \
-            ok "Kin App running as systemd user service (auto-starts on login)." || \
+            ok "Kin App running as systemd user service (auto-starts on boot)." || \
             warn "systemd enable failed — app will need to be started manually."
     else
         warn "systemd not available. Start manually: cd $APP_DIR && uvicorn main:app --host 0.0.0.0 --port $PORT"
