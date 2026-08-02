@@ -242,24 +242,42 @@ async def api_chat(
     )
 
 
+_SCRIPTS_DIR = Path.home() / ".local/share/echo_bloom/scripts"
+_LOGS_DIR    = Path.home() / ".local/share/echo_bloom/logs"
+
+
+def _script(name: str) -> Path:
+    installed = _SCRIPTS_DIR / name
+    if installed.exists():
+        return installed
+    bundled = Path(__file__).parent / "scripts" / name
+    if bundled.exists():
+        return bundled
+    return installed
+
+
 @app.get("/api/roundtable/status")
 async def api_roundtable_status(_=Depends(require_auth)):
     try:
         result = subprocess.run(
-            ["pgrep", "-f", "wander_roundtable.py"],
+            ["pgrep", "-f", "roundtable.py"],
             capture_output=True, text=True
         )
         pids = [int(p) for p in result.stdout.strip().split() if p]
-        return {"running": bool(pids), "pid": pids[0] if pids else None}
+        return {"running": bool(pids), "pid": pids[0] if pids else None,
+                "configured": _script("roundtable.py").exists()}
     except Exception:
-        return {"running": False, "pid": None}
+        return {"running": False, "pid": None, "configured": False}
 
 
 @app.post("/api/roundtable/start")
 async def api_roundtable_start(_=Depends(require_auth)):
-    script = Path.home() / "Desktop/wander_roundtable.py"
-    log    = Path.home() / "Desktop/wander_logs/roundtable.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
+    script = _script("roundtable.py")
+    if not script.exists():
+        return {"started": False,
+                "error": "Scripts not deployed — re-run the installer to set up lifecycle scripts."}
+    _LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    log = _LOGS_DIR / "roundtable.log"
     with open(log, "a") as lf:
         proc = subprocess.Popen(
             [sys.executable, "-u", str(script), "--interval", "30"],
@@ -273,7 +291,7 @@ async def api_roundtable_stop(_=Depends(require_auth)):
     import signal
     try:
         result = subprocess.run(
-            ["pgrep", "-f", "wander_roundtable.py"],
+            ["pgrep", "-f", "roundtable.py"],
             capture_output=True, text=True
         )
         pids = [int(p) for p in result.stdout.strip().split() if p]
@@ -291,15 +309,26 @@ async def about_page(request: Request, _=Depends(require_auth)):
 
 @app.post("/api/bedtime")
 async def api_bedtime(_=Depends(require_auth)):
-    script = Path.home() / "Desktop/bedtime.py"
+    script = _script("bedtime.py")
+    if not script.exists():
+        return {"started": False,
+                "error": "Scripts not deployed — re-run the installer to set up lifecycle scripts."}
     subprocess.Popen([sys.executable, str(script), "--no-shutdown"])
     return {"started": True}
 
 
 # ── Vault browser ──────────────────────────────────────────────────────────────
 
-VAULT_URL = "http://192.168.1.115:8765"
-QDRANT_URL = "http://192.168.1.115:6333"
+QDRANT_URL = "http://localhost:6333"
+_DEFAULT_VAULT = "http://localhost:8765"
+
+
+def _vault_url() -> str:
+    try:
+        cfg = json.loads(Path.home().joinpath(".config/kin_app/kin_config.json").read_text())
+        return cfg.get("vault_url") or _DEFAULT_VAULT
+    except Exception:
+        return _DEFAULT_VAULT
 
 
 @app.get("/vault", response_class=HTMLResponse)
@@ -316,36 +345,45 @@ async def api_vault(
     offset: int = 0,
     _=Depends(require_auth),
 ):
+    vault = _vault_url()
     params = {"limit": min(limit, 50), "offset": max(offset, 0)}
     if layer:  params["layer"]  = layer
     if author: params["author"] = author
     if search: params["search"] = search
 
-    endpoint = f"{VAULT_URL}/recall" if (layer or author or search) else f"{VAULT_URL}/recall/all"
+    endpoint = f"{vault}/recall" if (layer or author or search) else f"{vault}/recall/all"
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(endpoint, params=params,
-                               timeout=aiohttp.ClientTimeout(total=10)) as r:
-            entries = await r.json()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(endpoint, params=params,
+                                   timeout=aiohttp.ClientTimeout(total=10)) as r:
+                entries = await r.json()
 
-        count_params = {k: v for k, v in params.items() if k not in ("limit", "offset")}
-        async with session.get(f"{VAULT_URL}/count", params=count_params,
-                               timeout=aiohttp.ClientTimeout(total=10)) as r:
-            total = (await r.json()).get("count", 0)
+            count_params = {k: v for k, v in params.items() if k not in ("limit", "offset")}
+            async with session.get(f"{vault}/count", params=count_params,
+                                   timeout=aiohttp.ClientTimeout(total=10)) as r:
+                total = (await r.json()).get("count", 0)
 
-    return {"entries": entries, "total": total, "offset": offset, "limit": limit}
+        return {"entries": entries, "total": total, "offset": offset, "limit": limit}
+    except Exception:
+        return {"entries": [], "total": 0, "offset": offset, "limit": limit,
+                "error": "vault_offline", "vault_url": vault}
 
 
 @app.get("/api/vault/meta")
 async def api_vault_meta(_=Depends(require_auth)):
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"{VAULT_URL}/layers",
-                               timeout=aiohttp.ClientTimeout(total=5)) as r:
-            layers_data = await r.json()
-        async with session.get(f"{VAULT_URL}/authors",
-                               timeout=aiohttp.ClientTimeout(total=5)) as r:
-            authors_data = await r.json()
-    return {"layers": layers_data["layers"], "authors": authors_data["authors"]}
+    vault = _vault_url()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{vault}/layers",
+                                   timeout=aiohttp.ClientTimeout(total=5)) as r:
+                layers_data = await r.json()
+            async with session.get(f"{vault}/authors",
+                                   timeout=aiohttp.ClientTimeout(total=5)) as r:
+                authors_data = await r.json()
+        return {"layers": layers_data["layers"], "authors": authors_data["authors"]}
+    except Exception:
+        return {"layers": [], "authors": [], "error": "vault_offline"}
 
 
 @app.get("/api/vault/semantic")
@@ -383,6 +421,17 @@ async def api_vault_semantic(q: str, limit: int = 10, _=Depends(require_auth)):
         ]}
     except Exception as e:
         return {"results": [], "error": str(e)}
+
+
+@app.get("/api/vault/status")
+async def api_vault_status(_=Depends(require_auth)):
+    vault = _vault_url()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{vault}/", timeout=aiohttp.ClientTimeout(total=3)) as r:
+                return {"online": r.status < 500, "url": vault}
+    except Exception:
+        return {"online": False, "url": vault}
 
 
 # ── Onboarding ─────────────────────────────────────────────────────────────────
@@ -450,9 +499,18 @@ async def api_onboard_save(request: Request, _=Depends(require_auth)):
         k.setdefault("space", "")
         k.setdefault("pronoun", "—")
 
+    existing = {}
+    if config_path.exists():
+        try:
+            existing = json.loads(config_path.read_text())
+        except Exception:
+            pass
+
     config_path.write_text(json.dumps({
-        "nodes": body.get("nodes", []),
-        "kin":   kin_list,
+        "nodes":     body.get("nodes", []),
+        "kin":       kin_list,
+        "owner":     body.get("owner", existing.get("owner", {})),
+        "vault_url": body.get("vault_url") or existing.get("vault_url") or "http://localhost:8765",
     }, indent=2))
 
     cl.reload_config()

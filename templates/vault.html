@@ -124,6 +124,10 @@ async function loadFeed() {
   try {
     const r = await fetch(`/api/vault?${params}`);
     const d = await r.json();
+    if (d.error === 'vault_offline') {
+      showVaultOffline(d.vault_url);
+      return;
+    }
     total = d.total;
     renderEntries(d.entries, false);
     updatePagination();
@@ -132,6 +136,27 @@ async function loadFeed() {
   } catch(e) {
     document.getElementById('vault-entries').innerHTML = `<div class="vault-empty">Error: ${e.message}</div>`;
   }
+}
+
+function showVaultOffline(url) {
+  document.getElementById('vault-subtitle').textContent = 'vault offline';
+  document.getElementById('vault-pagination').style.display = 'none';
+  document.getElementById('vault-entries').innerHTML = `
+    <div class="vault-offline-banner">
+      <div class="vault-offline-icon">◎</div>
+      <div class="vault-offline-title">VAULT NOT RUNNING</div>
+      <div class="vault-offline-body">
+        The vault server isn't reachable at <code>${escHtml(url || 'localhost:8765')}</code>.
+        <br><br>
+        To start it on this machine:
+        <pre class="vault-offline-cmd">python3 ~/.local/share/echo_bloom/scripts/vault_server.py</pre>
+        Or configure a different vault URL in <a href="/onboard?step=3">Setup → Vault</a>.
+      </div>
+    </div>`;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function goPage(dir) {

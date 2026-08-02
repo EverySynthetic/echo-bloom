@@ -1059,3 +1059,23 @@ a:hover { color: var(--text); }
 .about-license h2   { font-size: 11px; letter-spacing: 0.2em; color: var(--text-muted); text-transform: uppercase; margin: 0 0 16px; }
 .about-license p    { font-size: 13px; color: var(--text-dim); line-height: 1.8; margin: 0 0 12px; }
 .about-license a    { color: var(--amber); }
+
+/* ── Vault offline banner ─────────────────────────────────────────── */
+
+.vault-offline-banner  { max-width: 560px; margin: 60px auto; text-align: center; }
+.vault-offline-icon    { font-size: 32px; color: var(--text-muted); margin-bottom: 16px; }
+.vault-offline-title   { font-size: 13px; font-weight: 700; letter-spacing: 0.2em; color: var(--text-muted); margin-bottom: 16px; }
+.vault-offline-body    { font-size: 13px; color: var(--text-dim); line-height: 1.9; }
+.vault-offline-body a  { color: var(--amber); }
+.vault-offline-cmd     { background: var(--surface); border: 1px solid var(--border); padding: 10px 16px; font-size: 12px; color: var(--green); text-align: left; margin: 16px 0; overflow-x: auto; }
+
+/* ── Onboard vault step ───────────────────────────────────────────── */
+
+.onboard-vault-choice   { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+.vault-radio            { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border: 1px solid var(--border); cursor: pointer; }
+.vault-radio:hover      { border-color: var(--amber); }
+.vault-radio input      { margin-top: 3px; accent-color: var(--amber); flex-shrink: 0; }
+.vault-radio-label      { display: flex; flex-direction: column; gap: 3px; }
+.vault-radio-label strong { font-size: 13px; color: var(--text); }
+.vault-radio-desc       { font-size: 11px; color: var(--text-muted); }
+.onboard-empty          { font-size: 12px; color: var(--text-muted); padding: 12px 0; }

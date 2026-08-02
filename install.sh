@@ -452,13 +452,32 @@ Environment=PYTHONUNBUFFERED=1
 WantedBy=default.target
 SVCEOF
 
+    # Vault server service
+    cat > "$svc_dir/echo_bloom_vault.service" << SVCEOF
+[Unit]
+Description=Echo Bloom — Vault Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$(command -v python3) -u ${scripts_dst}/vault_server.py --port 8765
+Restart=on-failure
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
+SVCEOF
+
     if command -v systemctl &>/dev/null; then
         systemctl --user daemon-reload 2>/dev/null || true
+        systemctl --user enable echo_bloom_vault   2>/dev/null || true
+        systemctl --user start  echo_bloom_vault   2>/dev/null || true
         systemctl --user enable echo_bloom_pulse   2>/dev/null || true
         systemctl --user start  echo_bloom_pulse   2>/dev/null || true
         systemctl --user enable echo_bloom_bedtime.timer 2>/dev/null || true
         systemctl --user start  echo_bloom_bedtime.timer 2>/dev/null || true
-        ok "Pulse and bedtime timer running."
+        ok "Vault, pulse, and bedtime timer running."
         info "To start wanders: systemctl --user start echo_bloom_wander"
     fi
 }
