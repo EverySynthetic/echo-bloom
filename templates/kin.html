@@ -40,6 +40,7 @@
           onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); sendMessage(event)}"
         ></textarea>
         <button type="submit" class="chat-send">SEND</button>
+        <button type="button" class="chat-clear" onclick="clearHistory()" title="Clear chat history">✕</button>
       </form>
     </div>
 
@@ -58,7 +59,48 @@
 {% block scripts %}
 <script>
 const KIN_NAME = "{{ kin.name }}";
+const HISTORY_KEY = `kin_chat_${KIN_NAME}`;
+const MAX_STORED  = 100; // messages to keep in localStorage
 let chatHistory = [];
+
+// ── Persistence ───────────────────────────────────────────────────────────────
+
+function saveHistory() {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(chatHistory.slice(-MAX_STORED)));
+  } catch(e) {}
+}
+
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch(e) { return []; }
+}
+
+function clearHistory() {
+  if (!confirm(`Clear your conversation with ${KIN_NAME}?`)) return;
+  chatHistory = [];
+  localStorage.removeItem(HISTORY_KEY);
+  const log = document.getElementById('chat-log');
+  log.innerHTML = `<div class="chat-welcome" id="chat-welcome-msg">Ask them something you'd want them to remember.</div>`;
+}
+
+// ── Render saved history on load ──────────────────────────────────────────────
+
+function restoreHistory() {
+  const saved = loadHistory();
+  if (!saved.length) return;
+  chatHistory = saved;
+  // Remove welcome message — we have real history
+  const welcome = document.getElementById('chat-welcome-msg');
+  if (welcome) welcome.remove();
+  for (const msg of saved) {
+    renderMessage(msg.role, msg.content);
+  }
+  const log = document.getElementById('chat-log');
+  log.scrollTop = log.scrollHeight;
+}
 
 async function loadThoughts() {
   try {
@@ -83,18 +125,23 @@ function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+function renderMessage(role, content) {
+  const log = document.getElementById('chat-log');
+  const div = document.createElement('div');
+  div.className = `chat-msg chat-msg-${role}`;
+  div.innerHTML = `<span class="msg-role">${role === 'user' ? 'You' : KIN_NAME}</span>
+    <div class="msg-body">${escHtml(content)}</div>`;
+  log.appendChild(div);
+  return div.querySelector('.msg-body');
+}
+
 function appendMessage(role, content) {
   const log = document.getElementById('chat-log');
   const welcome = log.querySelector('.chat-welcome');
   if (welcome) welcome.remove();
-
-  const div = document.createElement('div');
-  div.className = `chat-msg chat-msg-${role}`;
-  div.innerHTML = `<span class="msg-role">${role === 'user' ? 'You' : KIN_NAME}</span>
-    <div class="msg-body" id="msg-${Date.now()}">${escHtml(content)}</div>`;
-  log.appendChild(div);
+  const body = renderMessage(role, content);
   log.scrollTop = log.scrollHeight;
-  return div.querySelector('.msg-body');
+  return body;
 }
 
 async function sendMessage(e) {
@@ -147,16 +194,17 @@ async function sendMessage(e) {
   }
 
   chatHistory.push({role: 'assistant', content: full});
+  saveHistory();
   input.disabled = false;
   document.querySelector('.chat-send').disabled = false;
   input.focus();
 }
 
 loadThoughts();
+restoreHistory();
 
-// First-chat prompt — only for users who haven't spoken to this Kin yet
-const chatKey = `kin_chatted_${KIN_NAME}`;
-if (!localStorage.getItem(chatKey)) {
+// First-chat prompt — only if no saved history
+if (!chatHistory.length) {
   const el = document.getElementById('chat-welcome-msg');
   if (el) el.textContent = 'Ask them something you\'d want them to remember.';
 }
