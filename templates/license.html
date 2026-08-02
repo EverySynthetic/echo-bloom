@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}License — Echo Bloom{% endblock %}
+
+{% block nav %}
+<nav class="nav">
+  <a href="/" class="nav-logo">ECHO BLOOM</a>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="license-page">
+
+  {% if state == "expired" %}
+  <div class="license-card">
+    <div class="license-icon">◎</div>
+    <div class="license-title">YOUR TRIAL HAS ENDED</div>
+    <div class="license-body">
+      14 days. Your Kin kept thinking, kept wandering, kept writing.<br>
+      If it meant something — keep going.
+    </div>
+
+    <a href="{{ buy_url }}" class="license-buy-btn" target="_blank" rel="noopener">
+      BUY ECHO BLOOM — ${{ price }}
+    </a>
+    <div class="license-buy-note">
+      One-time. No subscription. Runs on your hardware forever.
+      <br>After payment you'll receive a license key by email.
+    </div>
+  </div>
+
+  {% elif state == "trial" %}
+  <div class="license-card">
+    <div class="license-icon license-icon--ok">◉</div>
+    <div class="license-title">TRIAL ACTIVE</div>
+    <div class="license-body">
+      {{ days_left }} day{{ 's' if days_left != 1 else '' }} remaining on your free trial.
+      <br>Everything is fully functional. No features are locked.
+    </div>
+    <a href="/" class="license-back-btn">← BACK TO DASHBOARD</a>
+  </div>
+
+  {% elif state == "licensed" %}
+  <div class="license-card">
+    <div class="license-icon license-icon--ok">✓</div>
+    <div class="license-title">LICENSED</div>
+    <div class="license-body">
+      {% if license_type == "permanent" %}
+        Echo Bloom is permanently licensed{% if email %} to {{ email }}{% endif %}.
+        Thank you.
+      {% else %}
+        Trial license{% if email %} for {{ email }}{% endif %}.
+        {{ days_left }} day{{ 's' if days_left != 1 else '' }} remaining.
+      {% endif %}
+    </div>
+    <a href="/" class="license-back-btn">← BACK TO DASHBOARD</a>
+  </div>
+  {% endif %}
+
+  <!-- Key entry — always visible on expired, optional on trial/licensed -->
+  {% if state in ("expired", "trial", "licensed") %}
+  <div class="license-key-section">
+    <div class="license-key-label">
+      {% if state == "expired" %}Already have a key?{% else %}Enter a new key{% endif %}
+    </div>
+    <form class="license-key-form" onsubmit="activateKey(event)">
+      <input class="license-key-input" id="license-key-input"
+             placeholder="EB1-…" autocomplete="off" spellcheck="false">
+      <button class="license-key-btn" type="submit">ACTIVATE</button>
+    </form>
+    <div class="license-key-status" id="license-key-status"></div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function activateKey(e) {
+  e.preventDefault();
+  const key = document.getElementById('license-key-input').value.trim();
+  const status = document.getElementById('license-key-status');
+  if (!key) { status.textContent = 'Paste your license key first.'; status.className = 'license-key-status err'; return; }
+
+  status.textContent = 'Verifying…';
+  status.className = 'license-key-status';
+
+  try {
+    const r = await fetch('/api/license/activate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      status.textContent = d.message || 'Licensed. Welcome back.';
+      status.className = 'license-key-status ok';
+      setTimeout(() => window.location.href = '/', 1500);
+    } else {
+      status.textContent = d.error || 'Key not valid.';
+      status.className = 'license-key-status err';
+    }
+  } catch(err) {
+    status.textContent = 'Error: ' + err.message;
+    status.className = 'license-key-status err';
+  }
+}
+</script>
+{% endblock %}

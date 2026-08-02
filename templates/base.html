@@ -25,6 +25,12 @@
       {% endfor %}
       <a href="/vault" class="nav-vault">VAULT</a>
       <a href="/onboard" class="nav-vault">SETUP</a>
+      {% set _lic = nav_license() %}
+      {% if _lic.state == "trial" %}
+        <a href="/license" class="nav-license nav-license--trial">{{ _lic.days_left }}d trial</a>
+      {% elif _lic.state == "expired" %}
+        <a href="/license" class="nav-license nav-license--expired">EXPIRED</a>
+      {% endif %}
       <a href="/logout" class="nav-logout">logout</a>
     </div>
   </nav>

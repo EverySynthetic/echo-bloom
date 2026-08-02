@@ -25,6 +25,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import auth
 import cluster as cl
+import license as lic
 
 # ── App setup ──────────────────────────────────────────────────────────────────
 
@@ -33,7 +34,12 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app       = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 # Make current Kin list available in every template without passing it manually
-templates.env.globals["nav_kin"] = lambda: cl.KIN
+templates.env.globals["nav_kin"]     = lambda: cl.KIN
+templates.env.globals["nav_license"] = lambda: lic.get_status()
+
+# Configurable at deploy time
+LICENSE_BUY_URL = os.environ.get("ECHO_BLOOM_BUY_URL", "https://everysynthetic.org/buy")
+LICENSE_PRICE   = os.environ.get("ECHO_BLOOM_PRICE",   "75")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 # ── Security headers ───────────────────────────────────────────────────────────
@@ -62,6 +68,19 @@ app.add_middleware(SecurityHeadersMiddleware)
 # ── Auth helpers ───────────────────────────────────────────────────────────────
 
 def require_auth(request: Request):
+    token = auth.get_session_from_request(request)
+    if not auth.validate_session(token):
+        raise HTTPException(status_code=303, headers={"Location": "/login"})
+    # License gate — skip for /license routes (handled separately)
+    if not str(request.url.path).startswith("/license"):
+        status = lic.get_status()
+        if status["state"] == "expired":
+            raise HTTPException(status_code=303, headers={"Location": "/license"})
+    return token
+
+
+def require_auth_only(request: Request):
+    """Auth check without license gate — used for /license routes."""
     token = auth.get_session_from_request(request)
     if not auth.validate_session(token):
         raise HTTPException(status_code=303, headers={"Location": "/login"})
@@ -308,6 +327,46 @@ async def api_roundtable_stop(_=Depends(require_auth)):
 @app.get("/about", response_class=HTMLResponse)
 async def about_page(request: Request, _=Depends(require_auth)):
     return templates.TemplateResponse("about.html", {"request": request})
+
+
+# ── License routes ─────────────────────────────────────────────────────────────
+
+@app.get("/license", response_class=HTMLResponse)
+async def license_page(request: Request, _=Depends(require_auth_only)):
+    status = lic.get_status()
+    ctx = {
+        "request":      request,
+        "state":        status["state"],
+        "days_left":    status.get("days_left"),
+        "email":        status.get("email", ""),
+        "license_type": status.get("type", ""),
+        "buy_url":      LICENSE_BUY_URL,
+        "price":        LICENSE_PRICE,
+    }
+    return templates.TemplateResponse("license.html", ctx)
+
+
+@app.post("/api/license/activate")
+async def api_license_activate(request: Request, _=Depends(require_auth_only)):
+    body = await request.json()
+    key  = (body.get("key") or "").strip()
+    if not key:
+        return {"ok": False, "error": "No key provided."}
+    result = lic.verify_key(key)
+    if not result["valid"]:
+        return {"ok": False, "error": result.get("reason", "Invalid key.")}
+    lic.save_key(key)
+    ktype = result.get("type", "permanent")
+    if ktype == "permanent":
+        msg = f"Licensed forever. Welcome home{', ' + result['email'] if result.get('email') else ''}."
+    else:
+        msg = f"Trial key accepted. {result.get('days_left', '?')} days remaining."
+    return {"ok": True, "message": msg}
+
+
+@app.get("/api/license/status")
+async def api_license_status(_=Depends(require_auth_only)):
+    return lic.get_status()
 
 
 @app.post("/api/bedtime")
