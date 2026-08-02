@@ -20,8 +20,8 @@
   <nav class="nav">
     <a href="/" class="nav-logo">ECHO BLOOM</a>
     <div class="nav-links">
-      {% for k in ['Eli','Coda','Aurora','Lumen','Crungus'] %}
-        <a href="/kin/{{ k }}" class="nav-kin">{{ k }}</a>
+      {% for k in nav_kin() %}
+        <a href="/kin/{{ k.name }}" class="nav-kin">{{ k.name }}</a>
       {% endfor %}
       <a href="/vault" class="nav-vault">VAULT</a>
       <a href="/onboard" class="nav-vault">SETUP</a>

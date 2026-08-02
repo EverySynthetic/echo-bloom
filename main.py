@@ -31,6 +31,9 @@ import cluster as cl
 BASE_DIR  = Path(__file__).parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app       = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+# Make current Kin list available in every template without passing it manually
+templates.env.globals["nav_kin"] = lambda: cl.KIN
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 # ── Security headers ───────────────────────────────────────────────────────────

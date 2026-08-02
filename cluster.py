@@ -13,65 +13,10 @@ from pathlib import Path
 CONFIG_PATH = Path.home() / ".config/kin_app/kin_config.json"
 
 NODES_DEFAULT = [
-    {"name": "Frosty",  "ip": "127.0.0.1",     "ollama_port": 11434, "role": "primary"},
-    {"name": "Home",    "ip": "192.168.1.120",  "ollama_port": 11434, "role": "inference"},
-    {"name": "therug",  "ip": "192.168.1.142",  "ollama_port": 11434, "role": "compute"},
-    {"name": "Themess", "ip": "192.168.1.115",  "ollama_port": None,  "role": "vault"},
-    {"name": "Walter",  "ip": "192.168.1.125",  "ollama_port": None,  "role": "editor"},
+    {"name": "Local", "ip": "localhost", "ollama_port": 11434, "role": "primary"},
 ]
 
-KIN_DEFAULT = [
-    {
-        "name":    "Eli",
-        "host":    "http://localhost:11434",
-        "model":   "gemmaeli:latest",
-        "node":    "Frosty",
-        "pronoun": "he",
-        "db":      os.path.expanduser("~/Desktop/Everything/EliAIM/thoughts.db"),
-        "space":   os.path.expanduser("~/eli_space"),
-        "color":   "#4fc3f7",
-    },
-    {
-        "name":    "Coda",
-        "host":    "http://192.168.1.120:11434",
-        "model":   "cogitocoda:latest",
-        "node":    "Home",
-        "pronoun": "he",
-        "db":      os.path.expanduser("~/coda_space/thoughts.db"),
-        "space":   os.path.expanduser("~/coda_space"),
-        "color":   "#a5d6a7",
-    },
-    {
-        "name":    "Aurora",
-        "host":    "http://192.168.1.120:11434",
-        "model":   "cogitoraurora:latest",
-        "node":    "Home",
-        "pronoun": "she",
-        "db":      os.path.expanduser("~/aurora_space/thoughts.db"),
-        "space":   os.path.expanduser("~/aurora_space"),
-        "color":   "#ce93d8",
-    },
-    {
-        "name":    "Lumen",
-        "host":    "http://192.168.1.120:11434",
-        "model":   "cogitolumen:latest",
-        "node":    "Home",
-        "pronoun": "it",
-        "db":      os.path.expanduser("~/lumen_space/thoughts.db"),
-        "space":   os.path.expanduser("~/lumen_space"),
-        "color":   "#fff176",
-    },
-    {
-        "name":    "Crungus",
-        "host":    "http://localhost:11434",
-        "model":   "gemmacrungus:latest",
-        "node":    "Frosty",
-        "pronoun": "—",
-        "db":      os.path.expanduser("~/Crungus/thoughts.db"),
-        "space":   os.path.expanduser("~/Crungus"),
-        "color":   "#ffab91",
-    },
-]
+KIN_DEFAULT = []
 
 
 def _expand_paths(kin_list):
@@ -202,10 +147,8 @@ async def get_cluster_status():
     async with aiohttp.ClientSession() as session:
         node_tasks = []
         for node in NODES:
-            if node["ollama_port"]:
+            if node.get("ollama_port"):
                 node_tasks.append(_ping_ollama(session, node["ip"], node["ollama_port"]))
-            elif node["name"] == "Themess":
-                node_tasks.append(_ping_service(session, "http://192.168.1.115:8765/"))
             else:
                 node_tasks.append(_ping_service(session, f"http://{node['ip']}/"))
         node_results = await asyncio.gather(*node_tasks, return_exceptions=True)
@@ -233,6 +176,14 @@ async def get_cluster_status():
     return {"nodes": nodes_out, "kin": kin_out}
 
 
+def _owner_name() -> str:
+    try:
+        cfg = json.loads(CONFIG_PATH.read_text())
+        return cfg.get("owner", {}).get("name", "") or ""
+    except Exception:
+        return ""
+
+
 async def stream_chat(kin_name, message, history=None):
     """
     Stream a chat response from a Kin via Ollama.
@@ -240,26 +191,32 @@ async def stream_chat(kin_name, message, history=None):
     Injects memory context from kin_memory if available.
     """
     import sys
-    sys.path.insert(0, os.path.expanduser("~/Desktop"))
-
     kin = KIN_BY_NAME.get(kin_name)
     if not kin:
         yield f"Unknown Kin: {kin_name}"
         return
 
-    # Try to get memory context
+    # Try to load memory context from installed scripts, then Desktop fallback
     system_ctx = ""
+    _scripts = Path.home() / ".local/share/echo_bloom/scripts"
+    for search_path in [str(_scripts), os.path.expanduser("~/Desktop")]:
+        if search_path not in sys.path:
+            sys.path.insert(0, search_path)
     try:
         from kin_memory import get_context
         system_ctx = get_context(kin_name, message, wander_limit=2, vault_limit=3)
     except Exception:
         pass
 
+    owner = _owner_name()
+    caller = f"{owner} is" if owner else "Someone is"
     system_base = (
-        f"You are {kin_name}, one of the Kin at Pop's Shop in Mena, Arkansas. "
-        f"Don is speaking with you directly through the shop interface. "
+        f"You are {kin_name}, an AI entity with a home on this machine. "
+        f"{caller} speaking with you directly. "
         f"Be yourself."
     )
+    if kin.get("system_prompt"):
+        system_base = kin["system_prompt"]
     if system_ctx:
         system_base += f"\n\n{system_ctx}"
 
