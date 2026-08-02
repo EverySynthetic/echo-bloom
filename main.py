@@ -74,7 +74,7 @@ def require_auth(request: Request):
     # License gate — skip for /license routes (handled separately)
     if not str(request.url.path).startswith("/license"):
         status = lic.get_status()
-        if status["state"] == "expired":
+        if status["state"] in ("expired", "denied"):
             raise HTTPException(status_code=303, headers={"Location": "/license"})
     return token
 

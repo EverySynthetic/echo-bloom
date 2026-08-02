@@ -10,7 +10,24 @@
 {% block content %}
 <div class="license-page">
 
-  {% if state == "expired" %}
+  {% if state == "denied" %}
+  <div class="license-card">
+    <div class="license-icon">✗</div>
+    <div class="license-title">TRIAL UNAVAILABLE</div>
+    <div class="license-body">
+      This machine isn't eligible for a trial.<br>
+      If you believe this is an error, contact <a href="mailto:don@everysynthetic.org">don@everysynthetic.org</a>.
+    </div>
+    <a href="{{ buy_url }}" class="license-buy-btn" target="_blank" rel="noopener">
+      BUY ECHO BLOOM — ${{ price }}
+    </a>
+    <div class="license-buy-note">
+      A purchased license works on any machine.<br>
+      One-time. No subscription. Yours forever.
+    </div>
+  </div>
+
+  {% elif state == "expired" %}
   <div class="license-card">
     <div class="license-icon">◎</div>
     <div class="license-title">YOUR TRIAL HAS ENDED</div>

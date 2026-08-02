@@ -1,109 +1,255 @@
 """
 license.py — Echo Bloom license verification (client side).
 
-Keys are Ed25519-signed payloads. The public key is embedded here.
-The private key lives only on the license server — never in this file.
+Keys and trial tokens are Ed25519-signed. Public key embedded here.
+Private key lives only on the license server — never in this file.
 
-Key format:  EB1-{base64url(json_payload)}.{base64url(signature)}
+Key format:    EB1-{base64url(json_payload)}.{base64url(signature)}
+Trial token:   EBT-{base64url(json_payload)}.{base64url(signature)}
 """
 
 import base64
+import hashlib
 import json
+import os
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 try:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
     from cryptography.exceptions import InvalidSignature
     _CRYPTO_OK = True
 except ImportError:
     _CRYPTO_OK = False
 
-# ── Public key (safe to embed — cannot generate keys from this) ────────────────
+# ── Public key (safe to embed — cannot generate or forge keys from this) ───────
 _PUBLIC_KEY_B64 = "F7yDQhDryltxou0UIhoYEWtWwZ9w8NO5nzZ6xf85oEI="
 
-LICENSE_PATH    = Path.home() / ".config/kin_app/license"
-TRIAL_PATH      = Path.home() / ".config/kin_app/trial_start"
-TRIAL_DAYS      = 14
+TRIAL_SERVER      = os.environ.get("ECHO_BLOOM_LICENSE_SERVER",
+                                   "https://license.everysynthetic.org")
+LICENSE_PATH      = Path.home() / ".config/kin_app/license"
+TRIAL_TOKEN_PATH  = Path.home() / ".config/kin_app/trial_token"
+FINGERPRINT_PATH  = Path.home() / ".config/kin_app/machine_id"
+TRIAL_DAYS        = 14
+
+# Grace period: if server unreachable on first run, allow this many days locally
+# before requiring a server check. Prevents blocking people with spotty internet.
+_OFFLINE_GRACE_DAYS = 3
 
 
-# ── Trial tracking ─────────────────────────────────────────────────────────────
+# ── Machine fingerprint ────────────────────────────────────────────────────────
 
-def ensure_trial_start():
-    """Record first-run timestamp if not already set."""
-    if not TRIAL_PATH.exists():
-        TRIAL_PATH.parent.mkdir(parents=True, exist_ok=True)
-        TRIAL_PATH.write_text(str(int(time.time())))
+def get_fingerprint() -> str:
+    """
+    Stable hardware fingerprint. Cached after first call.
+    Uses /etc/machine-id (set at OS install, requires no root, survives reboots).
+    Falls back to MAC-based UUID if unavailable.
+    """
+    if FINGERPRINT_PATH.exists():
+        fp = FINGERPRINT_PATH.read_text().strip()
+        if fp:
+            return fp
 
-
-def trial_days_remaining() -> int:
-    """How many full days are left in the trial. 0 = expired."""
-    if not TRIAL_PATH.exists():
-        return TRIAL_DAYS
+    parts = []
     try:
-        start    = int(TRIAL_PATH.read_text().strip())
-        elapsed  = time.time() - start
-        remaining = TRIAL_DAYS - int(elapsed / 86400)
-        return max(0, remaining)
+        machine_id = Path("/etc/machine-id").read_text().strip()
+        if machine_id:
+            parts.append(machine_id)
     except Exception:
-        return 0
+        pass
+
+    if not parts:
+        import uuid
+        parts.append(str(uuid.getnode()))  # MAC address fallback
+
+    fp = hashlib.sha256("|".join(parts).encode()).hexdigest()
+    FINGERPRINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    FINGERPRINT_PATH.write_text(fp)
+    return fp
 
 
-# ── Key verification ──────────────────────────────────────────────────────────
+# ── Ed25519 helpers ────────────────────────────────────────────────────────────
 
 def _load_public_key():
     raw = base64.urlsafe_b64decode(_PUBLIC_KEY_B64 + "==")
     return Ed25519PublicKey.from_public_bytes(raw)
 
 
-def verify_key(key: str) -> dict:
-    """
-    Verify a license key. Returns:
-      {"valid": True,  "type": "permanent", "email": "...", "days_left": None}
-      {"valid": True,  "type": "trial",     "email": "...", "days_left": N}
-      {"valid": False, "reason": "..."}
-    """
+def _verify_signed_token(token: str, prefix: str) -> dict:
+    """Verify any Ed25519-signed token with the given prefix."""
     if not _CRYPTO_OK:
         return {"valid": False, "reason": "cryptography package not installed"}
-
-    key = key.strip()
-    if not key.startswith("EB1-"):
-        return {"valid": False, "reason": "not an Echo Bloom key"}
-
+    if not token.startswith(prefix):
+        return {"valid": False, "reason": f"not an {prefix} token"}
     try:
-        rest = key[4:]  # strip "EB1-"
+        rest = token[len(prefix):]
         if "." not in rest:
-            return {"valid": False, "reason": "malformed key"}
+            return {"valid": False, "reason": "malformed token"}
         payload_b64, sig_b64 = rest.rsplit(".", 1)
-
         payload_bytes = base64.urlsafe_b64decode(payload_b64 + "==")
         sig_bytes     = base64.urlsafe_b64decode(sig_b64     + "==")
-
         pub = _load_public_key()
-        pub.verify(sig_bytes, payload_bytes)   # raises InvalidSignature if bad
-
-        payload = json.loads(payload_bytes.decode())
-        ktype   = payload.get("type", "permanent")
-        email   = payload.get("email", "")
-        expires = payload.get("expires", 0)
-
-        if ktype == "trial" and expires:
-            now = int(time.time())
-            if now > expires:
-                return {"valid": False, "reason": "trial key expired",
-                        "type": "trial", "email": email}
-            days_left = max(1, (expires - now) // 86400 + 1)
-            return {"valid": True, "type": "trial", "email": email,
-                    "days_left": days_left}
-
-        return {"valid": True, "type": "permanent", "email": email,
-                "days_left": None}
-
+        pub.verify(sig_bytes, payload_bytes)
+        return {"valid": True, "payload": json.loads(payload_bytes.decode())}
     except InvalidSignature:
         return {"valid": False, "reason": "invalid signature"}
     except Exception as e:
         return {"valid": False, "reason": str(e)}
+
+
+# ── License key verification (EB1-) ───────────────────────────────────────────
+
+def verify_key(key: str) -> dict:
+    """
+    Verify a purchased license key.
+    Returns {"valid": True, "type": "permanent"|"trial", "email": "...", "days_left": N|None}
+         or {"valid": False, "reason": "..."}
+    """
+    result = _verify_signed_token(key.strip(), "EB1-")
+    if not result["valid"]:
+        return result
+
+    payload   = result["payload"]
+    ktype     = payload.get("type", "permanent")
+    email     = payload.get("email", "")
+    expires   = payload.get("expires", 0)
+
+    if ktype == "trial" and expires:
+        now = int(time.time())
+        if now > expires:
+            return {"valid": False, "reason": "trial key expired",
+                    "type": "trial", "email": email}
+        days_left = max(1, (expires - now) // 86400 + 1)
+        return {"valid": True, "type": "trial", "email": email, "days_left": days_left}
+
+    return {"valid": True, "type": "permanent", "email": email, "days_left": None}
+
+
+# ── Trial token handling (EBT-) ───────────────────────────────────────────────
+
+def _parse_trial_token(token: str) -> dict:
+    """
+    Parse a server-issued trial token.
+    Returns {"state": "trial", "days_left": N}
+          | {"state": "denied", "reason": "..."}
+          | {"state": "expired"}
+          | {"state": "invalid"}
+    """
+    result = _verify_signed_token(token, "EBT-")
+    if not result["valid"]:
+        return {"state": "invalid", "reason": result.get("reason")}
+
+    payload = result["payload"]
+
+    if payload.get("denied"):
+        return {"state": "denied", "reason": payload.get("reason", "blacklisted")}
+
+    expires = payload.get("expires", 0)
+    now     = int(time.time())
+    if expires and now > expires:
+        return {"state": "expired"}
+
+    days_left = max(0, int((expires - now) / 86400) + 1) if expires else 0
+    return {"state": "trial", "days_left": days_left}
+
+
+def _read_trial_token() -> dict | None:
+    """Read and parse the stored trial token. None if not yet registered."""
+    if not TRIAL_TOKEN_PATH.exists():
+        return None
+    raw = TRIAL_TOKEN_PATH.read_text().strip()
+    if not raw:
+        return None
+    # Denial stored as plain text so we can read it without crypto
+    if raw.startswith("DENIED:"):
+        return {"state": "denied", "reason": raw[7:]}
+    if raw.startswith("OFFLINE:"):
+        # Grace period token — has a local expiry timestamp
+        try:
+            parts  = raw.split(":", 2)
+            expiry = int(parts[1])
+            now    = int(time.time())
+            if now > expiry:
+                return {"state": "expired"}
+            days_left = max(0, int((expiry - now) / 86400) + 1)
+            return {"state": "trial", "days_left": days_left, "offline": True}
+        except Exception:
+            return {"state": "invalid"}
+    return _parse_trial_token(raw)
+
+
+# ── Server registration ────────────────────────────────────────────────────────
+
+def _call_server(path: str, body: dict, timeout: int = 8) -> dict:
+    data = json.dumps(body).encode()
+    req  = urllib.request.Request(
+        f"{TRIAL_SERVER}{path}", data=data,
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode())
+        except Exception:
+            return {"ok": False, "reason": str(e), "offline": False}
+    except Exception:
+        return {"ok": False, "offline": True}
+
+
+def ensure_trial_start():
+    """
+    Register this machine's trial with the server on first run.
+    - Server-signed token stored locally.
+    - If server unreachable: offline grace period token (OFFLINE:<expiry>:<fingerprint>).
+    - If server says denied/blacklisted: stores DENIED: marker.
+    - On subsequent runs: re-checks server if we're in an offline grace period.
+    """
+    existing = _read_trial_token()
+
+    if existing is not None:
+        # Already have a token. If it was from offline grace, try to upgrade to server token.
+        if existing.get("offline"):
+            _try_upgrade_offline_token()
+        return
+
+    # First run — register with server
+    fp     = get_fingerprint()
+    result = _call_server("/register-trial", {"fingerprint": fp, "v": 1})
+
+    TRIAL_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    if result.get("offline"):
+        # Server unreachable — grant offline grace period
+        expiry = int(time.time()) + _OFFLINE_GRACE_DAYS * 86400
+        TRIAL_TOKEN_PATH.write_text(f"OFFLINE:{expiry}:{fp}")
+        return
+
+    if result.get("ok") and result.get("token"):
+        TRIAL_TOKEN_PATH.write_text(result["token"])
+    else:
+        reason = result.get("reason", "rejected")
+        TRIAL_TOKEN_PATH.write_text(f"DENIED:{reason}")
+
+
+def _try_upgrade_offline_token():
+    """
+    While in offline grace, attempt to register with server.
+    Upgrades to a proper server token on success; marks denied if blacklisted.
+    """
+    fp     = get_fingerprint()
+    result = _call_server("/register-trial", {"fingerprint": fp, "v": 1})
+    if result.get("offline"):
+        return  # Still can't reach server — keep grace token
+    TRIAL_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if result.get("ok") and result.get("token"):
+        TRIAL_TOKEN_PATH.write_text(result["token"])
+    else:
+        reason = result.get("reason", "rejected")
+        TRIAL_TOKEN_PATH.write_text(f"DENIED:{reason}")
 
 
 # ── Saved key ─────────────────────────────────────────────────────────────────
@@ -128,11 +274,12 @@ def save_key(key: str) -> bool:
 def get_status() -> dict:
     """
     Returns one of:
-      {"state": "licensed",  "type": "permanent", "email": "..."}
+      {"state": "licensed",  "type": "permanent", "email": "...", "days_left": None}
       {"state": "trial",     "days_left": N}
       {"state": "expired"}
+      {"state": "denied",    "reason": "..."}
     """
-    # Check saved key first
+    # Purchased key wins over everything
     saved = load_saved_key()
     if saved:
         result = verify_key(saved)
@@ -144,10 +291,18 @@ def get_status() -> dict:
                 "days_left": result.get("days_left"),
             }
 
-    # Fall back to local trial
+    # Trial token (server-registered, fingerprint-bound)
     ensure_trial_start()
-    days = trial_days_remaining()
-    if days > 0:
-        return {"state": "trial", "days_left": days}
+    token_state = _read_trial_token()
+
+    if token_state is None:
+        return {"state": "expired"}
+
+    state = token_state.get("state")
+
+    if state == "trial":
+        return {"state": "trial", "days_left": token_state.get("days_left", 0)}
+    if state == "denied":
+        return {"state": "denied", "reason": token_state.get("reason", "")}
 
     return {"state": "expired"}
