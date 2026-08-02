@@ -45,14 +45,17 @@ command -v whiptail &>/dev/null && HAS_WHIPTAIL=true
 detect_vram() {
     local vram=0
     if command -v nvidia-smi &>/dev/null; then
-        local raw
-        raw=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-        if [[ "$raw" =~ ^[0-9]+$ ]]; then
-            vram=$(( raw / 1024 ))
+        # Sum VRAM across ALL GPUs
+        local total_mb
+        total_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null \
+            | tr -d ' ' | awk '{sum += $1} END {print sum+0}')
+        if [[ "$total_mb" =~ ^[0-9]+$ ]] && [[ "$total_mb" -gt 0 ]]; then
+            vram=$(( total_mb / 1024 ))
         fi
     elif command -v rocm-smi &>/dev/null; then
         local raw
-        raw=$(rocm-smi --showmeminfo vram 2>/dev/null | grep -i 'total' | grep -oP '\d+' | head -1 || echo 0)
+        raw=$(rocm-smi --showmeminfo vram 2>/dev/null | grep -i 'total' \
+            | grep -oP '\d+' | awk '{sum += $1} END {print sum+0}')
         vram=$(( raw / 1024 / 1024 ))
     fi
     echo "$vram"
@@ -70,6 +73,26 @@ has_avx2() {
     grep -q avx2 /proc/cpuinfo && echo true || echo false
 }
 
+# ── Check which models are already installed in Ollama ────────────────────────
+INSTALLED_MODELS=()
+detect_installed_models() {
+    if command -v ollama &>/dev/null; then
+        while IFS= read -r line; do
+            local name
+            name=$(echo "$line" | awk '{print $1}')
+            [[ -n "$name" && "$name" != "NAME" ]] && INSTALLED_MODELS+=("$name")
+        done < <(ollama list 2>/dev/null)
+    fi
+}
+
+is_installed() {
+    local model=$1
+    for m in "${INSTALLED_MODELS[@]:-}"; do
+        [[ "$m" == "$model" || "$m" == "${model}:latest" ]] && return 0
+    done
+    return 1
+}
+
 # ── Build model menu options (Gem's registry) ────────────────────────────────
 # Returns parallel arrays: MODEL_IDS and MODEL_LABELS
 build_model_menu() {
@@ -78,6 +101,14 @@ build_model_menu() {
 
     MODEL_IDS=()
     MODEL_LABELS=()
+
+    # Prepend already-installed models at the top
+    if [[ ${#INSTALLED_MODELS[@]} -gt 0 ]]; then
+        for m in "${INSTALLED_MODELS[@]}"; do
+            MODEL_IDS+=("$m")
+            MODEL_LABELS+=("$(printf '%-35s [installed]' "$m")")
+        done
+    fi
 
     # Tier 1 — always available (2+ GB VRAM or CPU-only)
     MODEL_IDS+=("llama3.2:3b")
@@ -215,9 +246,13 @@ ensure_ollama() {
     fi
 }
 
-# ── Pull selected model ───────────────────────────────────────────────────────
+# ── Pull selected model (skip if already installed) ───────────────────────────
 pull_model() {
     local model=$1
+    if is_installed "$model"; then
+        ok "Model already installed: $model"
+        return
+    fi
     info "Pulling $model — this may take a few minutes..."
     ollama pull "$model"
     ok "Model ready: $model"
@@ -575,15 +610,16 @@ fi
 
 # Step 1 — Ollama
 echo
-echo -e "${BOLD}[ 1 / 5 ]  Checking Ollama${NC}"
+echo -e "${BOLD}[ 1 / 6 ]  Checking Ollama${NC}"
 ensure_ollama
 
-# Step 2 — Detect hardware
+# Step 2 — Detect hardware + installed models
 echo
-echo -e "${BOLD}[ 2 / 5 ]  Detecting your hardware${NC}"
+echo -e "${BOLD}[ 2 / 6 ]  Detecting your hardware${NC}"
 VRAM=$(detect_vram)
 RAM=$(detect_ram)
 AVX2=$(has_avx2)
+detect_installed_models
 
 if [[ $VRAM -gt 0 ]]; then
     ok "GPU detected: ${VRAM}GB VRAM"
@@ -594,7 +630,7 @@ fi
 
 # Step 3 — Pick a model
 echo
-echo -e "${BOLD}[ 3 / 5 ]  Choose a model${NC}"
+echo -e "${BOLD}[ 3 / 6 ]  Choose a model${NC}"
 build_model_menu "$VRAM" "$RAM"
 
 SELECTED_MODEL=""
@@ -610,7 +646,7 @@ pull_model "$SELECTED_MODEL"
 
 # Step 4 — Install deps + set password
 echo
-echo -e "${BOLD}[ 4 / 5 ]  Installing app${NC}"
+echo -e "${BOLD}[ 4 / 6 ]  Installing app${NC}"
 cd "$APP_DIR"
 install_deps
 seed_config "$SELECTED_MODEL"
