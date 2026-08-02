@@ -345,6 +345,213 @@ open_browser() {
     fi
 }
 
+# ── Remote access setup ───────────────────────────────────────────────────────
+
+setup_remote_access() {
+    local choice
+
+    if $HAS_WHIPTAIL; then
+        choice=$(whiptail --title " Echo Bloom — Remote Access " \
+            --menu "How do you want to reach your Kin from anywhere?\n\nBoth options are free. Pick what fits." \
+            18 72 3 \
+            "1" "Tailscale  — Private. Your phone + this machine, no domain needed." \
+            "2" "Cloudflare — Public HTTPS URL. Works from any browser, anywhere." \
+            "3" "Skip       — Set this up later." \
+            3>&1 1>&2 2>&3) || choice="3"
+    else
+        echo "  How do you want to reach your Kin from anywhere?"
+        echo
+        echo "  1) Tailscale  — Private. Your phone + this machine, no domain needed."
+        echo "  2) Cloudflare — Public HTTPS URL. Works from any browser, anywhere."
+        echo "  3) Skip       — Set this up later."
+        echo
+        read -rp "  Enter 1, 2, or 3: " choice
+    fi
+
+    case "$choice" in
+        1) setup_tailscale ;;
+        2) setup_cloudflare ;;
+        *) warn "Skipping remote access. Run the installer again to add it later." ;;
+    esac
+}
+
+# ── Tailscale ─────────────────────────────────────────────────────────────────
+
+setup_tailscale() {
+    info "Setting up Tailscale (private mesh VPN)..."
+
+    # Install
+    if ! command -v tailscale &>/dev/null; then
+        if command -v pacman &>/dev/null; then
+            sudo pacman -S --noconfirm tailscale 2>/dev/null || \
+                die "Could not install tailscale. Install manually: https://tailscale.com/download"
+        elif command -v apt-get &>/dev/null; then
+            curl -fsSL https://tailscale.com/install.sh | sh || \
+                die "Tailscale install failed."
+        elif command -v dnf &>/dev/null; then
+            sudo dnf install -y tailscale 2>/dev/null || \
+                die "Could not install tailscale."
+        else
+            die "Could not detect package manager. Install Tailscale manually: https://tailscale.com/download"
+        fi
+    fi
+
+    sudo systemctl enable --now tailscaled 2>/dev/null || true
+    ok "Tailscale installed."
+
+    echo
+    echo -e "${AMBER}  Next: authenticate this machine with Tailscale.${NC}"
+    echo "  A browser will open (or you'll get a URL to visit)."
+    echo
+    sudo tailscale up 2>/dev/null || tailscale up 2>/dev/null || true
+
+    # Get the Tailscale IP
+    local ts_ip
+    ts_ip=$(tailscale ip -4 2>/dev/null || echo "")
+
+    # Write systemd user service so app stays reachable through Tailscale
+    ok "Tailscale connected."
+    echo
+    echo -e "${GREEN}${BOLD}  Your Kin are now reachable on your Tailscale network.${NC}"
+    echo
+    echo "  1. Install the Tailscale app on your phone (free, iOS + Android)"
+    echo "  2. Sign in with the same account"
+    echo "  3. Open: http://${ts_ip:-<tailscale-ip>}:${PORT}"
+    echo
+    echo "  Your Tailscale IP is permanent — it never changes."
+}
+
+# ── Cloudflare Tunnel ─────────────────────────────────────────────────────────
+
+setup_cloudflare() {
+    info "Setting up Cloudflare Tunnel (public HTTPS URL)..."
+
+    # Install cloudflared
+    if ! command -v cloudflared &>/dev/null; then
+        if command -v pacman &>/dev/null; then
+            # Try AUR via yay if available, otherwise download binary
+            if command -v yay &>/dev/null; then
+                yay -S --noconfirm cloudflared 2>/dev/null || _install_cloudflared_binary
+            else
+                _install_cloudflared_binary
+            fi
+        elif command -v apt-get &>/dev/null; then
+            curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+                | sudo tee /usr/share/keyrings/cloudflare-main.gpg > /dev/null
+            echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] \
+                https://pkg.cloudflare.com/cloudflared jammy main" \
+                | sudo tee /etc/apt/sources.list.d/cloudflared.list
+            sudo apt-get update -q && sudo apt-get install -y cloudflared
+        else
+            _install_cloudflared_binary
+        fi
+    fi
+    ok "cloudflared installed."
+
+    echo
+    echo -e "${AMBER}  Step 1: Log in to Cloudflare (free account required).${NC}"
+    echo "  A browser will open. Sign in or create a free account at cloudflare.com."
+    echo "  When asked to select a zone — you don't need one. Just authorize."
+    echo
+    cloudflared tunnel login || die "Cloudflare login failed."
+
+    # Create named tunnel
+    local tunnel_name="echo-bloom"
+    info "Creating permanent tunnel: $tunnel_name"
+    cloudflared tunnel create "$tunnel_name" 2>/dev/null || true
+
+    # Get tunnel UUID
+    local tunnel_id
+    tunnel_id=$(cloudflared tunnel list 2>/dev/null | grep "$tunnel_name" | awk '{print $1}' | head -1)
+
+    if [[ -z "$tunnel_id" ]]; then
+        warn "Could not get tunnel ID. Using quick tunnel as fallback."
+        _setup_quick_tunnel
+        return
+    fi
+
+    # Find credentials file
+    local creds_file="$HOME/.cloudflared/${tunnel_id}.json"
+
+    # Write config
+    mkdir -p "$HOME/.cloudflared"
+    cat > "$HOME/.cloudflared/config.yml" << CFEOF
+tunnel: ${tunnel_id}
+credentials-file: ${creds_file}
+
+ingress:
+  - service: http://localhost:${PORT}
+CFEOF
+
+    # Install as systemd user service
+    cat > "$HOME/.config/systemd/user/cloudflared.service" << SVCEOF
+[Unit]
+Description=Cloudflare Tunnel — Echo Bloom
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=$(command -v cloudflared) tunnel --config ${HOME}/.cloudflared/config.yml run
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+SVCEOF
+
+    systemctl --user daemon-reload
+    systemctl --user enable --now cloudflared
+
+    ok "Cloudflare Tunnel running as a permanent service."
+    echo
+    echo -e "${GREEN}${BOLD}  Your permanent tunnel ID: ${tunnel_id}${NC}"
+    echo
+    echo "  To add a pretty URL (e.g. echo.yourdomain.com):"
+    echo "    cloudflared tunnel route dns echo-bloom echo.yourdomain.com"
+    echo "  (Requires your domain to be managed by Cloudflare)"
+    echo
+    echo "  Your tunnel is permanent — same connection after every reboot."
+}
+
+_install_cloudflared_binary() {
+    local arch
+    arch=$(uname -m)
+    local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+    [[ "$arch" == "aarch64" ]] && url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"
+    info "Downloading cloudflared binary..."
+    curl -fsSL "$url" -o /tmp/cloudflared
+    sudo install -m 755 /tmp/cloudflared /usr/local/bin/cloudflared
+}
+
+_setup_quick_tunnel() {
+    warn "Falling back to quick tunnel (URL changes on restart)."
+    cat > "$HOME/.config/systemd/user/cloudflared.service" << SVCEOF
+[Unit]
+Description=Cloudflare Quick Tunnel — Echo Bloom
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=$(command -v cloudflared) tunnel --url http://localhost:${PORT} --no-autoupdate
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+
+[Install]
+WantedBy=default.target
+SVCEOF
+
+    systemctl --user daemon-reload
+    systemctl --user enable --now cloudflared
+    sleep 5
+    local tunnel_url
+    tunnel_url=$(journalctl --user -u cloudflared --no-pager -n 30 2>/dev/null \
+        | grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1)
+    ok "Quick tunnel running."
+    [[ -n "$tunnel_url" ]] && echo -e "${GREEN}  URL: ${tunnel_url}${NC}" \
+        || echo "  Check: journalctl --user -u cloudflared | grep trycloudflare"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
@@ -418,9 +625,18 @@ fi
 
 # Step 5 — Start it up
 echo
-echo -e "${BOLD}[ 5 / 5 ]  Launching Kin App${NC}"
+echo -e "${BOLD}[ 5 / 6 ]  Launching Echo Bloom${NC}"
 install_service
 open_browser
+
+# Step 6 — Remote access
+echo
+echo -e "${BOLD}[ 6 / 6 ]  Remote Access (reach your Kin from anywhere)${NC}"
+echo
+echo "  Your Kin are running on this machine. Without this step,"
+echo "  you can only talk to them when you're on this network."
+echo
+setup_remote_access
 
 echo
 echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
