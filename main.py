@@ -27,6 +27,106 @@ import auth
 import cluster as cl
 import license as lic
 
+# ── Hardware capability detection ──────────────────────────────────────────────
+
+_hw_caps_cache: dict | None = None
+
+def get_hw_caps() -> dict:
+    global _hw_caps_cache
+    if _hw_caps_cache is not None:
+        return _hw_caps_cache
+
+    vram_mb = 0
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0:
+            vram_mb = sum(int(x.strip()) for x in r.stdout.strip().split("\n") if x.strip().isdigit())
+    except Exception:
+        pass
+
+    ram_gb = 0.0
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    ram_gb = int(line.split()[1]) / (1024 * 1024)
+                    break
+    except Exception:
+        pass
+
+    _hw_caps_cache = {
+        "vram_mb":   vram_mb,
+        "vram_gb":   round(vram_mb / 1024, 1),
+        "ram_gb":    round(ram_gb, 1),
+        "vision_ok": vram_mb >= 8192,   # 8 GB VRAM minimum
+        "speech_ok": ram_gb >= 8.0,     # 8 GB system RAM minimum
+        "fetch_ok":  True,
+    }
+    return _hw_caps_cache
+
+
+# ── Web fetch whitelist ────────────────────────────────────────────────────────
+
+_FETCH_WHITELIST = [
+    "wikipedia.org", "github.com", "arxiv.org", "docs.python.org",
+    "pypi.org", "stackoverflow.com", "news.ycombinator.com",
+    "bbc.com", "reuters.com", "arstechnica.com", "theregister.com",
+    "ollama.com", "huggingface.co", "reddit.com", "medium.com",
+    "dev.to", "docs.anthropic.com", "openai.com", "pubmed.ncbi.nlm.nih.gov",
+    "en.m.wikipedia.org", "archive.org", "scholar.google.com",
+]
+
+def _fetch_allowed(url: str) -> bool:
+    from urllib.parse import urlparse
+    try:
+        host = urlparse(url).netloc.lower().lstrip("www.")
+        return any(host == w or host.endswith("." + w) for w in _FETCH_WHITELIST)
+    except Exception:
+        return False
+
+
+async def _fetch_page_text(url: str, max_chars: int = 3000) -> str:
+    from html.parser import HTMLParser
+
+    class _Stripper(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self._buf, self._skip = [], False
+        def handle_starttag(self, tag, attrs):
+            if tag in ("script", "style", "nav", "footer"): self._skip = True
+        def handle_endtag(self, tag):
+            if tag in ("script", "style", "nav", "footer"): self._skip = False
+        def handle_data(self, d):
+            if not self._skip: self._buf.append(d)
+        def text(self): return " ".join(" ".join(self._buf).split())
+
+    async with aiohttp.ClientSession() as s:
+        async with s.get(url, timeout=aiohttp.ClientTimeout(total=10),
+                         headers={"User-Agent": "EchoBloom/1.0"}) as r:
+            html = await r.text(errors="replace")
+    p = _Stripper()
+    p.feed(html)
+    return p.text()[:max_chars]
+
+
+# ── Piper voice model discovery ────────────────────────────────────────────────
+
+def _find_piper_voice() -> str | None:
+    search = [
+        Path.home() / "piper",
+        Path.home() / ".local/share/piper",
+        Path("/usr/share/piper"),
+        Path("/usr/local/share/piper"),
+    ]
+    for d in search:
+        if d.is_dir():
+            for f in sorted(d.glob("*.onnx")):
+                return str(f)
+    return None
+
 # ── App setup ──────────────────────────────────────────────────────────────────
 
 BASE_DIR  = Path(__file__).parent
@@ -38,7 +138,7 @@ templates.env.globals["nav_kin"]     = lambda: cl.KIN
 templates.env.globals["nav_license"] = lambda: lic.get_status()
 
 # Configurable at deploy time
-LICENSE_BUY_URL = os.environ.get("ECHO_BLOOM_BUY_URL", "https://everysynthetic.org/buy")
+LICENSE_BUY_URL = os.environ.get("ECHO_BLOOM_BUY_URL", "https://buy.stripe.com/9B67sMfdY8PGdJFaBB6oo00")
 LICENSE_PRICE   = os.environ.get("ECHO_BLOOM_PRICE",   "75")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
@@ -190,9 +290,11 @@ async def kin_page(name: str, request: Request, _=Depends(require_auth)):
     if not kin:
         raise HTTPException(status_code=404, detail="Kin not found")
     return templates.TemplateResponse("kin.html", {
-        "request": request,
-        "kin":     kin,
-        "all_kin": cl.KIN,
+        "request":   request,
+        "kin":       kin,
+        "all_kin":   cl.KIN,
+        "hw":        get_hw_caps(),
+        "whitelist": sorted(_FETCH_WHITELIST),
     })
 
 
@@ -239,6 +341,17 @@ async def api_chat(
     if not message:
         raise HTTPException(status_code=400, detail="Empty message")
 
+    # Auto-fetch any whitelisted URLs found in the message
+    import re as _re
+    web_context = ""
+    for url in _re.findall(r'https?://[^\s<>"]+', message):
+        if _fetch_allowed(url):
+            try:
+                text = await _fetch_page_text(url)
+                web_context += f"\n\n[Web content from {url}]:\n{text}"
+            except Exception:
+                pass
+
     # Sanitize history
     clean_history = []
     for turn in history[-10:]:
@@ -247,8 +360,10 @@ async def api_chat(
         if role in ("user", "assistant") and content:
             clean_history.append({"role": role, "content": content})
 
+    full_message = message + web_context if web_context else message
+
     async def event_stream() -> AsyncGenerator[bytes, None]:
-        async for chunk in cl.stream_chat(name, message, clean_history):
+        async for chunk in cl.stream_chat(name, full_message, clean_history):
             # SSE format
             escaped = chunk.replace("\n", "\\n")
             yield f"data: {escaped}\n\n".encode()
@@ -262,6 +377,129 @@ async def api_chat(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ── Web fetch endpoint ─────────────────────────────────────────────────────────
+
+@app.post("/api/fetch-url")
+async def api_fetch_url(request: Request, _=Depends(require_auth)):
+    body = await request.json()
+    url  = (body.get("url") or "").strip()
+    if not url:
+        return {"ok": False, "error": "No URL provided."}
+    if not _fetch_allowed(url):
+        from urllib.parse import urlparse
+        host = urlparse(url).netloc.lstrip("www.")
+        return {"ok": False, "error": f"{host} is not on the whitelist."}
+    try:
+        text = await _fetch_page_text(url)
+        return {"ok": True, "content": text, "url": url}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/fetch-whitelist")
+async def api_fetch_whitelist(_=Depends(require_auth)):
+    return {"whitelist": sorted(_FETCH_WHITELIST)}
+
+
+# ── Vision endpoint ─────────────────────────────────────────────────────────────
+
+@app.post("/api/vision/{name}")
+async def api_vision(name: str, request: Request, _=Depends(require_auth)):
+    hw = get_hw_caps()
+    if not hw["vision_ok"]:
+        return {"ok": False, "error": "Vision requires 8GB+ VRAM."}
+
+    body    = await request.json()
+    img_b64 = (body.get("image") or "").strip()
+    if img_b64.startswith("data:"):
+        img_b64 = img_b64.split(",", 1)[1]
+    if not img_b64:
+        return {"ok": False, "error": "No image data."}
+
+    prompt = body.get("prompt", "Describe what you see in this image concisely.")
+    kin    = cl.KIN_BY_NAME.get(name)
+    host   = kin["host"] if kin else "http://localhost:11434"
+
+    # Try kin's node; fall back to first available node with a vision model
+    cfg          = cl.load_kin_config_raw()
+    vision_model = cfg.get("vision_model", "gemma3:4b")
+    vision_host  = cfg.get("vision_host", host)
+
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(
+                f"{vision_host}/api/chat",
+                json={
+                    "model":    vision_model,
+                    "messages": [{"role": "user", "content": prompt, "images": [img_b64]}],
+                    "stream":   False,
+                },
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as r:
+                data = await r.json()
+        desc = data.get("message", {}).get("content", "")
+        return {"ok": True, "description": desc}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ── Speech endpoints ────────────────────────────────────────────────────────────
+
+@app.post("/api/transcribe")
+async def api_transcribe(request: Request, _=Depends(require_auth)):
+    import tempfile, os as _os
+    audio = await request.body()
+    if not audio:
+        return {"ok": False, "error": "No audio data."}
+
+    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
+        f.write(audio)
+        tmp = f.name
+    try:
+        from faster_whisper import WhisperModel
+        model    = WhisperModel("base", device="cpu", compute_type="int8")
+        segs, _  = model.transcribe(tmp, language="en")
+        text     = " ".join(s.text.strip() for s in segs).strip()
+        return {"ok": True, "text": text}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    finally:
+        _os.unlink(tmp)
+
+
+@app.post("/api/tts")
+async def api_tts(request: Request, _=Depends(require_auth)):
+    from fastapi.responses import Response as _Resp
+    import tempfile, os as _os
+
+    body  = await request.json()
+    text  = (body.get("text") or "").strip()[:600]
+    if not text:
+        raise HTTPException(400, "No text.")
+
+    voice = _find_piper_voice()
+    if not voice:
+        raise HTTPException(503, "No Piper voice model found. Download one to ~/piper/.")
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        out = f.name
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "/usr/bin/piper", "--model", voice, "--output_file", out,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.communicate(input=text.encode())
+        with open(out, "rb") as f:
+            audio = f.read()
+        return _Resp(content=audio, media_type="audio/wav")
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    finally:
+        _os.unlink(out)
 
 
 _SCRIPTS_DIR = Path.home() / ".local/share/echo_bloom/scripts"

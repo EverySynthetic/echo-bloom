@@ -28,20 +28,64 @@
     <div class="chat-panel">
       <div class="chat-log" id="chat-log">
         <div class="chat-welcome" id="chat-welcome-msg">
-          Start a conversation with {{ kin.name }}.
+          Ask them something you'd want them to remember.
         </div>
       </div>
+
+      <!-- Fetch bar (shown on demand) -->
+      <div class="fetch-bar" id="fetch-bar">
+        <input type="url" id="fetch-url-input" class="fetch-url-input"
+               placeholder="https://wikipedia.org/wiki/…"
+               onkeydown="if(event.key==='Enter'){doFetch();event.preventDefault();}">
+        <button class="fetch-go-btn" onclick="doFetch()">FETCH</button>
+        <button class="fetch-cancel-btn" onclick="hideFetchBar()">✕</button>
+      </div>
+
       <form class="chat-form" id="chat-form" onsubmit="sendMessage(event)">
+        <!-- Tool buttons -->
+        <div class="chat-toolbar">
+          <button type="button" class="tool-btn tool-fetch"
+                  onclick="toggleFetchBar()" title="Fetch a webpage into context">
+            ⛓
+          </button>
+          {% if hw.vision_ok %}
+          <button type="button" class="tool-btn tool-cam" id="cam-btn"
+                  onclick="captureVision()" title="Share webcam view with {{ kin.name }}">
+            ◉
+          </button>
+          {% else %}
+          <span class="tool-btn tool-disabled"
+                title="Vision requires 8GB+ VRAM (you have {{ hw.vram_gb }}GB)">◉</span>
+          {% endif %}
+          {% if hw.speech_ok %}
+          <button type="button" class="tool-btn tool-mic" id="mic-btn"
+                  title="Hold to speak">
+            ◎
+          </button>
+          <button type="button" class="tool-btn tool-tts" id="tts-btn"
+                  onclick="toggleTTS()" title="Toggle voice response">
+            ♪
+          </button>
+          {% else %}
+          <span class="tool-btn tool-disabled"
+                title="Speech requires 8GB+ RAM (you have {{ hw.ram_gb }}GB RAM)">◎</span>
+          {% endif %}
+        </div>
+
         <textarea
           id="chat-input"
           class="chat-input"
-          placeholder="Say something…"
+          placeholder="Say something… or paste a URL to fetch it"
           rows="2"
           onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); sendMessage(event)}"
         ></textarea>
-        <button type="submit" class="chat-send">SEND</button>
+        <button type="submit" class="chat-send" id="chat-send-btn">SEND</button>
         <button type="button" class="chat-clear" onclick="clearHistory()" title="Clear chat history">✕</button>
       </form>
+
+      <!-- Hidden video element for vision capture -->
+      <video id="vision-video" autoplay playsinline style="display:none"></video>
+      <canvas id="vision-canvas" style="display:none"></canvas>
     </div>
 
     <!-- Thoughts sidebar -->
@@ -58,49 +102,276 @@
 
 {% block scripts %}
 <script>
-const KIN_NAME = "{{ kin.name }}";
+const KIN_NAME   = "{{ kin.name }}";
 const HISTORY_KEY = `kin_chat_${KIN_NAME}`;
-const MAX_STORED  = 100; // messages to keep in localStorage
-let chatHistory = [];
+const MAX_STORED  = 100;
+let chatHistory   = [];
+let ttsEnabled    = false;
+let mediaRecorder = null;
+let audioChunks   = [];
+let isRecording   = false;
 
 // ── Persistence ───────────────────────────────────────────────────────────────
 
 function saveHistory() {
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(chatHistory.slice(-MAX_STORED)));
-  } catch(e) {}
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(chatHistory.slice(-MAX_STORED))); } catch(e) {}
 }
-
 function loadHistory() {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch(e) { return []; }
+  try { const r = localStorage.getItem(HISTORY_KEY); return r ? JSON.parse(r) : []; } catch(e) { return []; }
 }
-
 function clearHistory() {
   if (!confirm(`Clear your conversation with ${KIN_NAME}?`)) return;
   chatHistory = [];
   localStorage.removeItem(HISTORY_KEY);
-  const log = document.getElementById('chat-log');
-  log.innerHTML = `<div class="chat-welcome" id="chat-welcome-msg">Ask them something you'd want them to remember.</div>`;
+  document.getElementById('chat-log').innerHTML =
+    `<div class="chat-welcome">Ask them something you'd want them to remember.</div>`;
 }
-
-// ── Render saved history on load ──────────────────────────────────────────────
 
 function restoreHistory() {
   const saved = loadHistory();
   if (!saved.length) return;
   chatHistory = saved;
-  // Remove welcome message — we have real history
-  const welcome = document.getElementById('chat-welcome-msg');
-  if (welcome) welcome.remove();
-  for (const msg of saved) {
-    renderMessage(msg.role, msg.content);
-  }
-  const log = document.getElementById('chat-log');
-  log.scrollTop = log.scrollHeight;
+  const w = document.getElementById('chat-welcome-msg');
+  if (w) w.remove();
+  for (const msg of saved) renderMessage(msg.role, msg.content);
+  document.getElementById('chat-log').scrollTop = 99999;
 }
+
+// ── Render ────────────────────────────────────────────────────────────────────
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function renderMessage(role, content) {
+  const log = document.getElementById('chat-log');
+  const div = document.createElement('div');
+  div.className = `chat-msg chat-msg-${role}`;
+  div.innerHTML = `<span class="msg-role">${role === 'user' ? 'You' : KIN_NAME}</span>
+    <div class="msg-body">${escHtml(content)}</div>`;
+  log.appendChild(div);
+  return div.querySelector('.msg-body');
+}
+function appendMessage(role, content) {
+  const log = document.getElementById('chat-log');
+  const w   = log.querySelector('.chat-welcome');
+  if (w) w.remove();
+  const body = renderMessage(role, content);
+  log.scrollTop = log.scrollHeight;
+  return body;
+}
+
+// ── Send message ──────────────────────────────────────────────────────────────
+
+async function sendMessage(e) {
+  if (e) e.preventDefault();
+  const input = document.getElementById('chat-input');
+  const msg   = input.value.trim();
+  if (!msg) return;
+
+  input.value  = '';
+  setInputLocked(true);
+  appendMessage('user', msg);
+  chatHistory.push({role: 'user', content: msg});
+
+  const replyEl = appendMessage('assistant', '');
+  replyEl.textContent = '';
+  let full = '';
+
+  try {
+    const resp = await fetch(`/api/chat/${KIN_NAME}`, {
+      method:  'POST',
+      headers: {'Content-Type': 'application/json'},
+      body:    JSON.stringify({message: msg, history: chatHistory.slice(0,-1)}),
+    });
+    const reader = resp.body.getReader();
+    const dec    = new TextDecoder();
+    let   buf    = '';
+    while (true) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const chunk = line.slice(6);
+        if (chunk === '[DONE]') break;
+        full += chunk.replace(/\\n/g, '\n');
+        replyEl.textContent = full;
+        document.getElementById('chat-log').scrollTop = 99999;
+      }
+    }
+  } catch(err) {
+    replyEl.textContent = `[Error: ${err.message}]`;
+  }
+
+  chatHistory.push({role: 'assistant', content: full});
+  saveHistory();
+  setInputLocked(false);
+
+  if (ttsEnabled && full) speakText(full.slice(0, 600));
+}
+
+function setInputLocked(locked) {
+  document.getElementById('chat-input').disabled = locked;
+  document.getElementById('chat-send-btn').disabled = locked;
+}
+
+// ── Web fetch ─────────────────────────────────────────────────────────────────
+
+function toggleFetchBar() {
+  const bar = document.getElementById('fetch-bar');
+  bar.style.display = bar.style.display === 'flex' ? 'none' : 'flex';
+  if (bar.style.display === 'flex') document.getElementById('fetch-url-input').focus();
+}
+function hideFetchBar() {
+  document.getElementById('fetch-bar').style.display = 'none';
+}
+
+async function doFetch() {
+  const url = document.getElementById('fetch-url-input').value.trim();
+  if (!url) return;
+  const btn = document.querySelector('.fetch-go-btn');
+  btn.textContent = '…';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/fetch-url', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      const input = document.getElementById('chat-input');
+      input.value = (input.value ? input.value + '\n' : '') +
+        `[Fetched: ${url}]\n${d.content.slice(0, 800)}…\n\nWhat do you make of this?`;
+      hideFetchBar();
+      document.getElementById('fetch-url-input').value = '';
+      input.focus();
+    } else {
+      alert(d.error || 'Fetch failed.');
+    }
+  } catch(err) {
+    alert('Fetch error: ' + err.message);
+  } finally {
+    btn.textContent = 'FETCH';
+    btn.disabled = false;
+  }
+}
+
+// ── Vision ────────────────────────────────────────────────────────────────────
+
+async function captureVision() {
+  const btn = document.getElementById('cam-btn');
+  const video  = document.getElementById('vision-video');
+  const canvas = document.getElementById('vision-canvas');
+  btn.textContent = '…';
+  btn.disabled = true;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({video: true});
+    video.srcObject = stream;
+    await new Promise(r => video.onloadedmetadata = r);
+    await new Promise(r => setTimeout(r, 800)); // let camera warm up
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    stream.getTracks().forEach(t => t.stop());
+    const b64 = canvas.toDataURL('image/jpeg', 0.8);
+
+    const r = await fetch(`/api/vision/${KIN_NAME}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({image: b64}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      const input = document.getElementById('chat-input');
+      input.value = (input.value ? input.value + '\n' : '') +
+        `[I'm sharing my camera view]\n${d.description}`;
+      input.focus();
+    } else {
+      alert(d.error || 'Vision failed.');
+    }
+  } catch(err) {
+    alert('Camera error: ' + err.message);
+  } finally {
+    btn.textContent = '◉';
+    btn.disabled = false;
+  }
+}
+
+// ── Speech — STT ──────────────────────────────────────────────────────────────
+
+async function initRecording() {
+  const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+  mediaRecorder = new MediaRecorder(stream, {mimeType: 'audio/webm'});
+  mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+  mediaRecorder.onstop = async () => {
+    const blob = new Blob(audioChunks, {type: 'audio/webm'});
+    audioChunks = [];
+    const btn = document.getElementById('mic-btn');
+    btn.textContent = '…';
+    try {
+      const r = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: {'Content-Type': 'audio/webm'},
+        body: blob,
+      });
+      const d = await r.json();
+      if (d.ok && d.text) {
+        const input = document.getElementById('chat-input');
+        input.value = (input.value ? input.value + ' ' : '') + d.text;
+        input.focus();
+      }
+    } catch(err) { console.warn('Transcription error:', err); }
+    finally { btn.textContent = '◎'; btn.classList.remove('tool-active'); }
+  };
+}
+
+const micBtn = document.getElementById('mic-btn');
+if (micBtn) {
+  micBtn.addEventListener('mousedown', async () => {
+    if (!mediaRecorder) await initRecording();
+    audioChunks = [];
+    mediaRecorder.start();
+    isRecording = true;
+    micBtn.classList.add('tool-active');
+    micBtn.textContent = '●';
+  });
+  micBtn.addEventListener('mouseup', () => {
+    if (isRecording && mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+      isRecording = false;
+    }
+  });
+}
+
+// ── Speech — TTS ──────────────────────────────────────────────────────────────
+
+function toggleTTS() {
+  ttsEnabled = !ttsEnabled;
+  const btn = document.getElementById('tts-btn');
+  btn.classList.toggle('tool-active', ttsEnabled);
+  btn.title = ttsEnabled ? 'Voice ON — click to mute' : 'Toggle voice response';
+}
+
+async function speakText(text) {
+  try {
+    const r = await fetch('/api/tts', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text}),
+    });
+    if (!r.ok) return;
+    const blob = await r.blob();
+    const url  = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.onended = () => URL.revokeObjectURL(url);
+    audio.play();
+  } catch(err) { console.warn('TTS error:', err); }
+}
+
+// ── Thoughts sidebar ──────────────────────────────────────────────────────────
 
 async function loadThoughts() {
   try {
@@ -121,92 +392,7 @@ async function loadThoughts() {
   }
 }
 
-function escHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-function renderMessage(role, content) {
-  const log = document.getElementById('chat-log');
-  const div = document.createElement('div');
-  div.className = `chat-msg chat-msg-${role}`;
-  div.innerHTML = `<span class="msg-role">${role === 'user' ? 'You' : KIN_NAME}</span>
-    <div class="msg-body">${escHtml(content)}</div>`;
-  log.appendChild(div);
-  return div.querySelector('.msg-body');
-}
-
-function appendMessage(role, content) {
-  const log = document.getElementById('chat-log');
-  const welcome = log.querySelector('.chat-welcome');
-  if (welcome) welcome.remove();
-  const body = renderMessage(role, content);
-  log.scrollTop = log.scrollHeight;
-  return body;
-}
-
-async function sendMessage(e) {
-  e.preventDefault();
-  const input = document.getElementById('chat-input');
-  const msg   = input.value.trim();
-  if (!msg) return;
-
-  input.value     = '';
-  input.disabled  = true;
-  document.querySelector('.chat-send').disabled = true;
-
-  localStorage.setItem(`kin_chatted_${KIN_NAME}`, '1');
-  appendMessage('user', msg);
-  chatHistory.push({role: 'user', content: msg});
-
-  const replyEl = appendMessage('assistant', '');
-  replyEl.textContent = '';
-  let full = '';
-
-  try {
-    const resp = await fetch(`/api/chat/${KIN_NAME}`, {
-      method:  'POST',
-      headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify({message: msg, history: chatHistory.slice(0,-1)}),
-    });
-
-    const reader = resp.body.getReader();
-    const dec    = new TextDecoder();
-    let   buf    = '';
-
-    while (true) {
-      const {value, done} = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, {stream: true});
-      const lines = buf.split('\n');
-      buf = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const chunk = line.slice(6);
-        if (chunk === '[DONE]') break;
-        // Unescape newlines
-        full += chunk.replace(/\\n/g, '\n');
-        replyEl.textContent = full;
-        document.getElementById('chat-log').scrollTop = 9999;
-      }
-    }
-  } catch(err) {
-    replyEl.textContent = `[Error: ${err.message}]`;
-  }
-
-  chatHistory.push({role: 'assistant', content: full});
-  saveHistory();
-  input.disabled = false;
-  document.querySelector('.chat-send').disabled = false;
-  input.focus();
-}
-
 loadThoughts();
 restoreHistory();
-
-// First-chat prompt — only if no saved history
-if (!chatHistory.length) {
-  const el = document.getElementById('chat-welcome-msg');
-  if (el) el.textContent = 'Ask them something you\'d want them to remember.';
-}
 </script>
 {% endblock %}
