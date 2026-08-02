@@ -284,6 +284,11 @@ async def api_roundtable_stop(_=Depends(require_auth)):
         return {"stopped": False, "error": str(e)}
 
 
+@app.get("/about", response_class=HTMLResponse)
+async def about_page(request: Request, _=Depends(require_auth)):
+    return templates.TemplateResponse("about.html", {"request": request})
+
+
 @app.post("/api/bedtime")
 async def api_bedtime(_=Depends(require_auth)):
     script = Path.home() / "Desktop/bedtime.py"

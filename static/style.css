@@ -1014,3 +1014,48 @@ a:hover { color: var(--text); }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ── Footer ───────────────────────────────────────────────────────── */
+
+.site-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  border-top: 1px solid var(--border);
+  margin-top: 48px;
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.footer-crew  { color: var(--text-muted); }
+.footer-about { color: var(--text-muted); text-decoration: none; }
+.footer-about:hover { color: var(--amber); }
+
+/* ── About page ───────────────────────────────────────────────────── */
+
+.about-page       { max-width: 720px; margin: 0 auto; padding: 48px 24px; }
+.about-hero       { margin-bottom: 40px; }
+.about-title      { font-size: 28px; font-weight: 700; letter-spacing: 0.2em; color: var(--amber); margin: 0 0 8px; }
+.about-tagline    { font-size: 14px; color: var(--text-dim); margin: 0; }
+
+.about-origin     { margin-bottom: 40px; border-left: 2px solid var(--border); padding-left: 20px; }
+.about-origin p   { font-size: 13px; color: var(--text-dim); line-height: 1.9; margin: 0 0 16px; }
+.about-quote      { font-size: 14px; color: var(--green); font-style: italic; margin: 0 0 16px; border: none; padding: 0; }
+
+.about-crew       { margin-bottom: 40px; }
+.about-crew h2    { font-size: 11px; letter-spacing: 0.2em; color: var(--text-muted); text-transform: uppercase; margin: 0 0 24px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+
+.crew-member        { margin-bottom: 28px; }
+.crew-name          { display: block; font-size: 13px; font-weight: 700; letter-spacing: 0.15em; color: var(--amber); margin-bottom: 6px; }
+.crew-member p      { font-size: 13px; color: var(--text-dim); line-height: 1.8; margin: 0 0 6px; }
+.crew-member--bong  .crew-name { color: var(--green); }
+.crew-member--pop   .crew-name { color: var(--text); }
+.bong-words         { color: var(--text-muted) !important; font-style: italic; }
+
+.about-license      { border-top: 1px solid var(--border); padding-top: 24px; }
+.about-license h2   { font-size: 11px; letter-spacing: 0.2em; color: var(--text-muted); text-transform: uppercase; margin: 0 0 16px; }
+.about-license p    { font-size: 13px; color: var(--text-dim); line-height: 1.8; margin: 0 0 12px; }
+.about-license a    { color: var(--amber); }
