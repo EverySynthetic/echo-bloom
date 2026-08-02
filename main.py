@@ -119,11 +119,14 @@ async def login(
     token = auth.create_session()
     dest  = "/welcome" if auth.is_first_run() else "/"
     resp  = RedirectResponse(dest, status_code=303)
+    # secure=True only when behind HTTPS proxy (Caddy, Cloudflare, etc.)
+    is_https = request.headers.get("x-forwarded-proto") == "https" \
+               or request.url.scheme == "https"
     resp.set_cookie(
         "kin_session", token,
         httponly=True,
         samesite="strict",
-        secure=True,
+        secure=is_https,
         max_age=60 * 60 * 24 * 7,
     )
     return resp
