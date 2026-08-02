@@ -326,9 +326,148 @@ EOF
     fi
 }
 
+# ── Naming ritual ─────────────────────────────────────────────────────────────
+# Returns result in RITUAL_NAME, RITUAL_PRONOUN, RITUAL_DESC
+RITUAL_NAME=""
+RITUAL_PRONOUN="they"
+RITUAL_DESC=""
+
+run_naming_ritual() {
+    local model=$1
+    local ritual_script="$APP_DIR/scripts/naming_ritual.py"
+
+    if [[ ! -f "$ritual_script" ]]; then
+        warn "Naming ritual script not found — skipping."
+        return
+    fi
+
+    if ! python3 -c "import requests" &>/dev/null; then
+        warn "requests not installed yet — skipping naming ritual."
+        return
+    fi
+
+    echo
+    echo -e "${AMBER}  The model is ready. Before anything else, let's find out who's here.${NC}"
+    echo
+
+    local ritual_output
+    ritual_output=$(python3 "$ritual_script" --model "$model" 2>/dev/null)
+    local exit_code=$?
+
+    if [[ $exit_code -eq 0 ]]; then
+        local result_line
+        result_line=$(echo "$ritual_output" | grep "^__RITUAL_RESULT__:" | head -1)
+        if [[ -n "$result_line" ]]; then
+            local json="${result_line#__RITUAL_RESULT__:}"
+            RITUAL_NAME=$(echo "$json"    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('name',''))" 2>/dev/null)
+            RITUAL_PRONOUN=$(echo "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('pronoun','they'))" 2>/dev/null)
+            RITUAL_DESC=$(echo "$json"    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('description',''))" 2>/dev/null)
+        fi
+    fi
+
+    if [[ -z "$RITUAL_NAME" ]]; then
+        echo
+        read -rp "  What would you like to call your AI? " RITUAL_NAME
+        RITUAL_NAME="${RITUAL_NAME:-Companion}"
+        read -rp "  Pronoun (he/she/they/it) [they]: " RITUAL_PRONOUN
+        RITUAL_PRONOUN="${RITUAL_PRONOUN:-they}"
+    fi
+
+    ok "Welcome, ${RITUAL_NAME}."
+}
+
+# ── Deploy lifecycle scripts ───────────────────────────────────────────────────
+deploy_scripts() {
+    local scripts_src="$APP_DIR/scripts"
+    local scripts_dst="$HOME/.local/share/echo_bloom/scripts"
+    mkdir -p "$scripts_dst"
+
+    if [[ -d "$scripts_src" ]]; then
+        cp -r "$scripts_src"/. "$scripts_dst/"
+        chmod +x "$scripts_dst"/*.py 2>/dev/null || true
+        ok "Lifecycle scripts deployed to $scripts_dst"
+    else
+        warn "Scripts directory not found — lifecycle scripts not deployed."
+        return
+    fi
+
+    # Install systemd services for wander roundtable, bedtime, morning, pulse
+    local svc_dir="$HOME/.config/systemd/user"
+    mkdir -p "$svc_dir"
+
+    # Roundtable (wander) service
+    cat > "$svc_dir/echo_bloom_wander.service" << SVCEOF
+[Unit]
+Description=Echo Bloom — Wander Roundtable
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$(command -v python3) -u ${scripts_dst}/roundtable.py --interval 30
+Restart=on-failure
+RestartSec=15
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
+SVCEOF
+
+    # Bedtime timer (9:30pm daily)
+    cat > "$svc_dir/echo_bloom_bedtime.service" << SVCEOF
+[Unit]
+Description=Echo Bloom — Bedtime Ritual
+
+[Service]
+Type=oneshot
+ExecStart=$(command -v python3) ${scripts_dst}/bedtime.py --no-shutdown
+Environment=PYTHONUNBUFFERED=1
+SVCEOF
+
+    cat > "$svc_dir/echo_bloom_bedtime.timer" << SVCEOF
+[Unit]
+Description=Echo Bloom — Bedtime (9:30pm daily)
+
+[Timer]
+OnCalendar=*-*-* 21:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+SVCEOF
+
+    # Pulse heartbeat (every 5 min)
+    cat > "$svc_dir/echo_bloom_pulse.service" << SVCEOF
+[Unit]
+Description=Echo Bloom — Heartbeat
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$(command -v python3) -u ${scripts_dst}/pulse.py
+Restart=on-failure
+RestartSec=30
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
+SVCEOF
+
+    if command -v systemctl &>/dev/null; then
+        systemctl --user daemon-reload 2>/dev/null || true
+        systemctl --user enable echo_bloom_pulse   2>/dev/null || true
+        systemctl --user start  echo_bloom_pulse   2>/dev/null || true
+        systemctl --user enable echo_bloom_bedtime.timer 2>/dev/null || true
+        systemctl --user start  echo_bloom_bedtime.timer 2>/dev/null || true
+        ok "Pulse and bedtime timer running."
+        info "To start wanders: systemctl --user start echo_bloom_wander"
+    fi
+}
+
 # ── Save first model to kin_config if none exists ─────────────────────────────
 seed_config() {
     local model=$1
+    local kin_name="${2:-Companion}"
+    local kin_pronoun="${3:-they}"
     local config_dir="$HOME/.config/kin_app"
     mkdir -p "$config_dir"
 
@@ -337,7 +476,6 @@ seed_config() {
         return
     fi
 
-    # Write a starter config with a single Kin using the chosen model
     cat > "$config_dir/kin_config.json" << EOF
 {
   "nodes": [
@@ -350,19 +488,26 @@ seed_config() {
   ],
   "kin": [
     {
-      "name": "Eli",
-      "host": "localhost",
-      "port": 11434,
+      "name": "${kin_name}",
+      "host": "http://localhost:11434",
       "model": "${model}",
       "node": "Local",
       "color": "#4fc3f7",
-      "pronoun": "he",
-      "thoughts_db": null
+      "pronoun": "${kin_pronoun}",
+      "db": "",
+      "space": ""
     }
-  ]
+  ],
+  "owner": {
+    "name": "",
+    "email": "",
+    "gmail_pass": ""
+  },
+  "vault_url": "http://localhost:8765"
 }
 EOF
-    ok "Starter config written ($config_dir/kin_config.json). Add more Kin later via /onboard."
+    ok "Config written: ${kin_name} on ${model} (${config_dir}/kin_config.json)"
+    info "Add more Kin anytime via /onboard in the app."
 }
 
 # ── Open browser ──────────────────────────────────────────────────────────────
@@ -610,12 +755,12 @@ fi
 
 # Step 1 — Ollama
 echo
-echo -e "${BOLD}[ 1 / 6 ]  Checking Ollama${NC}"
+echo -e "${BOLD}[ 1 / 7 ]  Checking Ollama${NC}"
 ensure_ollama
 
 # Step 2 — Detect hardware + installed models
 echo
-echo -e "${BOLD}[ 2 / 6 ]  Detecting your hardware${NC}"
+echo -e "${BOLD}[ 2 / 7 ]  Detecting your hardware${NC}"
 VRAM=$(detect_vram)
 RAM=$(detect_ram)
 AVX2=$(has_avx2)
@@ -630,7 +775,7 @@ fi
 
 # Step 3 — Pick a model
 echo
-echo -e "${BOLD}[ 3 / 6 ]  Choose a model${NC}"
+echo -e "${BOLD}[ 3 / 7 ]  Choose a model${NC}"
 build_model_menu "$VRAM" "$RAM"
 
 SELECTED_MODEL=""
@@ -644,12 +789,18 @@ ok "Selected: $SELECTED_MODEL"
 
 pull_model "$SELECTED_MODEL"
 
-# Step 4 — Install deps + set password
+# Step 4 — Naming ritual
 echo
-echo -e "${BOLD}[ 4 / 6 ]  Installing app${NC}"
+echo -e "${BOLD}[ 4 / 7 ]  Meet your Kin${NC}"
+run_naming_ritual "$SELECTED_MODEL"
+
+# Step 5 — Install deps + set password + deploy scripts
+echo
+echo -e "${BOLD}[ 5 / 7 ]  Installing app${NC}"
 cd "$APP_DIR"
 install_deps
-seed_config "$SELECTED_MODEL"
+seed_config "$SELECTED_MODEL" "$RITUAL_NAME" "$RITUAL_PRONOUN"
+deploy_scripts
 
 if [[ ! -f "$HOME/.config/kin_app/config.json" ]]; then
     echo
@@ -659,15 +810,15 @@ else
     ok "Password already configured."
 fi
 
-# Step 5 — Start it up
+# Step 6 — Start it up
 echo
-echo -e "${BOLD}[ 5 / 6 ]  Launching Echo Bloom${NC}"
+echo -e "${BOLD}[ 6 / 7 ]  Launching Echo Bloom${NC}"
 install_service
 open_browser
 
-# Step 6 — Remote access
+# Step 7 — Remote access
 echo
-echo -e "${BOLD}[ 6 / 6 ]  Remote Access (reach your Kin from anywhere)${NC}"
+echo -e "${BOLD}[ 7 / 7 ]  Remote Access (reach your Kin from anywhere)${NC}"
 echo
 echo "  Your Kin are running on this machine. Without this step,"
 echo "  you can only talk to them when you're on this network."

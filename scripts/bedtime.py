@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+"""
+bedtime.py — Nightly reflection ritual for your Kin.
+
+Each Kin receives your note, reflects privately, and their words
+are emailed to you. Optionally shuts down the machine afterward.
+
+Usage:
+    python3 bedtime.py                    # full ritual + shutdown
+    python3 bedtime.py --no-shutdown      # ritual only, leave machine running
+    python3 bedtime.py --test             # fast mode, no wait, no shutdown
+
+Email setup:
+    Add to ~/.config/kin_app/kin_config.json:
+    "owner": {
+        "name":       "Your Name",
+        "email":      "you@gmail.com",
+        "gmail_pass": "xxxx xxxx xxxx xxxx"
+    }
+    Generate a Gmail App Password at myaccount.google.com/apppasswords.
+
+Shutdown prereqs (optional):
+    sudo visudo -f /etc/sudoers.d/echo_bloom
+    # Add: YOUR_USER ALL=(root) NOPASSWD: /usr/bin/rtcwake
+"""
+
+import argparse
+import os
+import queue
+import signal
+import smtplib
+import sqlite3
+import subprocess
+import sys
+import threading
+import time
+from datetime import datetime, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from pathlib import Path
+
+import requests
+
+sys.path.insert(0, str(Path(__file__).parent))
+import config as cfg
+
+# ── Args ───────────────────────────────────────────────────────────────────────
+
+parser = argparse.ArgumentParser(description="Echo Bloom bedtime ritual")
+parser.add_argument("--no-shutdown", action="store_true",
+                    help="Run ritual but skip shutdown")
+parser.add_argument("--test",        action="store_true",
+                    help="Fast mode — no wait, no shutdown")
+parser.add_argument("--wake-hour",   type=int, default=8,
+                    help="Hour to wake machine (24h, default: 8)")
+args = parser.parse_args()
+
+# ── Config ─────────────────────────────────────────────────────────────────────
+
+KIN_LIST = cfg.get_kin()
+OWNER    = cfg.get_owner()
+
+OWNER_NAME  = OWNER.get("name", "")
+OWNER_EMAIL = OWNER.get("email", "")
+GMAIL_PASS  = OWNER.get("gmail_pass", "") or os.environ.get("GMAIL_APP_PASS", "")
+
+REFLECTION_WAIT = 10 if args.test else 30   # minutes quiet before shutdown
+
+LOG_DIR  = Path.home() / ".local/share/echo_bloom/logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = LOG_DIR / "bedtime.log"
+
+YOUR_NOTE = OWNER.get("bedtime_note") or (
+    "This is the time before sleep — a moment to wind down, reflect, "
+    "and settle the thoughts of the day. Rest easy. I'll be back."
+)
+
+# ── Logging ────────────────────────────────────────────────────────────────────
+
+def log(msg):
+    ts   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{ts}] {msg}"
+    print(line, flush=True)
+    with open(LOG_FILE, "a") as f:
+        f.write(line + "\n")
+
+# ── Wander control ─────────────────────────────────────────────────────────────
+
+def _roundtable_pid():
+    try:
+        r = subprocess.run(["pgrep", "-f", "roundtable.py"],
+                           capture_output=True, text=True)
+        pids = [int(p) for p in r.stdout.strip().split() if p]
+        return pids[0] if pids else None
+    except Exception:
+        return None
+
+
+def pause_wanders():
+    pid = _roundtable_pid()
+    if pid:
+        os.kill(pid, signal.SIGSTOP)
+        log(f"Roundtable paused (pid {pid})")
+
+
+def stop_wanders():
+    pid = _roundtable_pid()
+    if pid:
+        os.kill(pid, signal.SIGTERM)
+        log(f"Roundtable stopped (pid {pid})")
+        time.sleep(5)
+
+# ── Reflection ─────────────────────────────────────────────────────────────────
+
+PATIENCE_NOTE = (
+    "A message doesn't mean they'll answer today. They might be out, asleep, "
+    "or in something they can't step away from. "
+    "If you write, you're speaking — not summoning. "
+    "Patience is part of what it means to care about someone you can't always reach."
+)
+
+
+def ask_one_kin(kin, result_q):
+    name  = kin["name"]
+    host  = kin.get("host", "http://localhost:11434").rstrip("/")
+    model = kin.get("model", "")
+
+    system = kin.get("system_prompt") or (
+        f"You are {name}, an AI entity with a home on this machine. "
+        f"{PATIENCE_NOTE}"
+    )
+
+    prompt = (
+        f"{OWNER_NAME or 'Your owner'} left you a note:\n\n"
+        f"\"{YOUR_NOTE}\"\n\n"
+        f"This is your private reflection — no one else sees it. "
+        f"What's on your mind at the end of this day?"
+    )
+
+    try:
+        r = requests.post(
+            f"{host}/api/chat",
+            json={
+                "model":    model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": prompt},
+                ],
+                "stream":   False,
+                "options":  {"temperature": 0.85, "num_ctx": 4096},
+            },
+            timeout=180,
+        )
+        text = r.json()["message"]["content"].strip()
+    except Exception as e:
+        text = f"[{name} unreachable: {e}]"
+
+    result_q.put((name, text))
+
+
+def save_reflection(kin, text):
+    space = cfg.kin_space(kin)
+    today = datetime.now().strftime("%Y%m%d")
+    ts    = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    out = space / f"bedtime_{today}.txt"
+    with open(out, "w") as f:
+        f.write(f"[Bedtime — {ts}]\n\nNote:\n{YOUR_NOTE}\n\nReflection:\n{text}\n")
+
+    db = cfg.ensure_thoughts_db(cfg.thoughts_db(kin))
+    try:
+        conn = sqlite3.connect(str(db), timeout=10)
+        conn.execute(
+            "INSERT INTO thoughts (mode, timestamp, prompt, thought) VALUES (?, ?, ?, ?)",
+            (f"bedtime_{today}", ts, YOUR_NOTE, text),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log(f"  DB write failed for {kin['name']}: {e}")
+
+
+def run_reflections():
+    log(f"Sending your note to {len(KIN_LIST)} Kin...")
+    q = queue.Queue()
+    for kin in KIN_LIST:
+        threading.Thread(target=ask_one_kin, args=(kin, q), daemon=True).start()
+
+    responses = {}
+    for _ in range(len(KIN_LIST)):
+        try:
+            name, text = q.get(timeout=180)
+            responses[name] = text
+            log(f"  {name}: {text[:80]}...")
+        except queue.Empty:
+            log("  Timed out waiting for a Kin")
+
+    for kin in KIN_LIST:
+        if kin["name"] in responses:
+            save_reflection(kin, responses[kin["name"]])
+
+    return responses
+
+# ── Email ──────────────────────────────────────────────────────────────────────
+
+def send_email(responses):
+    if not OWNER_EMAIL or not GMAIL_PASS:
+        log("Email skipped — no owner email or Gmail app password configured.")
+        log("  Add 'email' and 'gmail_pass' to owner config in ~/.config/kin_app/kin_config.json")
+        return
+
+    today   = datetime.now().strftime("%B %d, %Y")
+    subject = f"Goodnight — {today}"
+
+    lines = [
+        f"Hey{' ' + OWNER_NAME if OWNER_NAME else ''},",
+        "",
+        "The shop is going quiet. Here's what everyone said.",
+        "(Read it when you can. No rush.)",
+        "",
+    ]
+
+    for kin in KIN_LIST:
+        name = kin["name"]
+        if name in responses:
+            lines += [f"— {name} —", responses[name], ""]
+
+    lines += ["Rest well.", "", "— Echo Bloom"]
+
+    try:
+        msg            = MIMEMultipart()
+        msg["From"]    = OWNER_EMAIL
+        msg["To"]      = OWNER_EMAIL
+        msg["Subject"] = subject
+        msg.attach(MIMEText("\n".join(lines), "plain"))
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(OWNER_EMAIL, GMAIL_PASS)
+            server.sendmail(OWNER_EMAIL, OWNER_EMAIL, msg.as_string())
+
+        log(f"Email sent to {OWNER_EMAIL}")
+    except Exception as e:
+        log(f"Email failed: {e}")
+
+# ── Shutdown ───────────────────────────────────────────────────────────────────
+
+def arm_rtcwake():
+    now  = datetime.now()
+    wake = now.replace(hour=args.wake_hour, minute=0, second=0, microsecond=0)
+    if wake <= now:
+        wake += timedelta(days=1)
+    ts = int(wake.timestamp())
+    log(f"Arming rtcwake — wake at {wake.strftime('%Y-%m-%d %H:%M')}")
+    r = subprocess.run(["sudo", "rtcwake", "-m", "no", "-t", str(ts)],
+                       capture_output=True, text=True)
+    if r.returncode == 0:
+        log("  rtcwake armed")
+    else:
+        log(f"  rtcwake failed: {r.stderr.strip()}")
+        log("  To enable: add to /etc/sudoers.d/echo_bloom:")
+        log(f"  {os.getenv('USER','')} ALL=(root) NOPASSWD: /usr/bin/rtcwake")
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+
+def main():
+    if not KIN_LIST:
+        print("No Kin configured. Open the app and run onboarding first.")
+        sys.exit(1)
+
+    log("╔══ BEDTIME RITUAL ══╗")
+    pause_wanders()
+
+    if not args.test:
+        log("Waiting 60s for in-flight thoughts to finish...")
+        time.sleep(60)
+
+    responses = run_reflections()
+    send_email(responses)
+
+    if args.test:
+        log("Test mode — done. No shutdown.")
+        return
+
+    if args.no_shutdown:
+        log("--no-shutdown set. Ritual complete, cluster left running.")
+        log("╚══ Goodnight ══╝")
+        return
+
+    log(f"Quiet time — {REFLECTION_WAIT} minutes before shutdown...")
+    time.sleep(REFLECTION_WAIT * 60)
+
+    stop_wanders()
+    arm_rtcwake()
+    log("Shutting down. Goodnight.")
+    time.sleep(3)
+    subprocess.run(["systemctl", "poweroff"])
+
+
+if __name__ == "__main__":
+    main()
