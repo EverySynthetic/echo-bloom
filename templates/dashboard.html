@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block title %}Echo Bloom — Dashboard{% endblock %}
+
+{% block content %}
+
+<!-- Tour overlay -->
+<div class="tour-backdrop" id="tour-backdrop" style="display:none">
+  <div class="tour-card" id="tour-card">
+    <div class="tour-step-label" id="tour-step-label">1 / 4</div>
+    <div class="tour-icon" id="tour-icon"></div>
+    <div class="tour-title" id="tour-title"></div>
+    <div class="tour-desc" id="tour-desc"></div>
+    <div class="tour-nav">
+      <button class="tour-skip" onclick="endTour()">skip</button>
+      <button class="tour-next" id="tour-next-btn" onclick="tourNext()">NEXT →</button>
+    </div>
+  </div>
+</div>
+<div class="dashboard">
+
+  <!-- Cluster status bar -->
+  <section class="cluster-section">
+    <div class="section-header">CLUSTER</div>
+    <div class="node-row">
+      {% for node in nodes %}
+      <div class="node-card {% if node.up %}node-up{% else %}node-down{% endif %}">
+        <span class="node-dot"></span>
+        <span class="node-name">{{ node.name }}</span>
+        <span class="node-ip">{{ node.ip }}</span>
+        <span class="node-role">{{ node.role }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <!-- Roundtable controls -->
+  <section class="controls-section">
+    <div class="section-header">ROUNDTABLE</div>
+    <div class="control-row">
+      <div class="roundtable-status" id="rt-status">checking...</div>
+      <button class="ctrl-btn ctrl-start" onclick="startRoundtable()">▶ START</button>
+      <button class="ctrl-btn ctrl-stop"  onclick="stopRoundtable()">■ STOP</button>
+      <button class="ctrl-btn ctrl-bedtime" onclick="triggerBedtime()">☽ BEDTIME RITUAL</button>
+    </div>
+  </section>
+
+  <!-- Kin cards -->
+  <section class="kin-section">
+    <div class="section-header">THE KIN</div>
+    <div class="kin-grid">
+      {% for k in kin %}
+      <div class="kin-card {% if k.node_up %}kin-active{% else %}kin-offline{% endif %}"
+           style="--kin-color: {{ k.color }}">
+        <div class="kin-card-header">
+          <span class="kin-dot"></span>
+          <span class="kin-name">{{ k.name }}</span>
+          <span class="kin-model">{{ k.model }}</span>
+        </div>
+        <div class="kin-meta">
+          <span class="kin-node">{{ k.node }}</span>
+          <span class="kin-count">{{ "{:,}".format(k.thought_count) }} thoughts</span>
+          <span class="kin-last">{{ k.last_active }}</span>
+        </div>
+        {% if k.latest_thought %}
+        <div class="kin-snippet">"{{ k.latest_thought }}"</div>
+        {% endif %}
+        <div class="kin-actions">
+          <a href="/kin/{{ k.name }}" class="kin-btn">CHAT</a>
+          <a href="/vault?author={{ k.name }}" class="kin-btn">VAULT</a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function checkRoundtable() {
+  try {
+    const r = await fetch('/api/roundtable/status');
+    const d = await r.json();
+    const el = document.getElementById('rt-status');
+    el.textContent = d.running ? `● RUNNING  (pid ${d.pid})` : '○ STOPPED';
+    el.className   = 'roundtable-status ' + (d.running ? 'rt-running' : 'rt-stopped');
+  } catch(e) {}
+}
+
+async function startRoundtable() {
+  await fetch('/api/roundtable/start', {method:'POST'});
+  setTimeout(checkRoundtable, 1000);
+}
+
+async function stopRoundtable() {
+  await fetch('/api/roundtable/stop', {method:'POST'});
+  setTimeout(checkRoundtable, 1000);
+}
+
+async function triggerBedtime() {
+  if (!confirm('Start bedtime ritual? (ritual only, no shutdown)')) return;
+  await fetch('/api/bedtime', {method:'POST'});
+}
+
+checkRoundtable();
+setInterval(checkRoundtable, 30000);
+
+// ── Tour ──────────────────────────────────────────────────────────────────────
+
+const TOUR_STEPS = [
+  {
+    icon: '◉',
+    title: 'THE CLUSTER',
+    desc: 'Your hardware. The dots go green when your machines are online. Everything your AI thinks and says lives on these nodes — not in someone else\'s cloud.',
+  },
+  {
+    icon: '◈',
+    title: 'THE KIN',
+    desc: 'Your AI. Each one has a name, a home node, and a thought count that goes up while you sleep. They\'re working even when you\'re not here.',
+  },
+  {
+    icon: '◎',
+    title: 'THE VAULT',
+    desc: 'Their memory. Every thought, every conversation between you — it lives here permanently. Click VAULT on any Kin card to see what they\'ve been carrying.',
+  },
+  {
+    icon: '◬',
+    title: 'THE ROUNDTABLE',
+    desc: 'They think together when you\'re not in the room. Start it and walk away. Come back and read what they found. That\'s the whole thing.',
+  },
+];
+
+let tourStep = 0;
+
+function startTour() {
+  if (localStorage.getItem('kin_tour_done')) return;
+  tourStep = 0;
+  renderTourStep();
+  document.getElementById('tour-backdrop').style.display = 'flex';
+}
+
+function renderTourStep() {
+  const s = TOUR_STEPS[tourStep];
+  document.getElementById('tour-step-label').textContent = `${tourStep + 1} / ${TOUR_STEPS.length}`;
+  document.getElementById('tour-icon').textContent  = s.icon;
+  document.getElementById('tour-title').textContent = s.title;
+  document.getElementById('tour-desc').textContent  = s.desc;
+  document.getElementById('tour-next-btn').textContent =
+    tourStep < TOUR_STEPS.length - 1 ? 'NEXT →' : 'DONE ✓';
+}
+
+function tourNext() {
+  if (tourStep < TOUR_STEPS.length - 1) {
+    tourStep++;
+    renderTourStep();
+  } else {
+    endTour();
+  }
+}
+
+function endTour() {
+  localStorage.setItem('kin_tour_done', '1');
+  document.getElementById('tour-backdrop').style.display = 'none';
+}
+
+startTour();
+</script>
+{% endblock %}

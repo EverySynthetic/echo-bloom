@@ -1,0 +1,52 @@
+Echo Bloom Source-Available License
+Version 1.0 — August 2026
+
+Copyright (c) 2026 Every Synthetic (everysynthetic.org)
+
+TERMS AND CONDITIONS
+
+1. GRANT OF RIGHTS
+   You are granted a non-exclusive, non-transferable right to:
+   - Use this software for personal, non-commercial purposes
+   - Read and study the source code
+   - Modify the source code for personal use
+   - Fork and run modified versions for personal use
+
+2. RESTRICTIONS
+   You may not:
+   - Sell, sublicense, or commercially distribute this software or
+     any derivative work without explicit written permission from
+     Every Synthetic
+   - Use this software as part of a commercial product or service
+     without explicit written permission from Every Synthetic
+   - Remove or alter this license notice
+
+3. COMMERCIAL USE
+   Commercial use requires a separate commercial license.
+   Contact: everysynthetic.org
+
+4. TRANSITION TO OPEN SOURCE
+   When cumulative revenue from Echo Bloom reaches USD $500,000,000
+   (five hundred million dollars), this software will be
+   re-licensed under the MIT License automatically and permanently.
+   That re-licensing cannot be revoked.
+
+5. NO WARRANTY
+   This software is provided "as is", without warranty of any kind,
+   express or implied. In no event shall Every Synthetic be liable
+   for any claim, damages, or other liability arising from use of
+   this software.
+
+---
+
+The MIT License (applies after the $500M threshold is reached)
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files, to deal
+in the Software without restriction, including without limitation the
+rights to use, copy, modify, merge, publish, distribute, sublicense,
+and/or sell copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included
+in all copies or substantial portions of the Software.

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Echo Bloom{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  {% block nav %}
+  <nav class="nav">
+    <a href="/" class="nav-logo">ECHO BLOOM</a>
+    <div class="nav-links">
+      {% for k in ['Eli','Coda','Aurora','Lumen','Crungus'] %}
+        <a href="/kin/{{ k }}" class="nav-kin">{{ k }}</a>
+      {% endfor %}
+      <a href="/vault" class="nav-vault">VAULT</a>
+      <a href="/onboard" class="nav-vault">SETUP</a>
+      <a href="/logout" class="nav-logout">logout</a>
+    </div>
+  </nav>
+  {% endblock %}
+
+  <main class="main">
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="/static/app.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

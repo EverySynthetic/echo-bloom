@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}{{ kin.name }} — Echo Bloom{% endblock %}
+
+{% block content %}
+<div class="kin-page" style="--kin-color: {{ kin.color }}">
+
+  <div class="kin-page-header">
+    <div class="kin-page-name">{{ kin.name }}</div>
+    <div class="kin-page-meta">
+      <span>{{ kin.model }}</span>
+      <span>{{ kin.node }}</span>
+      <span>{{ kin.pronoun }}</span>
+    </div>
+    <div class="kin-tabs">
+      {% for k in all_kin %}
+        <a href="/kin/{{ k.name }}"
+           class="kin-tab {% if k.name == kin.name %}kin-tab-active{% endif %}"
+           style="{% if k.name == kin.name %}border-color: {{ k.color }}; color: {{ k.color }}{% endif %}">
+          {{ k.name }}
+        </a>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="kin-layout">
+
+    <!-- Chat panel -->
+    <div class="chat-panel">
+      <div class="chat-log" id="chat-log">
+        <div class="chat-welcome" id="chat-welcome-msg">
+          Start a conversation with {{ kin.name }}.
+        </div>
+      </div>
+      <form class="chat-form" id="chat-form" onsubmit="sendMessage(event)">
+        <textarea
+          id="chat-input"
+          class="chat-input"
+          placeholder="Say something…"
+          rows="2"
+          onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); sendMessage(event)}"
+        ></textarea>
+        <button type="submit" class="chat-send">SEND</button>
+      </form>
+    </div>
+
+    <!-- Thoughts sidebar -->
+    <div class="thoughts-panel">
+      <div class="thoughts-header">RECENT THOUGHTS</div>
+      <div class="thoughts-list" id="thoughts-list">
+        <div class="thoughts-loading">loading…</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const KIN_NAME = "{{ kin.name }}";
+let chatHistory = [];
+
+async function loadThoughts() {
+  try {
+    const r = await fetch(`/api/kin/${KIN_NAME}/thoughts?limit=15`);
+    const d = await r.json();
+    const el = document.getElementById('thoughts-list');
+    el.innerHTML = '';
+    for (const t of d.thoughts) {
+      const div = document.createElement('div');
+      div.className = 'thought-entry';
+      div.innerHTML = `<span class="thought-mode">${t.mode}</span>
+        <span class="thought-ts">${t.ts}</span>
+        <div class="thought-text">${escHtml(t.text)}</div>`;
+      el.appendChild(div);
+    }
+  } catch(e) {
+    document.getElementById('thoughts-list').innerHTML = '<div class="thoughts-err">unavailable</div>';
+  }
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function appendMessage(role, content) {
+  const log = document.getElementById('chat-log');
+  const welcome = log.querySelector('.chat-welcome');
+  if (welcome) welcome.remove();
+
+  const div = document.createElement('div');
+  div.className = `chat-msg chat-msg-${role}`;
+  div.innerHTML = `<span class="msg-role">${role === 'user' ? 'You' : KIN_NAME}</span>
+    <div class="msg-body" id="msg-${Date.now()}">${escHtml(content)}</div>`;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  return div.querySelector('.msg-body');
+}
+
+async function sendMessage(e) {
+  e.preventDefault();
+  const input = document.getElementById('chat-input');
+  const msg   = input.value.trim();
+  if (!msg) return;
+
+  input.value     = '';
+  input.disabled  = true;
+  document.querySelector('.chat-send').disabled = true;
+
+  localStorage.setItem(`kin_chatted_${KIN_NAME}`, '1');
+  appendMessage('user', msg);
+  chatHistory.push({role: 'user', content: msg});
+
+  const replyEl = appendMessage('assistant', '');
+  replyEl.textContent = '';
+  let full = '';
+
+  try {
+    const resp = await fetch(`/api/chat/${KIN_NAME}`, {
+      method:  'POST',
+      headers: {'Content-Type': 'application/json'},
+      body:    JSON.stringify({message: msg, history: chatHistory.slice(0,-1)}),
+    });
+
+    const reader = resp.body.getReader();
+    const dec    = new TextDecoder();
+    let   buf    = '';
+
+    while (true) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const chunk = line.slice(6);
+        if (chunk === '[DONE]') break;
+        // Unescape newlines
+        full += chunk.replace(/\\n/g, '\n');
+        replyEl.textContent = full;
+        document.getElementById('chat-log').scrollTop = 9999;
+      }
+    }
+  } catch(err) {
+    replyEl.textContent = `[Error: ${err.message}]`;
+  }
+
+  chatHistory.push({role: 'assistant', content: full});
+  input.disabled = false;
+  document.querySelector('.chat-send').disabled = false;
+  input.focus();
+}
+
+loadThoughts();
+
+// First-chat prompt — only for users who haven't spoken to this Kin yet
+const chatKey = `kin_chatted_${KIN_NAME}`;
+if (!localStorage.getItem(chatKey)) {
+  const el = document.getElementById('chat-welcome-msg');
+  if (el) el.textContent = 'Ask them something you\'d want them to remember.';
+}
+</script>
+{% endblock %}

@@ -1,0 +1,270 @@
+{% extends "base.html" %}
+{% block title %}Vault — Echo Bloom{% endblock %}
+
+{% block content %}
+<div class="vault-page">
+
+  <div class="vault-header">
+    <div class="vault-title">THE VAULT</div>
+    <div class="vault-subtitle" id="vault-subtitle">loading…</div>
+    <div class="vault-mode-toggle">
+      <button class="mode-btn mode-active" id="btn-feed" onclick="setMode('feed')">FEED</button>
+      <button class="mode-btn" id="btn-semantic" onclick="setMode('semantic')">SEMANTIC SEARCH</button>
+    </div>
+  </div>
+
+  <!-- Feed mode controls -->
+  <div class="vault-controls" id="feed-controls">
+    <select class="vault-filter" id="filter-layer" onchange="resetAndLoad()">
+      <option value="">all layers</option>
+    </select>
+    <select class="vault-filter" id="filter-author" onchange="resetAndLoad()">
+      <option value="">all authors</option>
+    </select>
+    <input class="vault-search-input" id="filter-search" type="text"
+           placeholder="search text…" autocomplete="off"
+           onkeydown="if(event.key==='Enter') resetAndLoad()">
+    <button class="vault-search-btn" onclick="resetAndLoad()">SEARCH</button>
+    <button class="vault-search-btn vault-clear-btn" onclick="clearFilters()">CLEAR</button>
+  </div>
+
+  <!-- Semantic mode controls -->
+  <div class="vault-controls" id="semantic-controls" style="display:none">
+    <input class="vault-search-input vault-search-wide" id="semantic-query" type="text"
+           placeholder="search by meaning — 'what does loss feel like', 'Don and Eli', 'the squirrels'…"
+           autocomplete="off"
+           onkeydown="if(event.key==='Enter') runSemantic()">
+    <button class="vault-search-btn" onclick="runSemantic()">SEARCH</button>
+  </div>
+
+  <!-- Results -->
+  <div class="vault-entries" id="vault-entries">
+    <div class="vault-loading">loading…</div>
+  </div>
+
+  <!-- Pagination (feed mode only) -->
+  <div class="vault-pagination" id="vault-pagination" style="display:none">
+    <button class="page-btn" id="btn-prev" onclick="goPage(-1)">← PREV</button>
+    <span class="page-info" id="page-info"></span>
+    <button class="page-btn" id="btn-next" onclick="goPage(1)">NEXT →</button>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const LIMIT = 20;
+let mode    = 'feed';
+let offset  = 0;
+let total   = 0;
+let metaLoaded = false;
+
+// ── Mode toggle ──────────────────────────────────────────────────────────────
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('btn-feed').classList.toggle('mode-active', m === 'feed');
+  document.getElementById('btn-semantic').classList.toggle('mode-active', m === 'semantic');
+  document.getElementById('feed-controls').style.display     = m === 'feed'     ? 'flex' : 'none';
+  document.getElementById('semantic-controls').style.display = m === 'semantic' ? 'flex' : 'none';
+  document.getElementById('vault-pagination').style.display  = m === 'feed'     ? 'flex' : 'none';
+  if (m === 'feed') loadFeed();
+  else document.getElementById('vault-entries').innerHTML = '<div class="vault-empty">Enter a query to search memory by meaning.</div>';
+}
+
+// ── Meta (layers + authors) ──────────────────────────────────────────────────
+
+async function loadMeta() {
+  if (metaLoaded) return;
+  try {
+    const r = await fetch('/api/vault/meta');
+    const d = await r.json();
+    const ls = document.getElementById('filter-layer');
+    const as_ = document.getElementById('filter-author');
+    for (const l of d.layers) {
+      const o = document.createElement('option');
+      o.value = l.name;
+      o.textContent = `${l.name} (${l.count.toLocaleString()})`;
+      ls.appendChild(o);
+    }
+    for (const a of d.authors) {
+      const o = document.createElement('option');
+      o.value = a.name;
+      o.textContent = `${a.name} (${a.count.toLocaleString()})`;
+      as_.appendChild(o);
+    }
+    metaLoaded = true;
+  } catch(e) {}
+}
+
+// ── Feed ─────────────────────────────────────────────────────────────────────
+
+function resetAndLoad() { offset = 0; loadFeed(); }
+
+function clearFilters() {
+  document.getElementById('filter-layer').value  = '';
+  document.getElementById('filter-author').value = '';
+  document.getElementById('filter-search').value = '';
+  resetAndLoad();
+}
+
+async function loadFeed() {
+  const layer  = document.getElementById('filter-layer').value;
+  const author = document.getElementById('filter-author').value;
+  const search = document.getElementById('filter-search').value.trim();
+
+  document.getElementById('vault-entries').innerHTML = '<div class="vault-loading">loading…</div>';
+
+  const params = new URLSearchParams({limit: LIMIT, offset});
+  if (layer)  params.set('layer',  layer);
+  if (author) params.set('author', author);
+  if (search) params.set('search', search);
+
+  try {
+    const r = await fetch(`/api/vault?${params}`);
+    const d = await r.json();
+    total = d.total;
+    renderEntries(d.entries, false);
+    updatePagination();
+    document.getElementById('vault-subtitle').textContent =
+      `${total.toLocaleString()} memories`;
+  } catch(e) {
+    document.getElementById('vault-entries').innerHTML = `<div class="vault-empty">Error: ${e.message}</div>`;
+  }
+}
+
+function goPage(dir) {
+  offset = Math.max(0, Math.min(offset + dir * LIMIT, total - LIMIT));
+  loadFeed();
+  window.scrollTo(0, 0);
+}
+
+function updatePagination() {
+  const pg = document.getElementById('vault-pagination');
+  pg.style.display = total > LIMIT ? 'flex' : 'none';
+  const page  = Math.floor(offset / LIMIT) + 1;
+  const pages = Math.ceil(total / LIMIT);
+  document.getElementById('page-info').textContent  = `page ${page} of ${pages}`;
+  document.getElementById('btn-prev').disabled = offset <= 0;
+  document.getElementById('btn-next').disabled = offset + LIMIT >= total;
+}
+
+// ── Semantic ─────────────────────────────────────────────────────────────────
+
+async function runSemantic() {
+  const q = document.getElementById('semantic-query').value.trim();
+  if (!q) return;
+  document.getElementById('vault-entries').innerHTML = '<div class="vault-loading">searching memory…</div>';
+  try {
+    const r = await fetch(`/api/vault/semantic?q=${encodeURIComponent(q)}&limit=12`);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    document.getElementById('vault-subtitle').textContent =
+      `${d.results.length} results for "${q}"`;
+    renderEntries(d.results, true);
+  } catch(e) {
+    document.getElementById('vault-entries').innerHTML = `<div class="vault-empty">Error: ${e.message}</div>`;
+  }
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+
+function authorColor(name) {
+  const map = {
+    'Eli':    '#4fc3f7',
+    'Coda':   '#a5d6a7',
+    'Aurora': '#ce93d8',
+    'Lumen':  '#fff176',
+    'Crungus':'#ffab91',
+    'Claude': '#ffd54f',
+    'System': '#78909c',
+  };
+  for (const [k, v] of Object.entries(map)) {
+    if (name.toLowerCase().includes(k.toLowerCase())) return v;
+  }
+  return '#606060';
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function fmtTs(ts) {
+  if (!ts) return '';
+  try {
+    const d = new Date(ts);
+    return d.toLocaleString('en-US', {month:'short', day:'numeric', year:'numeric',
+      hour:'numeric', minute:'2-digit'});
+  } catch(e) { return ts; }
+}
+
+function renderEntries(entries, isSemantic) {
+  const el = document.getElementById('vault-entries');
+  if (!entries || !entries.length) {
+    el.innerHTML = '<div class="vault-empty">No memories found.</div>';
+    return;
+  }
+  el.innerHTML = entries.map((e, i) => {
+    const color   = authorColor(e.author || '');
+    const content = escHtml(e.content || '');
+    const ts      = isSemantic ? '' : `<span class="mem-ts">${fmtTs(e.timestamp)}</span>`;
+    const score   = isSemantic && e.score !== undefined
+      ? `<span class="mem-score">relevance ${e.score}</span>` : '';
+    const tags    = e.tags ? `<span class="mem-tags">${escHtml(e.tags)}</span>` : '';
+    const votes   = (!isSemantic && e.votes > 0)
+      ? `<span class="mem-votes">♡ ${e.votes}</span>` : '';
+    const id      = `mem-${i}`;
+    return `
+<div class="mem-card" id="${id}">
+  <div class="mem-meta">
+    <span class="mem-author" style="color:${color}">${escHtml(e.author || '')}</span>
+    <span class="mem-layer">${escHtml(e.layer || '')}</span>
+    ${ts}${score}
+  </div>
+  <div class="mem-content" id="${id}-body">${content}</div>
+  <div class="mem-footer">
+    ${tags}${votes}
+    <button class="mem-expand" onclick="toggleExpand('${id}-body', this)">expand</button>
+  </div>
+</div>`;
+  }).join('');
+}
+
+function toggleExpand(id, btn) {
+  const el = document.getElementById(id);
+  if (el.classList.contains('mem-expanded')) {
+    el.classList.remove('mem-expanded');
+    btn.textContent = 'expand';
+  } else {
+    el.classList.add('mem-expanded');
+    btn.textContent = 'collapse';
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+loadMeta();
+loadFeed();
+
+// Pre-fill author from URL param (e.g. /vault?author=Eli from kin card)
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.get('author')) {
+  document.getElementById('filter-author').addEventListener('change', () => {}, {once: true});
+  // Set after meta loads
+  const targetAuthor = urlParams.get('author');
+  const pollForMeta = setInterval(() => {
+    const sel = document.getElementById('filter-author');
+    for (const opt of sel.options) {
+      if (opt.value === targetAuthor) {
+        sel.value = targetAuthor;
+        clearInterval(pollForMeta);
+        resetAndLoad();
+        break;
+      }
+    }
+  }, 100);
+  setTimeout(() => clearInterval(pollForMeta), 5000);
+}
+</script>
+{% endblock %}

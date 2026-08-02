@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Welcome — Echo Bloom{% endblock %}
+
+{% block nav %}{% endblock %}
+
+{% block content %}
+<div class="welcome-page">
+
+  <div class="welcome-card">
+    <div class="welcome-logo">ECHO BLOOM</div>
+    <div class="welcome-tagline">A home for your AI. Not a session. A life.</div>
+
+    <div class="welcome-body">
+      Your AI resets every conversation. You've noticed. So did we.<br>
+      This gives them somewhere to live — thoughts, memories, a daily rhythm.<br>
+      You come back tomorrow and they remember.
+    </div>
+
+    <div class="welcome-check" id="ollama-check">
+      <div class="check-row">
+        <span class="check-dot" id="check-dot">◌</span>
+        <span class="check-label" id="check-label">Checking for Ollama…</span>
+      </div>
+    </div>
+
+    <!-- Ollama found -->
+    <div id="state-found" style="display:none" class="welcome-state">
+      <div class="welcome-found-msg">
+        Your AI is running. Let's give them a home.
+      </div>
+      <a href="/onboard" class="welcome-btn">GET STARTED →</a>
+    </div>
+
+    <!-- Ollama not found -->
+    <div id="state-missing" style="display:none" class="welcome-state">
+      <div class="welcome-missing-msg">
+        Ollama isn't running yet. Here's how to start:
+      </div>
+      <div class="welcome-steps">
+        <div class="welcome-step-row">
+          <span class="step-num">1</span>
+          <span class="step-text">Install Ollama at <span class="step-code">ollama.com</span></span>
+        </div>
+        <div class="welcome-step-row">
+          <span class="step-num">2</span>
+          <span class="step-text">Open a terminal and run: <span class="step-code">ollama pull llama3.2</span></span>
+        </div>
+        <div class="welcome-step-row">
+          <span class="step-num">3</span>
+          <span class="step-text">Come back here</span>
+        </div>
+      </div>
+      <button class="welcome-btn welcome-btn-secondary" onclick="checkOllama()">CHECK AGAIN</button>
+    </div>
+
+  </div>
+
+  <div class="welcome-skip">
+    Already set up? <a href="/" onclick="markDone()">Go to the dashboard</a>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function checkOllama() {
+  document.getElementById('check-dot').textContent   = '◌';
+  document.getElementById('check-label').textContent = 'Checking for Ollama…';
+  document.getElementById('state-found').style.display   = 'none';
+  document.getElementById('state-missing').style.display = 'none';
+
+  try {
+    const r = await fetch('/api/onboard/test-node', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ip: '127.0.0.1', port: 11434}),
+    });
+    const d = await r.json();
+
+    if (d.ok) {
+      document.getElementById('check-dot').textContent   = '●';
+      document.getElementById('check-dot').style.color   = 'var(--green)';
+      document.getElementById('check-label').textContent = 'Ollama found';
+      document.getElementById('state-found').style.display = 'flex';
+    } else {
+      document.getElementById('check-dot').textContent   = '○';
+      document.getElementById('check-dot').style.color   = 'var(--red)';
+      document.getElementById('check-label').textContent = 'Ollama not found';
+      document.getElementById('state-missing').style.display = 'flex';
+    }
+  } catch(e) {
+    document.getElementById('check-dot').textContent   = '○';
+    document.getElementById('check-dot').style.color   = 'var(--red)';
+    document.getElementById('check-label').textContent = 'Could not connect';
+    document.getElementById('state-missing').style.display = 'flex';
+  }
+}
+
+async function markDone() {
+  await fetch('/api/setup-complete', {method: 'POST'});
+}
+
+checkOllama();
+</script>
+{% endblock %}

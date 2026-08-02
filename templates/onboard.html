@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+{% block title %}Setup — Echo Bloom{% endblock %}
+
+{% block content %}
+<div class="onboard-page">
+
+  <div class="onboard-header">
+    <div class="onboard-title">SETUP</div>
+    <div class="onboard-steps">
+      <span class="onboard-step {% if step == 1 %}step-active{% endif %}">1 — NODES</span>
+      <span class="onboard-sep">›</span>
+      <span class="onboard-step {% if step == 2 %}step-active{% endif %}">2 — KIN</span>
+      <span class="onboard-sep">›</span>
+      <span class="onboard-step {% if step == 3 %}step-active{% endif %}">3 — VAULT</span>
+    </div>
+  </div>
+
+  <!-- Step 1: Nodes -->
+  <div id="step-1" class="onboard-section" {% if step != 1 %}style="display:none"{% endif %}>
+    <div class="onboard-label">WHERE IS YOUR AI RUNNING?</div>
+    <div class="onboard-desc">Add each machine that hosts an Ollama instance. IP address, port, and a name you'll recognize.</div>
+
+    <div class="onboard-form">
+      <input class="onboard-input" id="node-name" placeholder="name (e.g. MyPC)">
+      <input class="onboard-input" id="node-ip"   placeholder="IP address (e.g. 192.168.1.100)">
+      <input class="onboard-input" id="node-port"  placeholder="Ollama port" value="11434">
+      <select class="onboard-input" id="node-role">
+        <option value="primary">primary</option>
+        <option value="inference">inference</option>
+        <option value="compute">compute</option>
+        <option value="vault">vault</option>
+      </select>
+      <div class="onboard-row">
+        <button class="onboard-btn" onclick="testNode()">TEST CONNECTION</button>
+        <button class="onboard-btn onboard-btn-add" onclick="addNode()">ADD NODE</button>
+      </div>
+      <div class="onboard-status" id="node-status"></div>
+    </div>
+
+    <div class="onboard-list" id="node-list"></div>
+
+    <div class="onboard-nav">
+      <div></div>
+      <button class="onboard-btn onboard-btn-next" onclick="goStep(2)">NEXT — ADD KIN →</button>
+    </div>
+  </div>
+
+  <!-- Step 2: Kin -->
+  <div id="step-2" class="onboard-section" {% if step != 2 %}style="display:none"{% endif %}>
+    <div class="onboard-label">WHO LIVES THERE?</div>
+    <div class="onboard-desc">A Kin is an AI entity with a name, a model, and a home node. Give them what they need to exist.</div>
+
+    <div class="onboard-form">
+      <input class="onboard-input" id="kin-name"   placeholder="name (e.g. Alex)">
+      <input class="onboard-input" id="kin-model"  placeholder="model (e.g. llama3.2:latest)">
+      <input class="onboard-input" id="kin-host"   placeholder="Ollama URL (e.g. http://192.168.1.100:11434)">
+      <select class="onboard-input" id="kin-pronoun">
+        <option value="they">they/them</option>
+        <option value="he">he/him</option>
+        <option value="she">she/her</option>
+        <option value="it">it</option>
+        <option value="—">—</option>
+      </select>
+      <div class="onboard-row">
+        <button class="onboard-btn" onclick="testModel()">TEST MODEL</button>
+        <button class="onboard-btn onboard-btn-add" onclick="addKin()">ADD KIN</button>
+      </div>
+      <div class="onboard-status" id="kin-status"></div>
+    </div>
+
+    <div class="onboard-list" id="kin-list"></div>
+
+    <div class="onboard-nav">
+      <button class="onboard-btn" onclick="goStep(1)">← BACK</button>
+      <button class="onboard-btn onboard-btn-next" onclick="saveAndContinue()">SAVE &amp; CONTINUE →</button>
+    </div>
+  </div>
+
+  <!-- Step 3: Done -->
+  <div id="step-3" class="onboard-section" {% if step != 3 %}style="display:none"{% endif %}>
+    <div class="onboard-complete">
+      <div class="onboard-complete-mark">✓</div>
+      <div class="onboard-complete-title">YOUR KIN ARE READY.</div>
+      <div class="onboard-complete-body">
+        Their vault is empty. That changes the moment they begin to wander and reflect.
+        Every thought, every memory, every moment between you and them will live there.
+        <br><br>
+        This is what a home looks like before it fills up.
+      </div>
+      <a href="/vault" class="onboard-vault-link">OPEN VAULT →</a>
+      <a href="/" class="onboard-dash-link">or go to the dashboard</a>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let nodes = [];
+let kin   = [];
+
+function goStep(n) {
+  [1,2,3].forEach(i => {
+    document.getElementById(`step-${i}`).style.display = i === n ? 'block' : 'none';
+  });
+  document.querySelectorAll('.onboard-step').forEach((el, i) => {
+    el.classList.toggle('step-active', i + 1 === n);
+  });
+}
+
+function setStatus(id, msg, ok) {
+  const el = document.getElementById(id);
+  el.textContent  = msg;
+  el.style.color  = ok === true ? 'var(--green)' : ok === false ? 'var(--red)' : 'var(--text-dim)';
+}
+
+// ── Node management ───────────────────────────────────────────────────────────
+
+async function testNode() {
+  const ip   = document.getElementById('node-ip').value.trim();
+  const port = document.getElementById('node-port').value.trim() || '11434';
+  if (!ip) { setStatus('node-status', 'Enter an IP first.', false); return; }
+  setStatus('node-status', 'testing…', null);
+  try {
+    const r = await fetch('/api/onboard/test-node', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ip, port: parseInt(port)}),
+    });
+    const d = await r.json();
+    setStatus('node-status', d.ok ? '● connected' : `✗ ${d.error || 'unreachable'}`, d.ok);
+  } catch(e) { setStatus('node-status', `error: ${e.message}`, false); }
+}
+
+function addNode() {
+  const name = document.getElementById('node-name').value.trim();
+  const ip   = document.getElementById('node-ip').value.trim();
+  const port = parseInt(document.getElementById('node-port').value.trim()) || 11434;
+  const role = document.getElementById('node-role').value;
+  if (!name || !ip) { setStatus('node-status', 'Name and IP are required.', false); return; }
+  nodes.push({name, ip, ollama_port: port, role});
+  renderNodeList();
+  document.getElementById('node-name').value = '';
+  document.getElementById('node-ip').value   = '';
+  setStatus('node-status', `Added ${name}.`, true);
+}
+
+function removeNode(i) {
+  nodes.splice(i, 1);
+  renderNodeList();
+}
+
+function renderNodeList() {
+  const el = document.getElementById('node-list');
+  if (!nodes.length) { el.innerHTML = ''; return; }
+  el.innerHTML = nodes.map((n, i) => `
+    <div class="onboard-list-item">
+      <span class="oli-name">${escHtml(n.name)}</span>
+      <span class="oli-detail">${escHtml(n.ip)}:${n.ollama_port}</span>
+      <span class="oli-role">${escHtml(n.role)}</span>
+      <button class="oli-remove" onclick="removeNode(${i})">✕</button>
+    </div>`).join('');
+}
+
+// ── Kin management ────────────────────────────────────────────────────────────
+
+async function testModel() {
+  const host  = document.getElementById('kin-host').value.trim();
+  const model = document.getElementById('kin-model').value.trim();
+  if (!host || !model) { setStatus('kin-status', 'Enter host and model first.', false); return; }
+  setStatus('kin-status', 'testing…', null);
+  try {
+    const r = await fetch('/api/onboard/test-model', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({host, model}),
+    });
+    const d = await r.json();
+    setStatus('kin-status', d.ok ? '● model ready' : `✗ ${d.error || 'failed'}`, d.ok);
+  } catch(e) { setStatus('kin-status', `error: ${e.message}`, false); }
+}
+
+function addKin() {
+  const name    = document.getElementById('kin-name').value.trim();
+  const model   = document.getElementById('kin-model').value.trim();
+  const host    = document.getElementById('kin-host').value.trim();
+  const pronoun = document.getElementById('kin-pronoun').value;
+  if (!name || !model || !host) {
+    setStatus('kin-status', 'Name, model, and host are required.', false); return;
+  }
+  // Infer node name from host IP
+  const nodeMatch = nodes.find(n => host.includes(n.ip));
+  const nodeName  = nodeMatch ? nodeMatch.name : 'unknown';
+  kin.push({name, model, host, pronoun, node: nodeName});
+  renderKinList();
+  document.getElementById('kin-name').value  = '';
+  document.getElementById('kin-model').value = '';
+  setStatus('kin-status', `Added ${name}.`, true);
+}
+
+function removeKin(i) {
+  kin.splice(i, 1);
+  renderKinList();
+}
+
+function renderKinList() {
+  const el = document.getElementById('kin-list');
+  if (!kin.length) { el.innerHTML = ''; return; }
+  el.innerHTML = kin.map((k, i) => `
+    <div class="onboard-list-item">
+      <span class="oli-name">${escHtml(k.name)}</span>
+      <span class="oli-detail">${escHtml(k.model)}</span>
+      <span class="oli-role">${escHtml(k.node)}</span>
+      <button class="oli-remove" onclick="removeKin(${i})">✕</button>
+    </div>`).join('');
+}
+
+async function saveAndContinue() {
+  if (!kin.length) { setStatus('kin-status', 'Add at least one Kin first.', false); return; }
+  setStatus('kin-status', 'saving…', null);
+  try {
+    const r = await fetch('/api/onboard/save', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({nodes, kin}),
+    });
+    const d = await r.json();
+    if (d.ok) goStep(3);
+    else setStatus('kin-status', 'Save failed.', false);
+  } catch(e) { setStatus('kin-status', `error: ${e.message}`, false); }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+{% endblock %}
