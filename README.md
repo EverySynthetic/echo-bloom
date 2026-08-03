@@ -56,6 +56,23 @@ Open `http://localhost:8090`.
 
 ---
 
+## License
+
+Echo Bloom starts with a **14-day free trial** — no account, no credit card, no sign-up. It registers your machine automatically on first run.
+
+After the trial, a one-time purchase of **$75** unlocks it permanently. No subscription. No cloud dependency. Runs on your hardware forever.
+
+**To activate after purchase:**
+1. Open Echo Bloom in your browser
+2. Click the license badge in the top nav (or go to `/license`)
+3. Paste your key and click **ACTIVATE**
+
+Your key is emailed to you automatically when you purchase. If you need a key or have questions, email [don@everysynthetic.org](mailto:don@everysynthetic.org).
+
+> Beta testers: if Don sent you here, you already have a key in your inbox. Go activate it.
+
+---
+
 ## Architecture
 
 Echo Bloom runs entirely on your hardware. Nothing leaves your machine unless you configure it to. The vault, the memories, the wander thoughts — all local.

@@ -5,8 +5,8 @@
 
 set -euo pipefail
 
-APP_DIR="$HOME/kin_app"
-SERVICE_NAME="kin_app"
+APP_DIR="$HOME/echo_bloom"
+SERVICE_NAME="echo_bloom"
 PORT=8090
 
 # ── Colors ────────────────────────────────────────────────────────────────────
@@ -783,7 +783,7 @@ else
     if [[ -d "$APP_DIR" ]] && [[ -f "$APP_DIR/main.py" ]]; then
         ok "Found app at $APP_DIR"
     else
-        die "App files not found at $APP_DIR.\nRun this script from the kin_app directory, or place install.sh alongside main.py."
+        die "App files not found at $APP_DIR.\nRun this script from the echo_bloom directory, or place install.sh alongside main.py."
     fi
 fi
 

@@ -167,14 +167,22 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 # ── Auth helpers ───────────────────────────────────────────────────────────────
 
+def _is_api(request: Request) -> bool:
+    return str(request.url.path).startswith("/api/")
+
+
 def require_auth(request: Request):
     token = auth.get_session_from_request(request)
     if not auth.validate_session(token):
+        if _is_api(request):
+            raise HTTPException(status_code=401, detail="not authenticated")
         raise HTTPException(status_code=303, headers={"Location": "/login"})
     # License gate — skip for /license routes (handled separately)
     if not str(request.url.path).startswith("/license"):
         status = lic.get_status()
         if status["state"] in ("expired", "denied"):
+            if _is_api(request):
+                raise HTTPException(status_code=402, detail="license required")
             raise HTTPException(status_code=303, headers={"Location": "/license"})
     return token
 
@@ -183,6 +191,8 @@ def require_auth_only(request: Request):
     """Auth check without license gate — used for /license routes."""
     token = auth.get_session_from_request(request)
     if not auth.validate_session(token):
+        if _is_api(request):
+            raise HTTPException(status_code=401, detail="not authenticated")
         raise HTTPException(status_code=303, headers={"Location": "/login"})
     return token
 
@@ -424,7 +434,7 @@ async def api_vision(name: str, request: Request, _=Depends(require_auth)):
 
     # Try kin's node; fall back to first available node with a vision model
     cfg          = cl.load_kin_config_raw()
-    vision_model = cfg.get("vision_model", "gemma3:4b")
+    vision_model = cfg.get("vision_model", "llava-phi3:latest")
     vision_host  = cfg.get("vision_host", host)
 
     try:
@@ -765,6 +775,26 @@ async def api_test_node(request: Request, _=Depends(require_auth)):
         return {"ok": False, "error": str(e)}
 
 
+@app.post("/api/onboard/models")
+async def api_onboard_models(request: Request, _=Depends(require_auth)):
+    body = await request.json()
+    host = str(body.get("host", "")).strip().rstrip("/")
+    if not host:
+        return {"ok": False, "error": "no host"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{host}/api/tags",
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as r:
+                data = await r.json()
+                models = [m["name"] for m in data.get("models", [])]
+                models.sort()
+                return {"ok": True, "models": models}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.post("/api/onboard/test-model")
 async def api_test_model(request: Request, _=Depends(require_auth)):
     body  = await request.json()
@@ -782,6 +812,82 @@ async def api_test_model(request: Request, _=Depends(require_auth)):
                 return {"ok": r.status == 200}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/onboard/scan")
+async def api_onboard_scan(_=Depends(require_auth)):
+    """Scan the local /24 subnet for Ollama instances (port 11434)."""
+    import socket
+
+    def _local_subnet() -> str:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            parts = ip.rsplit(".", 1)
+            return parts[0]  # e.g. "192.168.1"
+        except Exception:
+            return "192.168.1"
+
+    subnet = _local_subnet()
+    candidates = [f"{subnet}.{i}" for i in range(1, 255)]
+
+    async def _check(session, ip):
+        try:
+            async with session.get(
+                f"http://{ip}:11434/",
+                timeout=aiohttp.ClientTimeout(total=0.8),
+            ) as r:
+                if r.status < 500:
+                    try:
+                        hostname = socket.gethostbyaddr(ip)[0].split(".")[0]
+                    except Exception:
+                        hostname = ip
+                    return {"ip": ip, "port": 11434, "hostname": hostname}
+        except Exception:
+            pass
+        return None
+
+    async with aiohttp.ClientSession() as session:
+        results = await asyncio.gather(*[_check(session, ip) for ip in candidates])
+
+    found = [r for r in results if r]
+    # also check localhost
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get("http://localhost:11434/", timeout=aiohttp.ClientTimeout(total=1)) as r:
+                if r.status < 500 and not any(f["ip"] in ("localhost", "127.0.0.1") for f in found):
+                    found.insert(0, {"ip": "localhost", "port": 11434, "hostname": "This machine"})
+    except Exception:
+        pass
+
+    return {"found": found}
+
+
+@app.post("/api/onboard/autosave")
+async def api_onboard_autosave(request: Request, _=Depends(require_auth)):
+    """Save nodes and kin immediately — no kin required. Used for mid-wizard persistence."""
+    body = await request.json()
+    config_path = Path.home() / ".config/kin_app/kin_config.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    existing = {}
+    if config_path.exists():
+        try:
+            existing = json.loads(config_path.read_text())
+        except Exception:
+            pass
+
+    config_path.write_text(json.dumps({
+        "nodes":     body.get("nodes", existing.get("nodes", [])),
+        "kin":       body.get("kin",   existing.get("kin",   [])),
+        "owner":     body.get("owner", existing.get("owner", {})),
+        "vault_url": body.get("vault_url") or existing.get("vault_url") or "http://localhost:8765",
+    }, indent=2))
+
+    cl.reload_config()
+    return {"ok": True}
 
 
 @app.post("/api/onboard/save")

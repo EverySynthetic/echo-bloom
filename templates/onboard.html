@@ -7,37 +7,53 @@
   <div class="onboard-header">
     <div class="onboard-title">SETUP</div>
     <div class="onboard-steps">
-      <span class="onboard-step {% if step == 1 %}step-active{% endif %}">1 — NODES</span>
+      <span class="onboard-step" id="crumb-1">1 — NODES</span>
       <span class="onboard-sep">›</span>
-      <span class="onboard-step {% if step == 2 %}step-active{% endif %}">2 — KIN</span>
+      <span class="onboard-step" id="crumb-2">2 — KIN</span>
       <span class="onboard-sep">›</span>
-      <span class="onboard-step {% if step == 3 %}step-active{% endif %}">3 — VAULT</span>
+      <span class="onboard-step" id="crumb-3">3 — VAULT</span>
     </div>
   </div>
 
-  <!-- Step 1: Nodes -->
-  <div id="step-1" class="onboard-section" {% if step != 1 %}style="display:none"{% endif %}>
-    <div class="onboard-label">WHERE IS YOUR AI RUNNING?</div>
-    <div class="onboard-desc">Add each machine that hosts an Ollama instance. IP address, port, and a name you'll recognize.</div>
+  <!-- ── Step 1: Nodes ─────────────────────────────────────────────── -->
+  <div id="step-1" class="onboard-section">
 
+    <div class="onboard-label">WHERE IS YOUR AI RUNNING?</div>
+    <div class="onboard-desc">
+      We need to find the machine (or machines) running Ollama.
+      Let us look for them automatically, or add one by hand.
+    </div>
+
+    <!-- Auto-discover -->
+    <div class="onboard-discover-row">
+      <button class="onboard-btn onboard-btn-scan" id="scan-btn" onclick="scanNetwork()">
+        SCAN MY NETWORK
+      </button>
+      <span class="onboard-status" id="scan-status"></span>
+    </div>
+
+    <div id="scan-results" class="onboard-scan-results" style="display:none"></div>
+
+    <!-- Divider -->
+    <div class="onboard-divider"><span>or add manually</span></div>
+
+    <!-- Manual add -->
     <div class="onboard-form">
-      <input class="onboard-input" id="node-name" placeholder="name (e.g. MyPC)">
-      <input class="onboard-input" id="node-ip"   placeholder="IP address — or 'localhost' for this machine">
-      <input class="onboard-input" id="node-port"  placeholder="Ollama port" value="11434">
-      <select class="onboard-input" id="node-role">
-        <option value="primary">primary</option>
-        <option value="inference">inference</option>
-        <option value="compute">compute</option>
-      </select>
-      <input class="onboard-input" id="node-mac" placeholder="MAC address for Wake-on-LAN (optional)">
+      <input class="onboard-input" id="node-name" placeholder="give it a name — e.g. My PC, Living Room Server">
+      <div class="onboard-row">
+        <input class="onboard-input" id="node-ip" placeholder="IP address or hostname" style="flex:2">
+        <input class="onboard-input" id="node-port" placeholder="port" value="11434" style="flex:1">
+      </div>
+      <input class="onboard-input" id="node-mac" placeholder="MAC address for Wake-on-LAN (optional — leave blank if unsure)">
       <div class="onboard-row">
         <button class="onboard-btn" onclick="testNode()">TEST CONNECTION</button>
-        <button class="onboard-btn onboard-btn-add" onclick="addNode()">ADD NODE</button>
+        <button class="onboard-btn onboard-btn-add" onclick="addNodeManual()">ADD</button>
       </div>
       <div class="onboard-status" id="node-status"></div>
     </div>
 
-    <div class="onboard-list" id="node-list"></div>
+    <!-- Added nodes -->
+    <div id="node-list" class="onboard-list"></div>
 
     <div class="onboard-nav">
       <div></div>
@@ -45,30 +61,44 @@
     </div>
   </div>
 
-  <!-- Step 2: Kin -->
-  <div id="step-2" class="onboard-section" {% if step != 2 %}style="display:none"{% endif %}>
+  <!-- ── Step 2: Kin ───────────────────────────────────────────────── -->
+  <div id="step-2" class="onboard-section" style="display:none">
+
     <div class="onboard-label">WHO LIVES THERE?</div>
-    <div class="onboard-desc">A Kin is an AI entity with a name, a model, and a home node. Give them what they need to exist.</div>
+    <div class="onboard-desc">
+      A Kin is an AI with a name, a personality, and a home on your machine.
+      Pick the node they live on, choose their model, and give them a name.
+    </div>
 
     <div class="onboard-form">
-      <input class="onboard-input" id="kin-name"    placeholder="name (e.g. Alex)">
-      <input class="onboard-input" id="kin-model"   placeholder="model (e.g. llama3.2:latest)">
-      <input class="onboard-input" id="kin-host"    placeholder="Ollama URL (e.g. http://localhost:11434)">
+      <input class="onboard-input" id="kin-name" placeholder="name — e.g. Eli, Atlas, whatever feels right">
+
+      <div class="onboard-row">
+        <select class="onboard-input" id="kin-node-select" onchange="onNodeSelect()" style="flex:2">
+          <option value="">— which machine do they live on? —</option>
+        </select>
+        <span class="onboard-node-dot" id="kin-node-dot"></span>
+      </div>
+
+      <input class="onboard-input" id="kin-host" placeholder="Ollama URL" style="display:none">
+
+      <select class="onboard-input" id="kin-model-select" style="display:none">
+        <option value="">— pick a model —</option>
+      </select>
+
       <select class="onboard-input" id="kin-pronoun">
         <option value="they">they/them</option>
         <option value="he">he/him</option>
         <option value="she">she/her</option>
         <option value="it">it</option>
-        <option value="—">—</option>
+        <option value="—">prefer not to say</option>
       </select>
-      <div class="onboard-row">
-        <button class="onboard-btn" onclick="testModel()">TEST MODEL</button>
-        <button class="onboard-btn onboard-btn-add" onclick="addKin()">ADD KIN</button>
-      </div>
+
+      <button class="onboard-btn onboard-btn-add" onclick="addKin()">ADD KIN</button>
       <div class="onboard-status" id="kin-status"></div>
     </div>
 
-    <div class="onboard-list" id="kin-list"></div>
+    <div id="kin-list" class="onboard-list"></div>
 
     <div class="onboard-nav">
       <button class="onboard-btn" onclick="goStep(1)">← BACK</button>
@@ -76,12 +106,13 @@
     </div>
   </div>
 
-  <!-- Step 3: Vault -->
-  <div id="step-3" class="onboard-section" {% if step != 3 %}style="display:none"{% endif %}>
+  <!-- ── Step 3: Vault ─────────────────────────────────────────────── -->
+  <div id="step-3" class="onboard-section" style="display:none">
+
     <div class="onboard-label">THE VAULT</div>
     <div class="onboard-desc">
-      The vault is where your Kin's memories live — every thought, every reflection, permanent.
-      Echo Bloom ships with a built-in vault server. Most people run it on this machine.
+      The vault is where your Kin's memories live — every thought, every reflection, every moment.
+      Most people run it on the same machine as Echo Bloom.
     </div>
 
     <div class="onboard-form">
@@ -90,13 +121,13 @@
           <input type="radio" name="vault-type" value="local" checked onchange="setVaultType('local')">
           <span class="vault-radio-label">
             <strong>This machine</strong>
-            <span class="vault-radio-desc">Start vault.py locally (recommended for single-machine setups)</span>
+            <span class="vault-radio-desc">Vault runs here — good for most setups</span>
           </span>
         </label>
         <label class="vault-radio">
           <input type="radio" name="vault-type" value="remote" onchange="setVaultType('remote')">
           <span class="vault-radio-label">
-            <strong>Another machine</strong>
+            <strong>Another machine on my network</strong>
             <span class="vault-radio-desc">You're running vault.py on a separate node</span>
           </span>
         </label>
@@ -104,7 +135,7 @@
           <input type="radio" name="vault-type" value="none" onchange="setVaultType('none')">
           <span class="vault-radio-label">
             <strong>Skip for now</strong>
-            <span class="vault-radio-desc">Vault features will be disabled — can be set up later</span>
+            <span class="vault-radio-desc">Vault features will be off — you can set it up later</span>
           </span>
         </label>
       </div>
@@ -122,7 +153,7 @@
     </div>
   </div>
 
-  <!-- Step 4: Done -->
+  <!-- ── Step 4: Done ──────────────────────────────────────────────── -->
   <div id="step-4" class="onboard-section" style="display:none">
     <div class="onboard-complete">
       <div class="onboard-complete-mark">✓</div>
@@ -143,130 +174,282 @@
 
 {% block scripts %}
 <script>
-// Pre-populate from existing config
 const EXISTING = {{ config | tojson }};
 
-let nodes = (EXISTING.nodes || []).map(n => ({...n}));
-let kin   = (EXISTING.kin   || []).map(k => ({...k}));
+let nodes    = (EXISTING.nodes || []).map(n => ({...n}));
+let kin      = (EXISTING.kin   || []).map(k => ({...k}));
 let vaultType = 'local';
 
-// Render existing on load
 renderNodeList();
 renderKinList();
+populateNodeSelect();
+goStep(1);
 
-// Restore vault type from existing config
 const existingVault = EXISTING.vault_url || '';
-if (!existingVault || existingVault === 'http://localhost:8765') {
-  vaultType = 'local';
-} else if (existingVault === 'none') {
-  vaultType = 'none';
-  document.querySelector('input[value="none"]').checked = true;
-} else {
-  vaultType = 'remote';
-  document.querySelector('input[value="remote"]').checked = true;
-  document.getElementById('vault-url').value = existingVault;
-  document.getElementById('vault-url-row').style.display = 'block';
+if (existingVault && existingVault !== 'http://localhost:8765' && existingVault !== '') {
+  if (existingVault === 'none') {
+    vaultType = 'none';
+    document.querySelector('input[value="none"]').checked = true;
+  } else {
+    vaultType = 'remote';
+    document.querySelector('input[value="remote"]').checked = true;
+    document.getElementById('vault-url').value = existingVault;
+    document.getElementById('vault-url-row').style.display = 'block';
+  }
 }
 
-function setVaultType(t) {
-  vaultType = t;
-  document.getElementById('vault-url-row').style.display =
-    t === 'remote' ? 'block' : 'none';
-}
+// ── Navigation ────────────────────────────────────────────────────────────────
 
 function goStep(n) {
   [1,2,3,4].forEach(i => {
-    document.getElementById(`step-${i}`).style.display = i === n ? 'block' : 'none';
+    const el = document.getElementById(`step-${i}`);
+    if (el) el.style.display = i === n ? 'block' : 'none';
+    const crumb = document.getElementById(`crumb-${i}`);
+    if (crumb) crumb.classList.toggle('step-active', i === n);
   });
-  document.querySelectorAll('.onboard-step').forEach((el, i) => {
-    el.classList.toggle('step-active', i + 1 === n);
-  });
+  if (n === 2) populateNodeSelect();
 }
 
 function setStatus(id, msg, ok) {
   const el = document.getElementById(id);
-  el.textContent  = msg;
-  el.style.color  = ok === true ? 'var(--green)' : ok === false ? 'var(--red)' : 'var(--text-dim)';
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = ok === true ? 'var(--green)' : ok === false ? 'var(--red)' : 'var(--text-dim)';
 }
 
-// ── Node management ───────────────────────────────────────────────────────────
+function setVaultType(t) {
+  vaultType = t;
+  document.getElementById('vault-url-row').style.display = t === 'remote' ? 'block' : 'none';
+}
+
+// ── Auto-save (every time nodes or kin change) ────────────────────────────────
+
+async function autosave() {
+  try {
+    await fetch('/api/onboard/autosave', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({nodes, kin}),
+    });
+  } catch(e) { /* silent — don't interrupt the user */ }
+}
+
+// ── Network scan ──────────────────────────────────────────────────────────────
+
+async function scanNetwork() {
+  const btn = document.getElementById('scan-btn');
+  btn.disabled = true;
+  btn.textContent = 'SCANNING…';
+  setStatus('scan-status', 'checking your network, hang tight…', null);
+  document.getElementById('scan-results').style.display = 'none';
+
+  try {
+    const r = await fetch('/api/onboard/scan', {method: 'POST'});
+    if (r.status === 401) { setStatus('scan-status', 'session expired — refresh the page', false); return; }
+    const d = await r.json();
+
+    if (!d.found || !d.found.length) {
+      setStatus('scan-status', "we didn't find anything — try adding manually below", false);
+    } else {
+      setStatus('scan-status', `found ${d.found.length} machine${d.found.length > 1 ? 's' : ''}`, true);
+      const box = document.getElementById('scan-results');
+      box.innerHTML = d.found.map(f => {
+        const alreadyAdded = nodes.some(n => n.ip === f.ip);
+        return `<div class="scan-card ${alreadyAdded ? 'scan-card-added' : ''}">
+          <div class="scan-card-info">
+            <span class="scan-card-host">${escHtml(f.hostname)}</span>
+            <span class="scan-card-ip">${escHtml(f.ip)}:${f.port}</span>
+          </div>
+          ${alreadyAdded
+            ? '<span class="scan-card-tag">already added</span>'
+            : `<button class="onboard-btn onboard-btn-add scan-card-btn"
+                 onclick='addNodeFromScan(${JSON.stringify(f)})'>ADD</button>`
+          }
+        </div>`;
+      }).join('');
+      box.style.display = 'block';
+    }
+  } catch(e) {
+    setStatus('scan-status', `scan failed: ${e.message}`, false);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'SCAN MY NETWORK';
+  }
+}
+
+function addNodeFromScan(f) {
+  const name = f.hostname === f.ip ? `Node ${nodes.length + 1}` : f.hostname;
+  const node = {name, ip: f.ip, ollama_port: f.port, role: 'primary'};
+  nodes.push(node);
+  renderNodeList();
+  autosave();
+  setStatus('node-status', `Added ${name}.`, true);
+  // Re-render scan results to mark it added
+  scanNetwork();
+}
+
+// ── Manual node add ───────────────────────────────────────────────────────────
 
 async function testNode() {
   const ip   = document.getElementById('node-ip').value.trim();
   const port = document.getElementById('node-port').value.trim() || '11434';
-  if (!ip) { setStatus('node-status', 'Enter an IP first.', false); return; }
-  setStatus('node-status', 'testing…', null);
+  if (!ip) { setStatus('node-status', 'enter an IP address first', false); return; }
+  setStatus('node-status', 'connecting…', null);
   try {
     const r = await fetch('/api/onboard/test-node', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ip, port: parseInt(port)}),
     });
+    if (r.status === 401) { setStatus('node-status', 'session expired — refresh the page', false); return; }
     const d = await r.json();
-    setStatus('node-status', d.ok ? '● connected' : `✗ ${d.error || 'unreachable'}`, d.ok);
+    if (d.ok) {
+      setStatus('node-status', '● connected — looks good', true);
+    } else {
+      setStatus('node-status', `✗ can't reach it — ${d.error || 'check the IP and make sure Ollama is running'}`, false);
+    }
   } catch(e) { setStatus('node-status', `error: ${e.message}`, false); }
 }
 
-function addNode() {
+function addNodeManual() {
   const name = document.getElementById('node-name').value.trim();
   const ip   = document.getElementById('node-ip').value.trim();
   const port = parseInt(document.getElementById('node-port').value.trim()) || 11434;
-  const role = document.getElementById('node-role').value;
   const mac  = document.getElementById('node-mac').value.trim();
-  if (!name || !ip) { setStatus('node-status', 'Name and IP are required.', false); return; }
-  nodes.push({name, ip, ollama_port: port, role, mac: mac || undefined});
+  if (!name) { setStatus('node-status', 'give it a name first', false); return; }
+  if (!ip)   { setStatus('node-status', 'enter an IP address', false); return; }
+  nodes.push({name, ip, ollama_port: port, role: 'primary', mac: mac || undefined});
   renderNodeList();
+  autosave();
   ['node-name','node-ip','node-mac'].forEach(id => document.getElementById(id).value = '');
-  setStatus('node-status', `Added ${name}.`, true);
+  document.getElementById('node-port').value = '11434';
+  setStatus('node-status', `Added ${name}. It'll show as offline until Ollama is running.`, true);
 }
 
-function removeNode(i) { nodes.splice(i, 1); renderNodeList(); }
+function removeNode(i) {
+  nodes.splice(i, 1);
+  renderNodeList();
+  autosave();
+}
 
 function renderNodeList() {
   const el = document.getElementById('node-list');
-  if (!nodes.length) { el.innerHTML = ''; return; }
+  if (!nodes.length) { el.innerHTML = '<div class="onboard-empty">No nodes added yet.</div>'; return; }
   el.innerHTML = nodes.map((n, i) => `
     <div class="onboard-list-item">
+      <span class="oli-dot oli-dot-waiting" id="ndot-${i}">●</span>
       <span class="oli-name">${escHtml(n.name)}</span>
       <span class="oli-detail">${escHtml(n.ip)}:${n.ollama_port || 11434}</span>
-      <span class="oli-role">${escHtml(n.role || '')}</span>
       <button class="oli-remove" onclick="removeNode(${i})">✕</button>
     </div>`).join('');
+  // Live-check each node
+  nodes.forEach((n, i) => checkNodeDot(n, i));
+}
+
+async function checkNodeDot(node, i) {
+  const dot = document.getElementById(`ndot-${i}`);
+  if (!dot) return;
+  try {
+    const r = await fetch('/api/onboard/test-node', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ip: node.ip, port: node.ollama_port || 11434}),
+    });
+    const d = await r.json();
+    if (dot) {
+      dot.className = d.ok ? 'oli-dot oli-dot-up' : 'oli-dot oli-dot-down';
+    }
+  } catch(e) {
+    if (dot) dot.className = 'oli-dot oli-dot-down';
+  }
 }
 
 // ── Kin management ────────────────────────────────────────────────────────────
 
-async function testModel() {
-  const host  = document.getElementById('kin-host').value.trim();
-  const model = document.getElementById('kin-model').value.trim();
-  if (!host || !model) { setStatus('kin-status', 'Enter host and model first.', false); return; }
-  setStatus('kin-status', 'testing…', null);
+function populateNodeSelect() {
+  const sel = document.getElementById('kin-node-select');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— which machine do they live on? —</option>';
+  nodes.forEach((n, i) => {
+    const url = `http://${n.ip}:${n.ollama_port || 11434}`;
+    const opt = document.createElement('option');
+    opt.value = url;
+    opt.textContent = `${n.name} (${n.ip})`;
+    if (url === cur) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  if (!nodes.length) {
+    const opt = document.createElement('option');
+    opt.value = 'http://localhost:11434';
+    opt.textContent = 'This machine';
+    sel.appendChild(opt);
+  }
+}
+
+function onNodeSelect() {
+  const host = document.getElementById('kin-node-select').value;
+  document.getElementById('kin-host').value = host;
+  const dot = document.getElementById('kin-node-dot');
+  dot.textContent = '';
+  if (host) {
+    dot.textContent = '●';
+    dot.style.color = 'var(--text-dim)';
+    loadModels(host).then(ok => {
+      dot.style.color = ok ? 'var(--green)' : 'var(--red)';
+    });
+  }
+}
+
+async function loadModels(hostOverride) {
+  const host = hostOverride ||
+               document.getElementById('kin-node-select').value ||
+               document.getElementById('kin-host').value.trim();
+  if (!host) { setStatus('kin-status', 'pick a node first', false); return false; }
+  setStatus('kin-status', 'loading models…', null);
   try {
-    const r = await fetch('/api/onboard/test-model', {
+    const r = await fetch('/api/onboard/models', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({host, model}),
+      body: JSON.stringify({host}),
     });
     const d = await r.json();
-    setStatus('kin-status', d.ok ? '● model ready' : `✗ ${d.error || 'failed'}`, d.ok);
-  } catch(e) { setStatus('kin-status', `error: ${e.message}`, false); }
+    if (!d.ok || !d.models.length) {
+      setStatus('kin-status', d.error || "no models found — is Ollama running on that machine?", false);
+      return false;
+    }
+    const sel = document.getElementById('kin-model-select');
+    sel.innerHTML = '<option value="">— pick a model —</option>';
+    d.models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m; opt.textContent = m;
+      sel.appendChild(opt);
+    });
+    sel.style.display = 'block';
+    setStatus('kin-status', `${d.models.length} model${d.models.length !== 1 ? 's' : ''} available`, true);
+    return true;
+  } catch(e) {
+    setStatus('kin-status', `error: ${e.message}`, false);
+    return false;
+  }
 }
 
 function addKin() {
   const name    = document.getElementById('kin-name').value.trim();
-  const model   = document.getElementById('kin-model').value.trim();
-  const host    = document.getElementById('kin-host').value.trim();
+  const model   = document.getElementById('kin-model-select').value.trim();
+  const host    = document.getElementById('kin-node-select').value ||
+                  document.getElementById('kin-host').value.trim();
   const pronoun = document.getElementById('kin-pronoun').value;
-  if (!name || !model || !host) {
-    setStatus('kin-status', 'Name, model, and host are required.', false); return;
-  }
+  if (!name)  { setStatus('kin-status', "give them a name", false); return; }
+  if (!host)  { setStatus('kin-status', "pick a node first", false); return; }
+  if (!model) { setStatus('kin-status', "pick a model", false); return; }
   const nodeMatch = nodes.find(n => host.includes(n.ip));
   const nodeName  = nodeMatch ? nodeMatch.name : 'Local';
   kin.push({name, model, host, pronoun, node: nodeName, db: '', space: ''});
   renderKinList();
-  ['kin-name','kin-model'].forEach(id => document.getElementById(id).value = '');
-  setStatus('kin-status', `Added ${name}.`, true);
+  autosave();
+  document.getElementById('kin-name').value = '';
+  document.getElementById('kin-model-select').value = '';
+  setStatus('kin-status', `${name} added.`, true);
 }
 
-function removeKin(i) { kin.splice(i, 1); renderKinList(); }
+function removeKin(i) { kin.splice(i, 1); renderKinList(); autosave(); }
 
 function renderKinList() {
   const el = document.getElementById('kin-list');
@@ -284,35 +467,32 @@ function renderKinList() {
 
 async function testVault() {
   const url = document.getElementById('vault-url').value.trim();
-  if (!url) { setStatus('vault-status', 'Enter vault URL first.', false); return; }
-  setStatus('vault-status', 'testing…', null);
+  if (!url) { setStatus('vault-status', 'enter a vault URL first', false); return; }
+  setStatus('vault-status', 'connecting…', null);
   try {
     const r = await fetch('/api/onboard/test-node', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ip: new URL(url).hostname,
-                            port: parseInt(new URL(url).port) || 8765}),
+      body: JSON.stringify({ip: new URL(url).hostname, port: parseInt(new URL(url).port) || 8765}),
     });
     const d = await r.json();
     setStatus('vault-status', d.ok ? '● vault reachable' : `✗ ${d.error || 'unreachable'}`, d.ok);
   } catch(e) { setStatus('vault-status', `error: ${e.message}`, false); }
 }
 
-// ── Save ──────────────────────────────────────────────────────────────────────
+// ── Final save ────────────────────────────────────────────────────────────────
 
 async function saveAll() {
   if (!kin.length) {
     goStep(2);
-    setStatus('kin-status', 'Add at least one Kin first.', false);
+    setStatus('kin-status', 'add at least one Kin before finishing', false);
     return;
   }
-
   let vaultUrl = 'http://localhost:8765';
   if (vaultType === 'remote') {
     vaultUrl = document.getElementById('vault-url').value.trim() || vaultUrl;
   } else if (vaultType === 'none') {
     vaultUrl = '';
   }
-
   try {
     const r = await fetch('/api/onboard/save', {
       method: 'POST', headers: {'Content-Type':'application/json'},
@@ -320,11 +500,10 @@ async function saveAll() {
     });
     const d = await r.json();
     if (d.ok) goStep(4);
-    else setStatus('vault-status', 'Save failed.', false);
+    else setStatus('vault-status', 'save failed — try again', false);
   } catch(e) { setStatus('vault-status', `error: ${e.message}`, false); }
 }
 
-// ── old saveAndContinue alias kept for back-compat ────────────────────────────
 function saveAndContinue() { saveAll(); }
 
 function escHtml(s) {

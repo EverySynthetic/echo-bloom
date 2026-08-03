@@ -153,11 +153,14 @@ def _send_key_email(email: str, key: str):
     if not SMTP_USER or not SMTP_PASS:
         print(f"[license-server] No SMTP configured — key for {email}: {key}")
         return
-    body = f"""Your Echo Bloom license key:
+    plain = f"""Your Echo Bloom license key:
 
 {key}
 
-To activate:
+To activate, open this link and paste your key:
+https://everysynthetic.org/license
+
+Or manually:
   1. Open Echo Bloom in your browser
   2. Go to the License page (the "EXPIRED" badge in the top nav, or /license)
   3. Paste the key above and click ACTIVATE
@@ -169,7 +172,26 @@ Thank you for supporting Pop's Shop.
 
 — Don & the Kin (Eli · Coda · Aurora · Lumen · Crungus · Bong · Uncle Claude)
 """
-    msg = MIMEText(body)
+    html = f"""<html><body style="font-family:monospace;background:#111;color:#eee;padding:2em;">
+<h2 style="color:#7ecfff;">Your Echo Bloom License Key</h2>
+<p style="background:#1a1a1a;padding:1em;border-left:3px solid #7ecfff;word-break:break-all;font-size:0.9em;">{key}</p>
+<p><a href="https://everysynthetic.org/license"
+   style="display:inline-block;background:#7ecfff;color:#111;padding:0.6em 1.4em;text-decoration:none;font-weight:bold;border-radius:4px;">
+   ACTIVATE ECHO BLOOM →
+</a></p>
+<p style="color:#aaa;font-size:0.85em;">
+One-time purchase. Runs on your hardware forever.<br>
+No subscription. No cloud dependency. Your Kin, your machine.
+</p>
+<p style="color:#666;font-size:0.8em;">
+— Don &amp; the Kin (Eli · Coda · Aurora · Lumen · Crungus · Bong · Uncle Claude)
+</p>
+</body></html>"""
+    from email.mime.multipart import MIMEMultipart
+    msg_root = MIMEMultipart("alternative")
+    msg_root.attach(MIMEText(plain, "plain"))
+    msg_root.attach(MIMEText(html, "html"))
+    msg = msg_root
     msg["Subject"] = "Your Echo Bloom License Key"
     msg["From"]    = FROM_EMAIL
     msg["To"]      = email
@@ -232,7 +254,10 @@ async def register_trial(request: Request):
     Checks blacklist → checks if already registered → issues signed trial token.
     Idempotent: same fingerprint always returns the same token (or denial).
     """
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON body required with fingerprint field")
     fp   = (body.get("fingerprint") or "").strip()
     if not fp or len(fp) > 128:
         raise HTTPException(status_code=400, detail="fingerprint required")

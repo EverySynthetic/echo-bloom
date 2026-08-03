@@ -1297,3 +1297,32 @@ a:hover { color: var(--text); }
 .vault-radio-label strong { font-size: 13px; color: var(--text); }
 .vault-radio-desc       { font-size: 11px; color: var(--text-muted); }
 .onboard-empty          { font-size: 12px; color: var(--text-muted); padding: 12px 0; }
+
+/* ── Onboard: scan & discover additions ──────────────────────────── */
+.onboard-discover-row   { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.onboard-btn-scan       { background: var(--surface2); border: 1px solid var(--blue); color: var(--blue); }
+.onboard-btn-scan:hover { background: var(--blue); color: var(--bg); }
+.onboard-btn-scan:disabled { opacity: 0.5; cursor: wait; }
+
+.onboard-divider        { display: flex; align-items: center; gap: 10px; margin: 20px 0; color: var(--text-muted); font-size: 11px; }
+.onboard-divider::before,
+.onboard-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+.onboard-scan-results   { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.scan-card              { display: flex; align-items: center; justify-content: space-between;
+                          padding: 10px 14px; background: var(--surface2); border: 1px solid var(--border); }
+.scan-card-added        { opacity: 0.5; }
+.scan-card-info         { display: flex; flex-direction: column; gap: 2px; }
+.scan-card-host         { font-size: 13px; color: var(--text); }
+.scan-card-ip           { font-size: 11px; color: var(--text-dim); }
+.scan-card-tag          { font-size: 11px; color: var(--text-muted); }
+.scan-card-btn          { padding: 4px 12px; font-size: 11px; }
+
+/* ── Live status dots in node list ──────────────────────────────── */
+.oli-dot                { font-size: 10px; margin-right: 6px; }
+.oli-dot-waiting        { color: var(--text-muted); }
+.oli-dot-up             { color: var(--green); }
+.oli-dot-down           { color: var(--red); }
+
+/* ── Kin node selector dot ──────────────────────────────────────── */
+.onboard-node-dot       { font-size: 12px; margin-left: 8px; }
