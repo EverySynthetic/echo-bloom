@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
-# Kin App — One-command installer
-# Usage: curl -sSL <url>/install.sh | bash
-# Or:    bash install.sh
+# Echo Bloom installer
+# Usage: curl -sSL <url>/install.sh -o install.sh && bash install.sh
 
 set -euo pipefail
+
+# Installer needs an interactive terminal for model selection and password setup.
+if [ ! -t 0 ]; then
+    echo ""
+    echo "  Echo Bloom installer requires an interactive terminal."
+    echo "  Piping from curl won't work. Run it like this instead:"
+    echo ""
+    echo "    curl -sSL https://raw.githubusercontent.com/everysynthetic/echo-bloom/main/install.sh -o install.sh"
+    echo "    bash install.sh"
+    echo ""
+    exit 1
+fi
 
 APP_DIR="$HOME/echo_bloom"
 SERVICE_NAME="echo_bloom"
