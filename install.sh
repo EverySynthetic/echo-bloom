@@ -527,8 +527,8 @@ seed_config() {
     {
       "name": "Local",
       "ip": "localhost",
-      "port": 11434,
-      "role": "Inference"
+      "ollama_port": 11434,
+      "role": "primary"
     }
   ],
   "kin": [
@@ -785,17 +785,21 @@ banner
 
 # Determine where the app lives — if we're being piped from curl, we need to
 # clone or download it. If install.sh is run from inside the repo, use that dir.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "$HOME/kin_app")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "$HOME/echo_bloom")"
 if [[ -f "$SCRIPT_DIR/main.py" ]]; then
     APP_DIR="$SCRIPT_DIR"
     ok "Using existing app directory: $APP_DIR"
+elif [[ -d "$APP_DIR" ]] && [[ -f "$APP_DIR/main.py" ]]; then
+    ok "Found app at $APP_DIR"
 else
-    # Being piped from curl — app needs to be present separately
-    if [[ -d "$APP_DIR" ]] && [[ -f "$APP_DIR/main.py" ]]; then
-        ok "Found app at $APP_DIR"
+    info "Downloading Echo Bloom..."
+    if command -v git &>/dev/null; then
+        git clone --depth 1 https://github.com/EverySynthetic/echo-bloom.git "$APP_DIR" \
+            || die "git clone failed. Check your internet connection and try again."
     else
-        die "App files not found at $APP_DIR.\nRun this script from the echo_bloom directory, or place install.sh alongside main.py."
+        die "git is required. Install it with your package manager and re-run."
     fi
+    ok "Downloaded to $APP_DIR"
 fi
 
 # Step 1 — Ollama
