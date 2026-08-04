@@ -8,11 +8,22 @@ import threading
 import webbrowser
 import time
 import os
+import sys
 
 SERVICE  = "echo_bloom"
 PORT     = 8090
 URL      = f"http://localhost:{PORT}"
 REFRESH  = 3000  # ms between status polls
+
+# Import license module directly — avoids HTTP auth complexity
+_APP_DIR = os.path.expanduser("~/echo_bloom")
+if _APP_DIR not in sys.path:
+    sys.path.insert(0, _APP_DIR)
+try:
+    import license as _lic
+    _HAS_LIC = True
+except ImportError:
+    _HAS_LIC = False
 
 # ── Colors (match Echo Bloom dark theme) ──────────────────────────────────────
 BG       = "#0d1117"
@@ -51,7 +62,7 @@ class Panel:
         root.title("Echo Bloom")
         root.configure(bg=BG)
         root.resizable(False, False)
-        root.geometry("320x420")
+        root.geometry("320x560")
 
         self._build()
         self._poll()
@@ -111,10 +122,46 @@ class Panel:
         btn(bf2, "⎘  OPEN IN BROWSER", CYAN,  open_browser)
         btn(bf2, "≡  VIEW LOGS",       TEXT,  self._show_logs)
 
+        # License section
+        tk.Frame(root, bg=BORDER, height=1).pack(fill="x", padx=16, pady=4)
+
+        lf = tk.Frame(root, bg=BG, pady=6)
+        lf.pack(fill="x", padx=20)
+
+        tk.Label(lf, text="LICENSE", font=("Courier", 9, "bold"),
+                 bg=BG, fg=DIM).pack(anchor="w")
+
+        self.lic_status = tk.Label(lf, text="—", font=("Courier", 9),
+                                   bg=BG, fg=DIM)
+        self.lic_status.pack(anchor="w", pady=(2, 6))
+
+        self.lic_entry = tk.Entry(lf, font=("Courier", 9),
+                                  bg=BG3, fg=TEXT, insertbackground=TEXT,
+                                  relief="flat", bd=4)
+        self.lic_entry.pack(fill="x", pady=(0, 4))
+        self.lic_entry.insert(0, "EB1-…")
+        self.lic_entry.bind("<FocusIn>",  lambda e: self._lic_clear_hint())
+        self.lic_entry.bind("<FocusOut>", lambda e: self._lic_restore_hint())
+
+        self.lic_msg = tk.Label(lf, text="", font=("Courier", 8),
+                                bg=BG, fg=DIM, wraplength=280, justify="left")
+        self.lic_msg.pack(anchor="w")
+
+        tk.Button(lf, text="ACTIVATE KEY",
+                  font=("Courier", 9, "bold"),
+                  bg=BG3, fg=GREEN,
+                  activebackground=BG2, activeforeground=GREEN,
+                  relief="flat", cursor="hand2", bd=0, pady=6,
+                  highlightthickness=1, highlightbackground=BORDER,
+                  command=self._activate_key).pack(fill="x", pady=(4, 0))
+
         # Footer
         tk.Frame(root, bg=BORDER, height=1).pack(fill="x", padx=16, pady=4)
         tk.Label(root, text=f"localhost:{PORT}",
                  font=("Courier", 9), bg=BG, fg=DIM).pack(pady=(0, 10))
+
+        # Load license status
+        self._refresh_license()
 
     def _set_status(self, s):
         color_map = {
@@ -150,6 +197,75 @@ class Panel:
     def _restart(self):
         self._set_status("activating")
         threading.Thread(target=lambda: service_control("restart"), daemon=True).start()
+
+    def _refresh_license(self):
+        if not _HAS_LIC:
+            self.lic_status.config(text="license module not found", fg=DIM)
+            return
+        def _fetch():
+            try:
+                d = _lic.get_status()
+                self.root.after(0, self._set_lic_status, d)
+            except Exception as e:
+                self.root.after(0, self.lic_status.config,
+                                {"text": str(e)[:60], "fg": RED})
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _set_lic_status(self, d):
+        state = d.get("state", "unknown")
+        if state == "licensed":
+            email = d.get("email", "")
+            txt = f"✓ licensed{' — ' + email if email else ''}"
+            self.lic_status.config(text=txt, fg=GREEN)
+        elif state == "trial":
+            days = d.get("days_left", "?")
+            self.lic_status.config(
+                text=f"◉ trial — {days} day{'s' if days != 1 else ''} remaining",
+                fg=AMBER)
+        elif state == "expired":
+            self.lic_status.config(text="◎ trial expired", fg=RED)
+        elif state == "denied":
+            self.lic_status.config(text="✗ trial unavailable", fg=RED)
+        else:
+            self.lic_status.config(text=f"— {state}", fg=DIM)
+
+    def _lic_clear_hint(self):
+        if self.lic_entry.get() == "EB1-…":
+            self.lic_entry.delete(0, "end")
+            self.lic_entry.config(fg=TEXT)
+
+    def _lic_restore_hint(self):
+        if not self.lic_entry.get():
+            self.lic_entry.insert(0, "EB1-…")
+            self.lic_entry.config(fg=DIM)
+
+    def _activate_key(self):
+        if not _HAS_LIC:
+            return
+        key = self.lic_entry.get().strip()
+        if not key or key == "EB1-…":
+            self.lic_msg.config(text="Paste your key first.", fg=RED)
+            return
+        self.lic_msg.config(text="Verifying…", fg=DIM)
+        def _do():
+            try:
+                result = _lic.verify_key(key)
+                if result["valid"]:
+                    _lic.save_key(key)
+                    ktype = result.get("type", "permanent")
+                    if ktype == "permanent":
+                        msg = "Licensed forever. Welcome home."
+                    else:
+                        msg = f"Trial key accepted — {result.get('days_left','?')} days."
+                    self.root.after(0, self.lic_msg.config, {"text": msg, "fg": GREEN})
+                    self.root.after(0, self._refresh_license)
+                else:
+                    reason = result.get("reason", "Invalid key.")
+                    self.root.after(0, self.lic_msg.config, {"text": reason, "fg": RED})
+            except Exception as e:
+                self.root.after(0, self.lic_msg.config,
+                                {"text": str(e)[:80], "fg": RED})
+        threading.Thread(target=_do, daemon=True).start()
 
     def _show_logs(self):
         win = tk.Toplevel(self.root)
