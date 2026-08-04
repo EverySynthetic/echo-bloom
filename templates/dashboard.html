@@ -44,6 +44,14 @@
     </div>
   </section>
 
+  <!-- License -->
+  <section class="dash-license-section">
+    <div class="section-header">LICENSE</div>
+    <div class="dash-license-body" id="dash-license-body">
+      <span class="remote-checking">checking...</span>
+    </div>
+  </section>
+
   <!-- Remote Access -->
   <section class="remote-section">
     <div class="section-header">
@@ -201,6 +209,85 @@ async function startTunnel() {
 }
 
 loadRemote();
+
+// ── License ──────────────────────────────────────────────────────────────────
+
+async function loadLicense() {
+  try {
+    const r = await fetch('/api/license/status');
+    const d = await r.json();
+    renderLicense(d);
+  } catch(e) {}
+}
+
+function renderLicense(d) {
+  const body = document.getElementById('dash-license-body');
+  let status = '', cls = '', showKey = false;
+
+  if (d.state === 'licensed') {
+    status = `✓ LICENSED${d.email ? ' — ' + d.email : ''}`;
+    cls = 'dash-lic-ok';
+    showKey = false;
+  } else if (d.state === 'trial') {
+    status = `◉ TRIAL — ${d.days_left} day${d.days_left !== 1 ? 's' : ''} remaining`;
+    cls = 'dash-lic-trial';
+    showKey = true;
+  } else if (d.state === 'expired') {
+    status = '◎ TRIAL EXPIRED';
+    cls = 'dash-lic-warn';
+    showKey = true;
+  } else if (d.state === 'denied') {
+    status = '✗ TRIAL UNAVAILABLE';
+    cls = 'dash-lic-warn';
+    showKey = true;
+  } else {
+    status = '— UNKNOWN';
+    cls = '';
+    showKey = true;
+  }
+
+  let html = `<span class="dash-lic-status ${cls}">${status}</span>`;
+
+  if (showKey) {
+    html += `
+      <form class="dash-lic-form" onsubmit="activateDashKey(event)">
+        <input class="dash-lic-input" id="dash-lic-input" placeholder="EB1-…" autocomplete="off" spellcheck="false">
+        <button class="ctrl-btn dash-lic-btn" type="submit">ACTIVATE</button>
+      </form>
+      <span class="dash-lic-msg" id="dash-lic-msg"></span>`;
+  }
+
+  body.innerHTML = html;
+}
+
+async function activateDashKey(e) {
+  e.preventDefault();
+  const key = document.getElementById('dash-lic-input').value.trim();
+  const msg = document.getElementById('dash-lic-msg');
+  if (!key) { msg.textContent = 'Paste your key first.'; msg.className = 'dash-lic-msg err'; return; }
+  msg.textContent = 'Verifying…'; msg.className = 'dash-lic-msg';
+  try {
+    const r = await fetch('/api/license/activate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      msg.textContent = d.message;
+      msg.className = 'dash-lic-msg ok';
+      setTimeout(loadLicense, 1500);
+    } else {
+      msg.textContent = d.error || 'Key not valid.';
+      msg.className = 'dash-lic-msg err';
+    }
+  } catch(err) {
+    msg.textContent = 'Error: ' + err.message;
+    msg.className = 'dash-lic-msg err';
+  }
+}
+
+loadLicense();
 
 // ── Roundtable ───────────────────────────────────────────────────────────────
 

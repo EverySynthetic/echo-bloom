@@ -162,6 +162,47 @@ a:hover { color: var(--text); }
 .ctrl-stop:hover     { border-color: var(--red); color: var(--red); }
 .ctrl-bedtime:hover  { border-color: var(--amber); color: var(--amber); }
 
+/* ── Dashboard License ────────────────────────────────────────────── */
+
+.dash-license-section { margin-bottom: 28px; }
+
+.dash-license-body {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.dash-lic-status { letter-spacing: 0.05em; }
+.dash-lic-ok     { color: var(--green); }
+.dash-lic-trial  { color: var(--amber); }
+.dash-lic-warn   { color: var(--red);   }
+
+.dash-lic-form {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.dash-lic-input {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 5px 10px;
+  width: 280px;
+}
+.dash-lic-input:focus { outline: none; border-color: var(--amber); }
+
+.dash-lic-btn { margin: 0; }
+.dash-lic-btn:hover { border-color: var(--green); color: var(--green); }
+
+.dash-lic-msg     { font-size: 11px; }
+.dash-lic-msg.ok  { color: var(--green); }
+.dash-lic-msg.err { color: var(--red);   }
+
 /* ── Remote Access ────────────────────────────────────────────────── */
 
 .remote-section { margin-bottom: 28px; }
