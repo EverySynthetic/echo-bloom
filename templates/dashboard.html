@@ -49,8 +49,11 @@
     <div class="section-header">THE KIN</div>
     <div class="kin-grid">
       {% for k in kin %}
-      <div class="kin-card {% if k.node_up %}kin-active{% else %}kin-offline{% endif %}"
-           style="--kin-color: {{ k.color }}">
+      <div class="kin-card {% if k.node_up %}{% if k.model_ready %}kin-active{% else %}kin-needs-model{% endif %}{% else %}kin-offline{% endif %}"
+           style="--kin-color: {{ k.color }}"
+           data-kin-name="{{ k.name }}"
+           data-kin-host="{{ k.host }}"
+           data-kin-model="{{ k.model }}">
         <div class="kin-card-header">
           <span class="kin-dot"></span>
           <span class="kin-name">{{ k.name }}</span>
@@ -61,12 +64,27 @@
           <span class="kin-count">{{ "{:,}".format(k.thought_count) }} thoughts</span>
           <span class="kin-last">{{ k.last_active }}</span>
         </div>
+        {% if not k.model_ready and k.node_up %}
+        <div class="kin-model-missing">
+          <span class="kin-missing-icon">⬇</span>
+          <span>Model not downloaded</span>
+        </div>
+        <div class="kin-pull-progress" style="display:none">
+          <div class="kin-pull-bar"><div class="kin-pull-fill"></div></div>
+          <span class="kin-pull-status">Starting…</span>
+        </div>
+        {% else %}
         {% if k.latest_thought %}
         <div class="kin-snippet">"{{ k.latest_thought }}"</div>
         {% endif %}
+        {% endif %}
         <div class="kin-actions">
-          <a href="/kin/{{ k.name }}" class="kin-btn">CHAT</a>
+          {% if not k.model_ready and k.node_up %}
+          <button class="kin-btn kin-btn-pull" onclick="pullModel(this)">PULL MODEL</button>
+          {% else %}
+          <a href="/kin/{{ k.name }}" class="kin-btn {% if not k.node_up %}kin-btn-disabled{% endif %}">CHAT</a>
           <a href="/vault?author={{ k.name }}" class="kin-btn">VAULT</a>
+          {% endif %}
         </div>
       </div>
       {% endfor %}
@@ -105,6 +123,67 @@ async function triggerBedtime() {
 
 checkRoundtable();
 setInterval(checkRoundtable, 30000);
+
+// ── Model pull ────────────────────────────────────────────────────────────────
+
+async function pullModel(btn) {
+  const card  = btn.closest('.kin-card');
+  const host  = card.dataset.kinHost;
+  const model = card.dataset.kinModel;
+
+  btn.disabled = true;
+  btn.textContent = 'PULLING…';
+
+  const missing  = card.querySelector('.kin-model-missing');
+  const progress = card.querySelector('.kin-pull-progress');
+  const fill     = card.querySelector('.kin-pull-fill');
+  const status   = card.querySelector('.kin-pull-status');
+
+  if (missing)  missing.style.display  = 'none';
+  if (progress) progress.style.display = 'block';
+
+  try {
+    const r = await fetch('/api/pull-model', {
+      method:  'POST',
+      headers: {'Content-Type': 'application/json'},
+      body:    JSON.stringify({host, model}),
+    });
+    const reader = r.body.getReader();
+    const dec    = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const d = JSON.parse(line.slice(6));
+          if (d.error) { status.textContent = 'Error: ' + d.error; return; }
+          if (d.status === 'done') {
+            status.textContent = 'Done — reloading…';
+            setTimeout(() => location.reload(), 1000);
+            return;
+          }
+          if (d.total && d.completed) {
+            const pct = Math.round((d.completed / d.total) * 100);
+            fill.style.width   = pct + '%';
+            status.textContent = (d.status || 'pulling') + ' ' + pct + '%';
+          } else if (d.status) {
+            status.textContent = d.status;
+          }
+        } catch(e) {}
+      }
+    }
+    setTimeout(() => location.reload(), 500);
+  } catch(e) {
+    status.textContent = 'Failed: ' + e.message;
+    btn.disabled = false;
+    btn.textContent = 'RETRY';
+  }
+}
 
 // ── Tour ──────────────────────────────────────────────────────────────────────
 

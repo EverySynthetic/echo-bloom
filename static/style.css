@@ -183,7 +183,8 @@ a:hover { color: var(--text); }
   transition: border-color 0.2s;
 }
 .kin-card:hover { border-color: var(--kin-color); background: var(--surface2); }
-.kin-offline    { opacity: 0.45; }
+.kin-offline     { opacity: 0.45; }
+.kin-needs-model { border-left-color: var(--amber, #e6a817); }
 
 .kin-card-header {
   display: flex;
@@ -237,6 +238,33 @@ a:hover { color: var(--text); }
   padding: 4px 12px;
 }
 .kin-btn:hover { background: var(--kin-color); color: var(--bg); }
+.kin-btn-disabled { opacity: 0.35; pointer-events: none; }
+.kin-btn-pull { cursor: pointer; background: transparent; }
+.kin-btn-pull:hover { background: var(--kin-color); color: var(--bg); }
+
+.kin-model-missing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--amber, #e6a817);
+}
+.kin-missing-icon { font-size: 14px; }
+
+.kin-pull-progress { display: flex; flex-direction: column; gap: 4px; }
+.kin-pull-bar {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.kin-pull-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--kin-color);
+  transition: width 0.3s;
+}
+.kin-pull-status { font-size: 10px; color: var(--text-dim); }
 
 /* ── Kin detail page ──────────────────────────────────────────────── */
 

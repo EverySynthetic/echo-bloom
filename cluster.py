@@ -65,6 +65,29 @@ async def _ping_ollama(session, ip, port, timeout=4):
         return False
 
 
+async def _get_pulled_models(session, host, timeout=4):
+    """Return set of model name strings pulled on this Ollama host."""
+    try:
+        async with session.get(
+            f"{host}/api/tags",
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as r:
+            if r.status == 200:
+                data = await r.json()
+                return {m["name"] for m in data.get("models", [])}
+    except Exception:
+        pass
+    return set()
+
+
+def _model_in_set(model: str, pulled: set) -> bool:
+    if model in pulled:
+        return True
+    bare = model.split(":")[0]
+    return any(m == model or m == f"{model}:latest" or m.split(":")[0] == bare
+               for m in pulled)
+
+
 async def _ping_service(session, url, timeout=4):
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as r:
@@ -158,6 +181,18 @@ async def get_cluster_status():
         up = result is True
         nodes_out.append({**node, "up": up})
 
+    # For every node that's up, fetch its pulled-model list in parallel
+    up_nodes = [n for n in nodes_out if n.get("up") and n.get("ollama_port")]
+    async with aiohttp.ClientSession() as session:
+        tag_results = await asyncio.gather(
+            *[_get_pulled_models(session, f"http://{n['ip']}:{n['ollama_port']}")
+              for n in up_nodes],
+            return_exceptions=True,
+        )
+    pulled_by_node = {}
+    for node, tags in zip(up_nodes, tag_results):
+        pulled_by_node[node["name"]] = tags if isinstance(tags, set) else set()
+
     kin_out = []
     for kin in KIN:
         count     = _thought_count(kin["db"])
@@ -165,12 +200,15 @@ async def get_cluster_status():
         last_ago  = _time_ago(last_ts)
         latest    = _latest_thought(kin["db"])
         node_up   = next((n["up"] for n in nodes_out if n["name"] == kin["node"]), False)
+        pulled    = pulled_by_node.get(kin["node"], set())
+        model_ready = node_up and _model_in_set(kin["model"], pulled)
         kin_out.append({
             **kin,
             "thought_count": count,
             "last_active":   last_ago,
             "latest_thought": latest,
             "node_up":       node_up,
+            "model_ready":   model_ready,
         })
 
     return {"nodes": nodes_out, "kin": kin_out}
