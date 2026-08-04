@@ -44,6 +44,17 @@
     </div>
   </section>
 
+  <!-- Remote Access -->
+  <section class="remote-section">
+    <div class="section-header">
+      REMOTE ACCESS
+      <button class="remote-refresh-btn" onclick="loadRemote()" title="Refresh">↻</button>
+    </div>
+    <div class="remote-body" id="remote-body">
+      <span class="remote-checking">checking...</span>
+    </div>
+  </section>
+
   <!-- Kin cards -->
   <section class="kin-section">
     <div class="section-header">THE KIN</div>
@@ -96,6 +107,103 @@
 
 {% block scripts %}
 <script>
+// ── Remote Access ────────────────────────────────────────────────────────────
+
+async function loadRemote() {
+  const body = document.getElementById('remote-body');
+  body.innerHTML = '<span class="remote-checking">checking...</span>';
+  try {
+    const r = await fetch('/api/remote/status');
+    const d = await r.json();
+    renderRemote(d);
+  } catch(e) {
+    body.innerHTML = '<span class="remote-checking">could not check status</span>';
+  }
+}
+
+function renderRemote(d) {
+  const body = document.getElementById('remote-body');
+  const urls = [];
+  if (d.cloudflare) urls.push({ label: 'CLOUDFLARE', url: d.cloudflare });
+  if (d.tailscale)  urls.push({ label: 'TAILSCALE',  url: d.tailscale  });
+
+  if (!urls.length) {
+    body.innerHTML = `
+      <div class="remote-none">
+        <span class="remote-none-msg">No tunnel active. Your Kin are only reachable on this network.</span>
+        <button class="ctrl-btn remote-start-btn" onclick="startTunnel()">⬡ START CLOUDFLARE TUNNEL</button>
+        <span class="remote-start-note">Free. No account. URL changes on restart.</span>
+      </div>`;
+    return;
+  }
+
+  let html = '<div class="remote-urls">';
+  for (const {label, url} of urls) {
+    html += `
+      <div class="remote-url-row">
+        <span class="remote-label">${label}</span>
+        <a class="remote-url-link" href="${url}" target="_blank" rel="noopener">${url}</a>
+        <button class="remote-copy-btn" onclick="copyRemoteUrl('${url}', this)">COPY</button>
+        <button class="remote-qr-btn"   onclick="toggleQr('${url}', this)">QR</button>
+      </div>
+      <div class="remote-qr-container" style="display:none"></div>`;
+  }
+  html += '</div>';
+  html += '<div class="remote-note">Password protected — safe to bookmark. URL changes if Cloudflare tunnel restarts.</div>';
+  body.innerHTML = html;
+}
+
+function copyRemoteUrl(url, btn) {
+  navigator.clipboard.writeText(url).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'COPIED';
+    setTimeout(() => btn.textContent = orig, 1500);
+  });
+}
+
+async function toggleQr(url, btn) {
+  const container = btn.closest('.remote-url-row').nextElementSibling;
+  if (container.style.display !== 'none') {
+    container.style.display = 'none';
+    btn.textContent = 'QR';
+    return;
+  }
+  btn.textContent = '...';
+  try {
+    const r = await fetch('/api/remote/qr?url=' + encodeURIComponent(url));
+    if (!r.ok) throw new Error('qrcode not available');
+    const svg = await r.text();
+    container.innerHTML = svg;
+    container.style.display = 'block';
+    btn.textContent = 'HIDE';
+  } catch(e) {
+    container.innerHTML = '<span class="remote-checking">QR unavailable — install qrcode package</span>';
+    container.style.display = 'block';
+    btn.textContent = 'HIDE';
+  }
+}
+
+async function startTunnel() {
+  const body = document.getElementById('remote-body');
+  body.innerHTML = '<span class="remote-checking">Starting tunnel — this takes about 15 seconds...</span>';
+  try {
+    const r  = await fetch('/api/remote/start-tunnel', {method: 'POST'});
+    const d  = await r.json();
+    if (d.ok) {
+      renderRemote({cloudflare: d.url, tailscale: null});
+    } else {
+      body.innerHTML = `<span class="remote-checking">${d.error}</span>
+        <button class="ctrl-btn remote-start-btn" onclick="loadRemote()" style="margin-top:8px">↻ RETRY</button>`;
+    }
+  } catch(e) {
+    body.innerHTML = '<span class="remote-checking">Failed to start tunnel.</span>';
+  }
+}
+
+loadRemote();
+
+// ── Roundtable ───────────────────────────────────────────────────────────────
+
 async function checkRoundtable() {
   try {
     const r = await fetch('/api/roundtable/status');

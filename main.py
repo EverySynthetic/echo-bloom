@@ -139,6 +139,7 @@ templates.env.globals["nav_kin"]     = lambda: cl.KIN
 templates.env.globals["nav_license"] = lambda: lic.get_status()
 
 # Configurable at deploy time
+PORT            = int(os.environ.get("ECHO_BLOOM_PORT", 8090))
 LICENSE_BUY_URL = os.environ.get("ECHO_BLOOM_BUY_URL", "https://buy.stripe.com/9B67sMfdY8PGdJFaBB6oo00")
 LICENSE_PRICE   = os.environ.get("ECHO_BLOOM_PRICE",   "75")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -969,6 +970,83 @@ async def api_onboard_scan_vault(_=Depends(require_auth)):
         pass
 
     return {"found": found}
+
+
+# ── Remote access ─────────────────────────────────────────────────────────────
+
+@app.get("/api/remote/status")
+async def api_remote_status(_=Depends(require_auth)):
+    result = {"cloudflare": None, "tailscale": None}
+
+    # Cloudflare — check systemd journal first, then temp log from a direct launch
+    for src in [
+        lambda: subprocess.run(
+            ["journalctl", "--user", "-u", "cloudflared", "--no-pager", "-n", "200"],
+            capture_output=True, text=True, timeout=5).stdout,
+        lambda: Path("/tmp/cloudflared_tunnel.log").read_text(),
+    ]:
+        try:
+            m = re.search(r'https://[a-z0-9-]+\.trycloudflare\.com', src())
+            if m:
+                result["cloudflare"] = m.group(0)
+                break
+        except Exception:
+            pass
+
+    # Tailscale
+    try:
+        out = subprocess.run(
+            ["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5
+        ).stdout.strip()
+        if out and re.match(r'^\d+\.\d+\.\d+\.\d+$', out):
+            result["tailscale"] = f"http://{out}:{PORT}"
+    except Exception:
+        pass
+
+    return result
+
+
+@app.post("/api/remote/start-tunnel")
+async def api_remote_start_tunnel(_=Depends(require_auth)):
+    import shutil as _shutil
+    if not _shutil.which("cloudflared"):
+        return {"ok": False, "error": "cloudflared not installed — re-run the installer and choose Cloudflare tunnel."}
+
+    subprocess.run(["pkill", "-f", "cloudflared tunnel"], capture_output=True)
+    await asyncio.sleep(1)
+
+    log_path = "/tmp/cloudflared_tunnel.log"
+    with open(log_path, "w") as fh:
+        subprocess.Popen(
+            ["cloudflared", "tunnel", "--url", f"http://localhost:{PORT}"],
+            stdout=fh, stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+    for _ in range(30):
+        await asyncio.sleep(1)
+        try:
+            m = re.search(r'https://[a-z0-9-]+\.trycloudflare\.com', Path(log_path).read_text())
+            if m:
+                return {"ok": True, "url": m.group(0)}
+        except Exception:
+            pass
+
+    return {"ok": False, "error": "Tunnel is starting — give it a few seconds and refresh."}
+
+
+@app.get("/api/remote/qr")
+async def api_remote_qr(url: str, _=Depends(require_auth)):
+    import io as _io
+    try:
+        import qrcode
+        import qrcode.image.svg
+        img = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage)
+        buf = _io.BytesIO()
+        img.save(buf)
+        return Response(content=buf.getvalue(), media_type="image/svg+xml")
+    except ImportError:
+        raise HTTPException(503, "qrcode package not installed")
 
 
 @app.post("/api/onboard/autosave")
