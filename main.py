@@ -598,10 +598,13 @@ async def api_license_activate(request: Request, _=Depends(require_auth_only)):
     key  = (body.get("key") or "").strip()
     if not key:
         return {"ok": False, "error": "No key provided."}
+    if not lic._CRYPTO_OK:
+        return {"ok": False, "error": "cryptography package not installed — re-run the installer."}
     result = lic.verify_key(key)
     if not result["valid"]:
         return {"ok": False, "error": result.get("reason", "Invalid key.")}
-    lic.save_key(key)
+    if not lic.save_key(key):
+        return {"ok": False, "error": f"Could not write license file to {lic.LICENSE_PATH} — check permissions."}
     ktype = result.get("type", "permanent")
     if ktype == "permanent":
         msg = f"Licensed forever. Welcome home{', ' + result['email'] if result.get('email') else ''}."
