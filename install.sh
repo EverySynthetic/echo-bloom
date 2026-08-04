@@ -881,6 +881,25 @@ Categories=Utility;
 StartupNotify=false
 DESKEOF
         chmod +x "$desktop_dir/EchoBloom.desktop"
+
+        # Register with the application launcher
+        local app_dir="$HOME/.local/share/applications"
+        mkdir -p "$app_dir"
+        cp "$desktop_dir/EchoBloom.desktop" "$app_dir/"
+        update-desktop-database "$app_dir" 2>/dev/null || true
+
+        # Tkinter needs the system Tcl/Tk library — install if missing
+        if ! python3 -c 'import _tkinter' &>/dev/null 2>&1; then
+            info "Installing Tcl/Tk for the control panel..."
+            if command -v pacman &>/dev/null; then
+                sudo pacman -S --noconfirm tk 2>/dev/null || true
+            elif command -v apt-get &>/dev/null; then
+                sudo apt-get install -y python3-tk 2>/dev/null || true
+            elif command -v dnf &>/dev/null; then
+                sudo dnf install -y python3-tkinter 2>/dev/null || true
+            fi
+        fi
+
         ok "Desktop control panel installed."
     else
         warn "echo_bloom_panel.py not found in repo — skipping desktop panel."
