@@ -220,10 +220,7 @@ async def check_setup():
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, error: str = ""):
-    return templates.TemplateResponse("login.html", {
-        "request": request,
-        "error":   error,
-    })
+    return templates.TemplateResponse(request, "login.html", {"error": error})
 
 
 @app.post("/login")
@@ -235,18 +232,20 @@ async def login(
     ip = get_client_ip(request)
 
     if auth.is_rate_limited(ip):
-        return templates.TemplateResponse("login.html", {
-            "request": request,
-            "error":   "Too many attempts. Wait 5 minutes.",
-        }, status_code=429)
+        return templates.TemplateResponse(
+            request, "login.html",
+            {"error": "Too many attempts. Wait 5 minutes."},
+            status_code=429,
+        )
 
     auth.record_attempt(ip)
 
     if not auth.verify_password(password):
-        return templates.TemplateResponse("login.html", {
-            "request": request,
-            "error":   "Wrong password.",
-        }, status_code=401)
+        return templates.TemplateResponse(
+            request, "login.html",
+            {"error": "Wrong password."},
+            status_code=401,
+        )
 
     token = auth.create_session()
     dest  = "/welcome" if auth.is_first_run() else "/"
@@ -275,7 +274,7 @@ async def logout(request: Request):
 
 @app.get("/welcome", response_class=HTMLResponse)
 async def welcome_page(request: Request, _=Depends(require_auth)):
-    return templates.TemplateResponse("welcome.html", {"request": request})
+    return templates.TemplateResponse(request, "welcome.html")
 
 
 @app.post("/api/setup-complete")
@@ -287,10 +286,9 @@ async def api_setup_complete(_=Depends(require_auth)):
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, _=Depends(require_auth)):
     status = await cl.get_cluster_status()
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
-        "nodes":   status["nodes"],
-        "kin":     status["kin"],
+    return templates.TemplateResponse(request, "dashboard.html", {
+        "nodes": status["nodes"],
+        "kin":   status["kin"],
     })
 
 
@@ -299,8 +297,7 @@ async def kin_page(name: str, request: Request, _=Depends(require_auth)):
     kin = cl.KIN_BY_NAME.get(name)
     if not kin:
         raise HTTPException(status_code=404, detail="Kin not found")
-    return templates.TemplateResponse("kin.html", {
-        "request":   request,
+    return templates.TemplateResponse(request, "kin.html", {
         "kin":       kin,
         "all_kin":   cl.KIN,
         "hw":        get_hw_caps(),
@@ -574,7 +571,7 @@ async def api_roundtable_stop(_=Depends(require_auth)):
 
 @app.get("/about", response_class=HTMLResponse)
 async def about_page(request: Request, _=Depends(require_auth)):
-    return templates.TemplateResponse("about.html", {"request": request})
+    return templates.TemplateResponse(request, "about.html")
 
 
 # ── License routes ─────────────────────────────────────────────────────────────
@@ -583,7 +580,6 @@ async def about_page(request: Request, _=Depends(require_auth)):
 async def license_page(request: Request, _=Depends(require_auth_only)):
     status = lic.get_status()
     ctx = {
-        "request":      request,
         "state":        status["state"],
         "days_left":    status.get("days_left"),
         "email":        status.get("email", ""),
@@ -591,7 +587,7 @@ async def license_page(request: Request, _=Depends(require_auth_only)):
         "buy_url":      LICENSE_BUY_URL,
         "price":        LICENSE_PRICE,
     }
-    return templates.TemplateResponse("license.html", ctx)
+    return templates.TemplateResponse(request, "license.html", ctx)
 
 
 @app.post("/api/license/activate")
@@ -676,7 +672,7 @@ def _vault_url() -> str:
 
 @app.get("/vault", response_class=HTMLResponse)
 async def vault_page(request: Request, _=Depends(require_auth)):
-    return templates.TemplateResponse("vault.html", {"request": request, "all_kin": cl.KIN})
+    return templates.TemplateResponse(request, "vault.html", {"all_kin": cl.KIN})
 
 
 @app.get("/api/vault")
@@ -806,8 +802,7 @@ async def api_vault_status(_=Depends(require_auth)):
 @app.get("/onboard", response_class=HTMLResponse)
 async def onboard_page(request: Request, step: int = 1, _=Depends(require_auth)):
     config = cl.load_kin_config_raw()
-    return templates.TemplateResponse("onboard.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "onboard.html", {
         "step":    step,
         "config":  config,
         "all_kin": cl.KIN,
