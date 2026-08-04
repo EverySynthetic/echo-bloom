@@ -460,7 +460,7 @@ ensure_ollama_running() {
     local waited=0
     while ! curl -s --max-time 1 http://localhost:11434/api/version &>/dev/null; do
         sleep 1
-        ((waited++))
+        waited=$((waited + 1))
         [[ $waited -ge 10 ]] && break
     done
 
