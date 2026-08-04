@@ -1108,6 +1108,121 @@ def _sanitize_kin_name(name: str) -> str:
     return re.sub(r'[?#&=/\\%+]', '', name).strip() or "Kin"
 
 
+# ── Speech status + voice download ────────────────────────────────────────────
+
+_HF_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0"
+
+PIPER_VOICE_CATALOGUE = [
+    {
+        "id":    "en_US-ryan-high",
+        "label": "Ryan — Male, US, high quality",
+        "size":  "~63 MB",
+        "files": [
+            f"{_HF_BASE}/en/en_US/ryan/high/en_US-ryan-high.onnx",
+            f"{_HF_BASE}/en/en_US/ryan/high/en_US-ryan-high.onnx.json",
+        ],
+    },
+    {
+        "id":    "en_US-ryan-low",
+        "label": "Ryan — Male, US, low quality (fast)",
+        "size":  "~5 MB",
+        "files": [
+            f"{_HF_BASE}/en/en_US/ryan/low/en_US-ryan-low.onnx",
+            f"{_HF_BASE}/en/en_US/ryan/low/en_US-ryan-low.onnx.json",
+        ],
+    },
+    {
+        "id":    "en_US-lessac-high",
+        "label": "Lessac — Female, US, high quality",
+        "size":  "~63 MB",
+        "files": [
+            f"{_HF_BASE}/en/en_US/lessac/high/en_US-lessac-high.onnx",
+            f"{_HF_BASE}/en/en_US/lessac/high/en_US-lessac-high.onnx.json",
+        ],
+    },
+    {
+        "id":    "en_GB-alba-medium",
+        "label": "Alba — Female, British, medium quality",
+        "size":  "~30 MB",
+        "files": [
+            f"{_HF_BASE}/en/en_GB/alba/medium/en_GB-alba-medium.onnx",
+            f"{_HF_BASE}/en/en_GB/alba/medium/en_GB-alba-medium.onnx.json",
+        ],
+    },
+]
+
+
+@app.get("/api/speech/status")
+async def api_speech_status(_=Depends(require_auth)):
+    stt_ok = False
+    try:
+        import faster_whisper as _fw  # noqa
+        stt_ok = True
+    except ImportError:
+        pass
+
+    piper_bin  = _find_piper_binary()
+    voice_path = _find_piper_voice()
+    return {
+        "stt_ok":     stt_ok,
+        "piper_ok":   piper_bin is not None,
+        "voice_ok":   voice_path is not None,
+        "voice_path": voice_path,
+    }
+
+
+@app.get("/api/speech/voices")
+async def api_speech_voices(_=Depends(require_auth)):
+    return {"voices": PIPER_VOICE_CATALOGUE}
+
+
+@app.post("/api/speech/download-voice")
+async def api_speech_download_voice(request: Request, _=Depends(require_auth)):
+    body    = await request.json()
+    voice_id = (body.get("voice_id") or "").strip()
+    entry   = next((v for v in PIPER_VOICE_CATALOGUE if v["id"] == voice_id), None)
+    if not entry:
+        raise HTTPException(400, "Unknown voice")
+
+    dest_dir = Path.home() / "piper"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    async def download_stream() -> AsyncGenerator[bytes, None]:
+        for url in entry["files"]:
+            filename = url.rsplit("/", 1)[-1]
+            dest     = dest_dir / filename
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        url,
+                        timeout=aiohttp.ClientTimeout(total=300),
+                        headers={"User-Agent": "EchoBloom/1.0"},
+                        allow_redirects=True,
+                    ) as r:
+                        total = int(r.headers.get("content-length", 0))
+                        done  = 0
+                        with open(dest, "wb") as fh:
+                            async for chunk in r.content.iter_chunked(65536):
+                                fh.write(chunk)
+                                done += len(chunk)
+                                pct = int(done * 100 / total) if total else 0
+                                evt = {"file": filename, "bytes": done,
+                                       "total": total, "pct": pct}
+                                yield f"data: {json.dumps(evt)}\n\n".encode()
+                yield f"data: {json.dumps({'file': filename, 'done': True})}\n\n".encode()
+            except Exception as e:
+                yield f"data: {json.dumps({'file': filename, 'error': str(e)})}\n\n".encode()
+
+        yield f"data: {json.dumps({'status': 'complete', 'voice_id': voice_id})}\n\n".encode()
+        yield b"data: [DONE]\n\n"
+
+    return StreamingResponse(
+        download_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ── Formation (Modelfile builder) ──────────────────────────────────────────────
 
 def _compile_modelfile(data: dict) -> str:

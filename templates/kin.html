@@ -42,6 +42,21 @@
         <button class="fetch-cancel-btn" onclick="hideFetchBar()">✕</button>
       </div>
 
+      <!-- Voice picker panel (shown when no voice model is installed) -->
+      <div id="voice-picker" class="voice-picker" style="display:none">
+        <div class="voice-picker-header">
+          <span>No voice installed — pick one to download</span>
+          <button class="voice-picker-close" onclick="closeVoicePicker()">✕</button>
+        </div>
+        <div id="voice-picker-list" class="voice-picker-list">
+          <div class="voice-picker-loading">Loading voices…</div>
+        </div>
+        <div id="voice-dl-progress" class="voice-dl-progress" style="display:none">
+          <div class="voice-dl-label" id="voice-dl-label">Downloading…</div>
+          <div class="voice-dl-bar-wrap"><div class="voice-dl-bar" id="voice-dl-bar"></div></div>
+        </div>
+      </div>
+
       <form class="chat-form" id="chat-form" onsubmit="sendMessage(event)">
         <!-- Tool buttons -->
         <div class="chat-toolbar">
@@ -64,7 +79,7 @@
             ◎
           </button>
           <button type="button" class="tool-btn tool-tts" id="tts-btn"
-                  onclick="toggleTTS()" title="Toggle voice response">
+                  onclick="handleTTSClick()" title="Toggle voice response">
             ♪
           </button>
           {% else %}
@@ -329,9 +344,128 @@ async function initRecording() {
   };
 }
 
+// ── Voice picker ──────────────────────────────────────────────────────────────
+
+let _speechStatus = null;
+let _pendingSpeechAction = null;
+
+async function checkSpeech() {
+  if (_speechStatus) return _speechStatus;
+  try {
+    const r = await fetch('/api/speech/status');
+    _speechStatus = await r.json();
+  } catch(e) {
+    _speechStatus = {stt_ok: false, piper_ok: false, voice_ok: false};
+  }
+  return _speechStatus;
+}
+
+async function ensureSpeech(action) {
+  const s = await checkSpeech();
+  if (s.voice_ok) { action && action(); return true; }
+  _pendingSpeechAction = action;
+  await openVoicePicker();
+  return false;
+}
+
+async function openVoicePicker() {
+  const panel = document.getElementById('voice-picker');
+  const list  = document.getElementById('voice-picker-list');
+  panel.style.display = 'block';
+  list.innerHTML = '<div class="voice-picker-loading">Loading…</div>';
+  try {
+    const r = await fetch('/api/speech/voices');
+    const d = await r.json();
+    list.innerHTML = '';
+    for (const v of d.voices) {
+      const btn = document.createElement('button');
+      btn.className = 'voice-option-btn';
+      btn.innerHTML = `<span class="voice-option-label">${v.label}</span><span class="voice-option-size">${v.size}</span>`;
+      btn.onclick = () => downloadVoice(v.id, v.label);
+      list.appendChild(btn);
+    }
+  } catch(e) {
+    list.innerHTML = '<div class="voice-picker-loading">Failed to load voice list.</div>';
+  }
+}
+
+function closeVoicePicker() {
+  document.getElementById('voice-picker').style.display = 'none';
+  document.getElementById('voice-dl-progress').style.display = 'none';
+  _pendingSpeechAction = null;
+}
+
+async function downloadVoice(voiceId, label) {
+  const list    = document.getElementById('voice-picker-list');
+  const prog    = document.getElementById('voice-dl-progress');
+  const dlLabel = document.getElementById('voice-dl-label');
+  const dlBar   = document.getElementById('voice-dl-bar');
+
+  list.style.display = 'none';
+  prog.style.display = 'block';
+  dlLabel.textContent = `Downloading ${label}…`;
+  dlBar.style.width = '0%';
+
+  try {
+    const resp = await fetch('/api/speech/download-voice', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({voice_id: voiceId}),
+    });
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (payload === '[DONE]') break;
+        try {
+          const evt = JSON.parse(payload);
+          if (evt.error) {
+            dlLabel.textContent = `Error: ${evt.error}`;
+          } else if (evt.status === 'complete') {
+            dlLabel.textContent = 'Done! Voice ready.';
+            dlBar.style.width = '100%';
+          } else if (evt.file && !evt.done) {
+            dlLabel.textContent = `${evt.file}  ${evt.pct || 0}%`;
+            dlBar.style.width = `${evt.pct || 0}%`;
+          } else if (evt.done) {
+            dlLabel.textContent = `${evt.file} — saved`;
+          }
+        } catch(e) {}
+      }
+    }
+
+    // Refresh status and fire the pending action
+    _speechStatus = null;
+    const s = await checkSpeech();
+    if (s.voice_ok) {
+      closeVoicePicker();
+      if (_pendingSpeechAction) {
+        const a = _pendingSpeechAction;
+        _pendingSpeechAction = null;
+        a();
+      }
+    }
+  } catch(e) {
+    dlLabel.textContent = `Download failed: ${e.message}`;
+  }
+}
+
+// ── Mic button (with voice check) ────────────────────────────────────────────
+
 const micBtn = document.getElementById('mic-btn');
 if (micBtn) {
-  micBtn.addEventListener('mousedown', async () => {
+  micBtn.addEventListener('mousedown', async (e) => {
+    const ok = await ensureSpeech(null);
+    if (!ok) return;
     if (!mediaRecorder) await initRecording();
     audioChunks = [];
     mediaRecorder.start();
@@ -354,6 +488,11 @@ function toggleTTS() {
   const btn = document.getElementById('tts-btn');
   btn.classList.toggle('tool-active', ttsEnabled);
   btn.title = ttsEnabled ? 'Voice ON — click to mute' : 'Toggle voice response';
+}
+
+async function handleTTSClick() {
+  if (ttsEnabled) { toggleTTS(); return; }
+  await ensureSpeech(() => toggleTTS());
 }
 
 async function speakText(text) {
