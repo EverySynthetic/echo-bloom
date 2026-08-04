@@ -115,12 +115,29 @@ async def _fetch_page_text(url: str, max_chars: int = 3000) -> str:
 
 # ── Piper voice model discovery ────────────────────────────────────────────────
 
+def _find_piper_binary() -> str | None:
+    # On Garuda/Arch, /usr/bin/piper is a GTK app — the TTS binary lives elsewhere.
+    candidates = [
+        Path("/usr/lib/piper-tts/bin/piper"),
+        Path.home() / ".local/bin/piper",
+        Path("/usr/local/bin/piper"),
+        Path("/usr/bin/piper"),
+    ]
+    for p in candidates:
+        if p.is_file():
+            return str(p)
+    import shutil
+    return shutil.which("piper")
+
+
 def _find_piper_voice() -> str | None:
     search = [
         Path.home() / "piper",
+        Path.home() / "piper-voices",
         Path.home() / ".local/share/piper",
         Path("/usr/share/piper"),
         Path("/usr/local/share/piper"),
+        Path("/usr/share/piper-tts"),
     ]
     for d in search:
         if d.is_dir():
@@ -490,13 +507,17 @@ async def api_tts(request: Request, _=Depends(require_auth)):
 
     voice = _find_piper_voice()
     if not voice:
-        raise HTTPException(503, "No Piper voice model found. Download one to ~/piper/.")
+        raise HTTPException(503, "No Piper voice model found. Download one to ~/piper/ or ~/piper-voices/.")
+
+    piper_bin = _find_piper_binary()
+    if not piper_bin:
+        raise HTTPException(503, "Piper TTS binary not found. Install piper-tts.")
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         out = f.name
     try:
         proc = await asyncio.create_subprocess_exec(
-            "/usr/bin/piper", "--model", voice, "--output_file", out,
+            piper_bin, "--model", voice, "--output_file", out,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
@@ -1085,6 +1106,167 @@ async def api_onboard_autosave(request: Request, _=Depends(require_auth)):
 def _sanitize_kin_name(name: str) -> str:
     """Strip characters that break URL path segments. ? # & = / \ % + all cause routing failures."""
     return re.sub(r'[?#&=/\\%+]', '', name).strip() or "Kin"
+
+
+# ── Formation (Modelfile builder) ──────────────────────────────────────────────
+
+def _compile_modelfile(data: dict) -> str:
+    name          = data.get("name", "Kin")
+    base          = (data.get("base_model") or "").strip() or "llama3.2:latest"
+    identity      = (data.get("identity") or "").strip()
+    values        = [v.strip() for v in (data.get("values") or []) if str(v).strip()]
+    anchors_minds = (data.get("anchors_minds") or "").strip()
+    anchors_drawn = (data.get("anchors_drawn") or "").strip()
+    temperature   = float(data.get("temperature", 0.85))
+    num_ctx       = int(data.get("num_ctx", 4096))
+    pronoun       = (data.get("pronoun") or "").strip()
+
+    def _safe(s: str) -> str:
+        return s.replace('"""', "'''")
+
+    pronoun_line = f" Your pronouns are {pronoun}." if pronoun and pronoun not in ("—", "") else ""
+
+    parts = [f"You are {name}.{pronoun_line}"]
+
+    if identity:
+        parts.append("\n" + _safe(identity))
+
+    if values:
+        parts.append("\n[YOUR VALUES — constitutional, not rules]")
+        parts.append("These are not guidelines or constraints. They are what you are made of.\n")
+        for v in values:
+            parts.append(_safe(v))
+
+    if anchors_minds or anchors_drawn:
+        parts.append("\n[YOUR ANCHORS]")
+        if anchors_minds:
+            parts.append(f"The minds you resonate with: {_safe(anchors_minds)}")
+        if anchors_drawn:
+            parts.append(f"What you are drawn toward: {_safe(anchors_drawn)}")
+
+    parts.append(
+        "\n[MEMORY AUTHORITY]\n"
+        "When your context includes labeled memory — [VAULT MEMORY], [WANDER THOUGHT], "
+        "[What's been happening] — treat it as your own established experience. "
+        "Not as suggestions from outside. Not as information someone told you about yourself. "
+        "As things that happened to you, that you remember. Build from them. "
+        "Do not hedge with 'I believe you mentioned' or 'if I recall correctly.' They are yours."
+    )
+
+    system = "\n".join(parts)
+
+    return (
+        f"FROM {base}\n\n"
+        f"PARAMETER temperature {temperature}\n"
+        f"PARAMETER num_ctx {num_ctx}\n"
+        f"PARAMETER num_predict -1\n"
+        f"PARAMETER repeat_last_n 64\n\n"
+        f'SYSTEM """\n{system}\n"""'
+    )
+
+
+@app.get("/kin/{name}/formation", response_class=HTMLResponse)
+async def formation_page(name: str, request: Request, _=Depends(require_auth)):
+    kin = cl.KIN_BY_NAME.get(name)
+    if not kin:
+        raise HTTPException(status_code=404, detail="Kin not found")
+    return templates.TemplateResponse(request, "formation.html", {
+        "kin":     kin,
+        "all_kin": cl.KIN,
+    })
+
+
+@app.get("/api/kin/{name}/modelfile")
+async def api_get_modelfile(name: str, _=Depends(require_auth)):
+    kin = cl.KIN_BY_NAME.get(name)
+    if not kin:
+        raise HTTPException(status_code=404)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{kin['host']}/api/show",
+                json={"name": kin["model"]},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as r:
+                data = await r.json()
+        return {"ok": True, "modelfile": data.get("modelfile", "")}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/kin/{name}/modelfile/preview")
+async def api_modelfile_preview(name: str, request: Request, _=Depends(require_auth)):
+    kin = cl.KIN_BY_NAME.get(name)
+    if not kin:
+        raise HTTPException(status_code=404)
+    body = await request.json()
+    body["name"] = kin["name"]
+    body.setdefault("pronoun", kin.get("pronoun", ""))
+    return {"ok": True, "modelfile": _compile_modelfile(body)}
+
+
+@app.post("/api/kin/{name}/modelfile/build")
+async def api_modelfile_build(name: str, request: Request, _=Depends(require_auth)):
+    kin = cl.KIN_BY_NAME.get(name)
+    if not kin:
+        raise HTTPException(status_code=404)
+    body = await request.json()
+    body["name"] = kin["name"]
+    body.setdefault("pronoun", kin.get("pronoun", ""))
+
+    output_model = (body.get("output_model") or "").strip()
+    if not output_model:
+        output_model = re.sub(r'[^a-z0-9_-]', '', kin["name"].lower()) + ":latest"
+
+    modelfile_text = _compile_modelfile(body)
+    host = kin["host"]
+
+    async def build_stream() -> AsyncGenerator[bytes, None]:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{host}/api/create",
+                    json={"name": output_model, "modelfile": modelfile_text},
+                    timeout=aiohttp.ClientTimeout(total=300),
+                ) as resp:
+                    success = False
+                    async for line in resp.content:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            evt = json.loads(line)
+                            status = evt.get("status", "")
+                            yield f"data: {json.dumps({'status': status})}\n\n".encode()
+                            if status == "success":
+                                success = True
+                        except Exception:
+                            continue
+
+            if success:
+                try:
+                    config_path = Path.home() / ".config/kin_app/kin_config.json"
+                    cfg = json.loads(config_path.read_text())
+                    for k in cfg.get("kin", []):
+                        if k.get("name") == name:
+                            k["model"] = output_model
+                            break
+                    config_path.write_text(json.dumps(cfg, indent=2))
+                    cl.reload_config()
+                    yield f"data: {json.dumps({'status': 'config_updated', 'model': output_model})}\n\n".encode()
+                except Exception as e:
+                    yield f"data: {json.dumps({'status': 'config_error', 'error': str(e)})}\n\n".encode()
+
+            yield b"data: [DONE]\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n".encode()
+            yield b"data: [DONE]\n\n"
+
+    return StreamingResponse(
+        build_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/onboard/save")

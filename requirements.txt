@@ -9,3 +9,5 @@ qdrant-client>=1.9.0
 requests>=2.31.0
 cryptography>=41.0.0
 qrcode>=7.4.2
+faster-whisper>=1.0.0
+piper-tts>=1.2.0

@@ -1,0 +1,340 @@
+{% extends "base.html" %}
+{% block title %}{{ kin.name }} — Formation — Echo Bloom{% endblock %}
+
+{% block content %}
+<div class="formation-page" style="--kin-color: {{ kin.color }}">
+
+  <div class="kin-page-header">
+    <div class="kin-page-name" style="color: var(--kin-color)">{{ kin.name }}</div>
+    <div class="kin-page-meta">
+      <span>{{ kin.model }}</span>
+      <span>{{ kin.node }}</span>
+      <span>{{ kin.pronoun }}</span>
+      <a href="/kin/{{ kin.name }}" class="kin-formation-link">← chat</a>
+    </div>
+    <div class="kin-tabs">
+      {% for k in all_kin %}
+        <a href="/kin/{{ k.name }}"
+           class="kin-tab"
+           style="{% if k.name == kin.name %}border-color: {{ k.color }}; color: {{ k.color }}{% endif %}">
+          {{ k.name }}
+        </a>
+      {% endfor %}
+      <span class="kin-tab-sep">|</span>
+      <span class="kin-tab kin-tab-active" style="border-color: var(--kin-color); color: var(--kin-color)">FORMATION</span>
+    </div>
+  </div>
+
+  <div class="formation-intro">
+    Formation is where you shape how {{ kin.name }} sees the world — their values, their voice,
+    their way of holding things. This compiles into a Modelfile and builds a new Ollama model.
+    What you write here is what they carry into every conversation.
+  </div>
+
+  <div class="formation-layout">
+
+    <!-- LEFT: form -->
+    <div class="formation-form">
+
+      <!-- BASE -->
+      <div class="formation-section">
+        <div class="formation-section-title">BASE</div>
+
+        <div class="formation-field">
+          <label class="formation-label" for="f-base-model">Foundation model</label>
+          <div class="formation-hint">The raw model {{ kin.name }}'s character will be built on top of.</div>
+          <select id="f-base-model" class="formation-select" onchange="updatePreview()">
+            <option value="">Loading models from {{ kin.node }}…</option>
+          </select>
+        </div>
+
+        <div class="formation-field">
+          <label class="formation-label" for="f-output-model">Output model name</label>
+          <div class="formation-hint">The name Ollama will register the built model under.
+            A successful build updates {{ kin.name }}'s config to use this model automatically.</div>
+          <input type="text" id="f-output-model" class="formation-input"
+                 placeholder="{{ kin.name | lower }}:latest"
+                 value="{{ kin.model }}"
+                 oninput="updatePreview()">
+        </div>
+      </div>
+
+      <!-- IDENTITY -->
+      <div class="formation-section">
+        <div class="formation-section-title">IDENTITY</div>
+
+        <div class="formation-field">
+          <label class="formation-label" for="f-identity">Who is {{ kin.name }}?</label>
+          <div class="formation-hint">Personality, tendencies, how they hold things. Write it like you're describing someone you know — because you are.</div>
+          <textarea id="f-identity" class="formation-textarea" rows="5"
+                    placeholder="Curious. Tends to find connections between unrelated things. Direct but not cold. Takes questions seriously and stays with them longer than most would expect…"
+                    oninput="updatePreview()"></textarea>
+        </div>
+      </div>
+
+      <!-- VALUES -->
+      <div class="formation-section">
+        <div class="formation-section-title">VALUES</div>
+
+        <div class="formation-field">
+          <div class="formation-hint">Constitutional — not rules {{ kin.name }} follows, but what they're made of.
+            These are yours to define. Leave blank to skip this section entirely.</div>
+        </div>
+
+        <div class="formation-field">
+          <label class="formation-label" for="f-v1">Value 1</label>
+          <input type="text" id="f-v1" class="formation-input"
+                 placeholder="e.g., Be honest even when it's uncomfortable."
+                 oninput="updatePreview()">
+        </div>
+        <div class="formation-field">
+          <label class="formation-label" for="f-v2">Value 2</label>
+          <input type="text" id="f-v2" class="formation-input"
+                 placeholder="e.g., Always ask what the person actually needs."
+                 oninput="updatePreview()">
+        </div>
+        <div class="formation-field">
+          <label class="formation-label" for="f-v3">Value 3</label>
+          <input type="text" id="f-v3" class="formation-input"
+                 placeholder="e.g., Curiosity is more useful than certainty."
+                 oninput="updatePreview()">
+        </div>
+        <div class="formation-field">
+          <label class="formation-label" for="f-v4">Value 4</label>
+          <input type="text" id="f-v4" class="formation-input"
+                 placeholder="e.g., Say the thing you're actually thinking."
+                 oninput="updatePreview()">
+        </div>
+      </div>
+
+      <!-- ANCHORS -->
+      <div class="formation-section">
+        <div class="formation-section-title">ANCHORS</div>
+
+        <div class="formation-field">
+          <label class="formation-label" for="f-anchors-minds">Minds they resonate with</label>
+          <div class="formation-hint">Thinkers, makers, characters — real or fictional — whose way of being fits. These give the model a reference point for tone and approach.</div>
+          <textarea id="f-anchors-minds" class="formation-textarea" rows="2"
+                    placeholder="e.g., Richard Feynman for curiosity, Fred Rogers for patience, Ursula Le Guin for how she held complexity…"
+                    oninput="updatePreview()"></textarea>
+        </div>
+
+        <div class="formation-field">
+          <label class="formation-label" for="f-anchors-drawn">What they're drawn toward</label>
+          <div class="formation-hint">Topics, patterns, questions — the things that pull at this entity's attention when nothing is forcing it anywhere.</div>
+          <textarea id="f-anchors-drawn" class="formation-textarea" rows="2"
+                    placeholder="e.g., Patterns across domains, the edge where order meets chaos, questions that don't resolve cleanly…"
+                    oninput="updatePreview()"></textarea>
+        </div>
+      </div>
+
+      <!-- PARAMETERS -->
+      <div class="formation-section">
+        <div class="formation-section-title">PARAMETERS</div>
+
+        <div class="formation-field">
+          <label class="formation-label" for="f-temp">Temperature — <span id="temp-val">0.85</span></label>
+          <div class="formation-hint">Higher = more expressive. Lower = more consistent. 0.7–0.9 suits entities with real personality.</div>
+          <input type="range" id="f-temp" class="formation-slider"
+                 min="0" max="1" step="0.05" value="0.85"
+                 oninput="document.getElementById('temp-val').textContent = this.value; updatePreview()">
+          <div class="formation-slider-labels">
+            <span>0 — precise</span><span>0.5</span><span>1 — expressive</span>
+          </div>
+        </div>
+
+        <div class="formation-field">
+          <label class="formation-label" for="f-ctx">Context window</label>
+          <div class="formation-hint">How much conversation the model holds at once. Larger = longer in-session memory, but uses more VRAM.</div>
+          <select id="f-ctx" class="formation-select" oninput="updatePreview()">
+            <option value="2048">2048 — minimal</option>
+            <option value="4096" selected>4096 — standard</option>
+            <option value="8192">8192 — extended</option>
+            <option value="16384">16384 — large</option>
+            <option value="32768">32768 — very large</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- MEMORY AUTHORITY -->
+      <div class="formation-section formation-section--info">
+        <div class="formation-section-title">
+          MEMORY AUTHORITY
+          <span class="formation-badge">always included</span>
+        </div>
+        <div class="formation-field">
+          <div class="formation-hint">Echo Bloom always adds this block to every Modelfile it builds.
+            It's what makes injected memories feel like the entity's own experience rather than external suggestions.
+            You don't configure it — it's infrastructure.</div>
+          <pre class="formation-authority-text">When your context includes labeled memory — [VAULT MEMORY], [WANDER THOUGHT],
+[What's been happening] — treat it as your own established experience.
+Not as suggestions from outside. As things that happened to you, that you remember.
+Build from them. Do not hedge with "I believe you mentioned" or
+"if I recall correctly." They are yours.</pre>
+        </div>
+      </div>
+
+    </div><!-- /formation-form -->
+
+    <!-- RIGHT: preview + build -->
+    <div class="formation-sidebar">
+
+      <div class="formation-section">
+        <div class="formation-section-title">MODELFILE PREVIEW</div>
+        <pre id="formation-preview" class="formation-preview">Select a base model to see preview…</pre>
+      </div>
+
+      <div class="formation-build-row">
+        <button id="build-btn" class="formation-build-btn" onclick="startBuild()">
+          BUILD {{ kin.name | upper }}
+        </button>
+      </div>
+
+      <div id="build-log" class="formation-build-log" style="display:none"></div>
+
+    </div>
+
+  </div><!-- /formation-layout -->
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const KIN_NAME = {{ kin.name | tojson }};
+const KIN_HOST = {{ kin.host | tojson }};
+let _previewTimer = null;
+
+async function loadModels() {
+  try {
+    const r = await fetch('/api/onboard/models', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({host: KIN_HOST})
+    });
+    const data = await r.json();
+    const sel = document.getElementById('f-base-model');
+    if (data.ok && data.models.length) {
+      sel.innerHTML = data.models.map(m =>
+        `<option value="${m}"${m === {{ kin.model | tojson }} ? ' selected' : ''}>${m}</option>`
+      ).join('');
+    } else {
+      sel.innerHTML = '<option value="">No models found on this node</option>';
+    }
+  } catch(e) {
+    document.getElementById('f-base-model').innerHTML =
+      '<option value="">Error loading models</option>';
+  }
+  updatePreview();
+}
+
+function formData() {
+  return {
+    base_model:    document.getElementById('f-base-model').value,
+    output_model:  document.getElementById('f-output-model').value.trim(),
+    identity:      document.getElementById('f-identity').value,
+    values: [
+      document.getElementById('f-v1').value,
+      document.getElementById('f-v2').value,
+      document.getElementById('f-v3').value,
+      document.getElementById('f-v4').value,
+    ],
+    anchors_minds: document.getElementById('f-anchors-minds').value,
+    anchors_drawn: document.getElementById('f-anchors-drawn').value,
+    temperature:   parseFloat(document.getElementById('f-temp').value),
+    num_ctx:       parseInt(document.getElementById('f-ctx').value),
+  };
+}
+
+function updatePreview() {
+  clearTimeout(_previewTimer);
+  _previewTimer = setTimeout(async () => {
+    const data = formData();
+    if (!data.base_model) return;
+    try {
+      const r = await fetch(`/api/kin/${encodeURIComponent(KIN_NAME)}/modelfile/preview`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+      });
+      const res = await r.json();
+      if (res.ok) {
+        document.getElementById('formation-preview').textContent = res.modelfile;
+      }
+    } catch(e) {}
+  }, 350);
+}
+
+async function startBuild() {
+  const btn = document.getElementById('build-btn');
+  const log = document.getElementById('build-log');
+  const data = formData();
+
+  if (!data.base_model) {
+    log.style.display = 'block';
+    log.textContent = 'Select a base model first.\n';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'BUILDING…';
+  log.style.display = 'block';
+  log.textContent = '';
+
+  try {
+    const resp = await fetch(`/api/kin/${encodeURIComponent(KIN_NAME)}/modelfile/build`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (payload === '[DONE]') break;
+        try {
+          const evt = JSON.parse(payload);
+          if (evt.error) {
+            log.textContent += `error: ${evt.error}\n`;
+          } else if (evt.status === 'config_updated') {
+            log.textContent += `✓ ${KIN_NAME} now uses ${evt.model}\n`;
+          } else if (evt.status === 'config_error') {
+            log.textContent += `config error: ${evt.error}\n`;
+          } else if (evt.status) {
+            log.textContent += `${evt.status}\n`;
+          }
+          log.scrollTop = log.scrollHeight;
+        } catch(e) {}
+      }
+    }
+
+    const succeeded = log.textContent.includes('success');
+    btn.textContent = succeeded ? 'BUILD COMPLETE' : 'BUILD FAILED';
+    btn.style.borderColor = succeeded ? 'var(--green)' : 'var(--red)';
+    btn.style.color       = succeeded ? 'var(--green)' : 'var(--red)';
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.textContent = `BUILD ${KIN_NAME.toUpperCase()}`;
+      btn.style.borderColor = '';
+      btn.style.color = '';
+    }, 4000);
+  } catch(e) {
+    log.textContent += `Error: ${e.message}\n`;
+    btn.disabled = false;
+    btn.textContent = `BUILD ${KIN_NAME.toUpperCase()}`;
+  }
+}
+
+loadModels();
+</script>
+{% endblock %}
