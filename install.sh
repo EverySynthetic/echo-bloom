@@ -25,6 +25,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 AMBER='\033[0;33m'
 CYAN='\033[0;36m'
+DIM='\033[2m'
 BOLD='\033[1m'
 NC='\033[0m'
 
@@ -450,23 +451,24 @@ ensure_ollama_running() {
 
     info "Starting Ollama..."
 
-    # ollama.com install script creates a SYSTEM service — try that first
-    if command -v systemctl &>/dev/null; then
-        sudo systemctl start ollama 2>/dev/null || \
-            systemctl --user start ollama 2>/dev/null || true
-    fi
+    # Launch directly as a user process — no sudo, always works
+    ollama serve &>/dev/null &
+    disown 2>/dev/null || true
 
-    # Give the service up to 10s to come up
+    # Give it up to 15s to respond
     local waited=0
     while ! curl -s --max-time 1 http://localhost:11434/api/version &>/dev/null; do
         sleep 1
         waited=$((waited + 1))
-        [[ $waited -ge 10 ]] && break
+        [[ $waited -ge 15 ]] && break
     done
 
-    # Still not up — launch it ourselves as a background process
+    # If direct launch didn't work, try the system service (requires sudo — last resort)
     if ! curl -s --max-time 1 http://localhost:11434/api/version &>/dev/null; then
-        nohup ollama serve &>/dev/null &
+        if command -v systemctl &>/dev/null; then
+            systemctl --user start ollama 2>/dev/null || true
+            sudo systemctl start ollama 2>/dev/null || true
+        fi
         sleep 3
     fi
 
