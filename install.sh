@@ -1200,3 +1200,9 @@ echo "  Click your AI's name to start talking."
 echo
 echo -e "  ${DIM}The desktop icon (Echo Bloom) will start and stop the app any time.${NC}"
 echo
+
+# Try to open the browser automatically on desktop systems
+if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
+    xdg-open "http://localhost:${PORT}" 2>/dev/null &
+fi
+echo
