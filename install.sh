@@ -16,10 +16,9 @@ trap 'echo "INSTALL EXIT: line $LINENO, exit $?" >> "$INSTALL_LOG"' EXIT
 if [ ! -t 0 ]; then
     echo ""
     echo "  Echo Bloom installer requires an interactive terminal."
-    echo "  Piping from curl won't work. Run it like this instead:"
+    echo "  Use process substitution so stdin stays attached to your terminal:"
     echo ""
-    echo "    curl -sSL https://raw.githubusercontent.com/everysynthetic/echo-bloom/main/install.sh -o install.sh"
-    echo "    bash install.sh"
+    echo "    bash <(curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh)"
     echo ""
     exit 1
 fi

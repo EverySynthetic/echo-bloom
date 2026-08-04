@@ -35,10 +35,11 @@ If you've ever named your model and hit the wall where it resets every conversat
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh | bash
+bash <(curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh)
 ```
 
 This always runs the latest version directly from GitHub. No local copy to go stale.
+The `bash <(curl ...)` form keeps your terminal attached so the installer can ask questions.
 
 Requires [Ollama](https://ollama.com). The installer will offer to set it up if it's missing.
 
