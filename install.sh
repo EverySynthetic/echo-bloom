@@ -51,7 +51,7 @@ EOF
 
 # ── Check for whiptail, fall back to plain numbered list ─────────────────────
 HAS_WHIPTAIL=false
-command -v whiptail &>/dev/null && HAS_WHIPTAIL=true
+command -v whiptail &>/dev/null && [[ -n "${TERM:-}" ]] && [[ -t 1 ]] && HAS_WHIPTAIL=true
 
 # ── Detect VRAM ───────────────────────────────────────────────────────────────
 detect_vram() {
