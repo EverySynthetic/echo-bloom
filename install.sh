@@ -91,7 +91,9 @@ detect_installed_models() {
         while IFS= read -r line; do
             local name
             name=$(echo "$line" | awk '{print $1}')
-            [[ -n "$name" && "$name" != "NAME" ]] && INSTALLED_MODELS+=("$name")
+            if [[ -n "$name" && "$name" != "NAME" ]]; then
+                INSTALLED_MODELS+=("$name")
+            fi
         done < <(ollama list 2>/dev/null)
     fi
 }
@@ -102,6 +104,13 @@ is_installed() {
         [[ "$m" == "$model" || "$m" == "${model}:latest" ]] && return 0
     done
     return 1
+}
+
+# ── Helper: add model only if not already listed as [installed] at top ────────
+_add_model() {
+    is_installed "$1" && return 0
+    MODEL_IDS+=("$1")
+    MODEL_LABELS+=("$2")
 }
 
 # ── Build model menu options (Gem's registry) ────────────────────────────────
@@ -122,62 +131,38 @@ build_model_menu() {
     fi
 
     # Tier 1 — always available (2+ GB VRAM or CPU-only)
-    MODEL_IDS+=("llama3.2:3b")
-    MODEL_LABELS+=("llama3.2:3b        [2.0 GB]  Meta — lightweight, fast conversational")
-
-    MODEL_IDS+=("qwen2.5-coder:1.5b")
-    MODEL_LABELS+=("qwen2.5-coder:1.5b [1.2 GB]  Coding specialist, fast autocomplete")
-
-    MODEL_IDS+=("phi4-mini")
-    MODEL_LABELS+=("phi4-mini          [2.3 GB]  Microsoft 3.8B — high reasoning density")
+    _add_model "llama3.2:3b"        "llama3.2:3b        [2.0 GB]  Meta — lightweight, fast conversational"
+    _add_model "qwen2.5-coder:1.5b" "qwen2.5-coder:1.5b [1.2 GB]  Coding specialist, fast autocomplete"
+    _add_model "phi4-mini"          "phi4-mini          [2.3 GB]  Microsoft 3.8B — high reasoning density"
 
     # Tier 2 — 6+ GB VRAM or 12+ GB RAM (CPU offload)
     if [[ $vram -ge 6 ]] || [[ $ram -ge 12 && $vram -eq 0 ]]; then
-        MODEL_IDS+=("llama3.1:8b")
-        MODEL_LABELS+=("llama3.1:8b        [5.0 GB]  Reliable open-weights standard")
-
-        MODEL_IDS+=("qwen2.5-coder:7b")
-        MODEL_LABELS+=("qwen2.5-coder:7b   [5.0 GB]  King of 8GB coding models")
-
-        MODEL_IDS+=("deepseek-r1:8b")
-        MODEL_LABELS+=("deepseek-r1:8b     [5.0 GB]  Step-by-step reasoning specialist")
-
-        MODEL_IDS+=("gemma2:9b")
-        MODEL_LABELS+=("gemma2:9b          [5.5 GB]  Strong prose, deep context")
+        _add_model "llama3.1:8b"      "llama3.1:8b        [5.0 GB]  Reliable open-weights standard"
+        _add_model "qwen2.5-coder:7b" "qwen2.5-coder:7b   [5.0 GB]  King of 8GB coding models"
+        _add_model "deepseek-r1:8b"   "deepseek-r1:8b     [5.0 GB]  Step-by-step reasoning specialist"
+        _add_model "gemma2:9b"        "gemma2:9b          [5.5 GB]  Strong prose, deep context"
     fi
 
     # Tier 3 — 12+ GB VRAM
     if [[ $vram -ge 12 ]]; then
-        MODEL_IDS+=("llama3.1:8b-q8_0")
-        MODEL_LABELS+=("llama3.1:8b-q8_0   [8.5 GB]  Max quality 8B — full precision")
-
-        MODEL_IDS+=("deepseek-r1:14b")
-        MODEL_LABELS+=("deepseek-r1:14b    [9.0 GB]  Heavy analytical reasoning")
-
-        MODEL_IDS+=("qwen2.5:14b")
-        MODEL_LABELS+=("qwen2.5:14b        [9.0 GB]  Strong multilingual + structured output")
+        _add_model "llama3.1:8b-q8_0" "llama3.1:8b-q8_0   [8.5 GB]  Max quality 8B — full precision"
+        _add_model "deepseek-r1:14b"  "deepseek-r1:14b    [9.0 GB]  Heavy analytical reasoning"
+        _add_model "qwen2.5:14b"      "qwen2.5:14b        [9.0 GB]  Strong multilingual + structured output"
     fi
 
     if [[ $vram -ge 16 ]]; then
-        MODEL_IDS+=("mistral-small:24b")
-        MODEL_LABELS+=("mistral-small:24b  [15.0 GB] Agentic logic, concise writing")
+        _add_model "mistral-small:24b" "mistral-small:24b  [15.0 GB] Agentic logic, concise writing"
     fi
 
     # Tier 4 — 20+ GB VRAM
     if [[ $vram -ge 20 ]]; then
-        MODEL_IDS+=("mixtral:8x7b")
-        MODEL_LABELS+=("mixtral:8x7b       [16.0 GB] Classic MoE, 47B effective params")
-
-        MODEL_IDS+=("deepseek-r1:32b")
-        MODEL_LABELS+=("deepseek-r1:32b    [20.0 GB] Top-tier open reasoning")
-
-        MODEL_IDS+=("qwen2.5-coder:32b")
-        MODEL_LABELS+=("qwen2.5-coder:32b  [20.0 GB] Frontier local coding")
+        _add_model "mixtral:8x7b"      "mixtral:8x7b       [16.0 GB] Classic MoE, 47B effective params"
+        _add_model "deepseek-r1:32b"   "deepseek-r1:32b    [20.0 GB] Top-tier open reasoning"
+        _add_model "qwen2.5-coder:32b" "qwen2.5-coder:32b  [20.0 GB] Frontier local coding"
     fi
 
     if [[ $vram -ge 48 ]]; then
-        MODEL_IDS+=("llama3.3:70b")
-        MODEL_LABELS+=("llama3.3:70b       [40.0 GB] Ultimate local dense — needs 48GB+ VRAM")
+        _add_model "llama3.3:70b" "llama3.3:70b       [40.0 GB] Ultimate local dense — needs 48GB+ VRAM"
     fi
 }
 
@@ -386,18 +371,40 @@ qdrant-client>=1.9.0
 REQEOF
     fi
 
-    # Try pip3, then python3 -m pip
+    # Resolve pip — pip3 by name, then python3 -m pip, then try to get it
+    local pip_cmd=""
     if command -v pip3 &>/dev/null; then
-        pip3 install -q -r "$req" --break-system-packages 2>/dev/null || \
-            pip3 install -q -r "$req" || \
-            die "pip3 install failed. Run: pip3 install -r $req"
-    elif python3 -m pip &>/dev/null 2>&1; then
-        python3 -m pip install -q -r "$req" --break-system-packages 2>/dev/null || \
-            python3 -m pip install -q -r "$req" || \
-            die "pip install failed. Run: python3 -m pip install -r $req"
+        pip_cmd="pip3"
+    elif python3 -m pip --version &>/dev/null 2>&1; then
+        pip_cmd="python3 -m pip"
     else
-        die "pip not found. Install Python pip and re-run."
+        warn "pip not found — trying to bootstrap it..."
+        if python3 -m ensurepip --upgrade &>/dev/null 2>&1; then
+            ok "pip bootstrapped via ensurepip."
+            pip_cmd="python3 -m pip"
+        elif command -v pacman &>/dev/null; then
+            read -rp "  pip is not installed. Install python-pip now? [Y/n] " _yn
+            [[ "${_yn:-Y}" =~ ^[Nn] ]] && die "pip required. Install with: sudo pacman -S python-pip"
+            sudo pacman -S --noconfirm python-pip || die "pacman install failed."
+            pip_cmd="pip3"
+        elif command -v apt-get &>/dev/null; then
+            read -rp "  pip is not installed. Install python3-pip now? [Y/n] " _yn
+            [[ "${_yn:-Y}" =~ ^[Nn] ]] && die "pip required. Install with: sudo apt install python3-pip"
+            sudo apt-get install -y python3-pip || die "apt install failed."
+            pip_cmd="pip3"
+        elif command -v dnf &>/dev/null; then
+            read -rp "  pip is not installed. Install python3-pip now? [Y/n] " _yn
+            [[ "${_yn:-Y}" =~ ^[Nn] ]] && die "pip required. Install with: sudo dnf install python3-pip"
+            sudo dnf install -y python3-pip || die "dnf install failed."
+            pip_cmd="pip3"
+        else
+            die "pip not found. Install it with your package manager and re-run."
+        fi
     fi
+
+    $pip_cmd install -q -r "$req" --break-system-packages 2>/dev/null || \
+        $pip_cmd install -q -r "$req" || \
+        die "$pip_cmd install failed. Run: $pip_cmd install -r $req"
     ok "Dependencies installed."
 }
 
@@ -414,7 +421,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=${APP_DIR}
-ExecStart=$(command -v uvicorn || echo uvicorn) main:app --host 0.0.0.0 --port ${PORT}
+ExecStart=$(command -v python3) -m uvicorn main:app --host 0.0.0.0 --port ${PORT}
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
@@ -966,7 +973,7 @@ ok "Selected: $SELECTED_MODEL"
 
 pull_model "$SELECTED_MODEL"
 
-# Step 4 — Naming ritual
+# Step 4 — Install app
 echo
 echo -e "${BOLD}[ 3 / 6 ]  Meet your Kin${NC}"
 run_naming_ritual "$SELECTED_MODEL"
@@ -976,8 +983,13 @@ echo
 echo -e "${BOLD}[ 4 / 6 ]  Installing app${NC}"
 cd "$APP_DIR"
 install_deps
-seed_config "$SELECTED_MODEL" "$RITUAL_NAME" "$RITUAL_PRONOUN"
 deploy_scripts
+
+# Step 5 — Meet your Kin (deps are installed, so requests is available)
+echo
+echo -e "${BOLD}[ 5 / 7 ]  Meet your Kin${NC}"
+run_naming_ritual "$SELECTED_MODEL"
+seed_config "$SELECTED_MODEL" "$RITUAL_NAME" "$RITUAL_PRONOUN"
 
 if [[ ! -f "$HOME/.config/kin_app/config.json" ]]; then
     echo

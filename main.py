@@ -627,6 +627,39 @@ async def api_bedtime(_=Depends(require_auth)):
     return {"started": True}
 
 
+# ── Model pull (SSE) ───────────────────────────────────────────────────────────
+
+@app.post("/api/pull-model")
+async def api_pull_model(request: Request, _=Depends(require_auth)):
+    body = await request.json()
+    host  = str(body.get("host", "http://localhost:11434")).rstrip("/")
+    model = str(body.get("model", "")).strip()
+    if not model:
+        raise HTTPException(400, "model required")
+
+    async def pull_stream() -> AsyncGenerator[bytes, None]:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{host}/api/pull",
+                    json={"name": model, "stream": True},
+                    timeout=aiohttp.ClientTimeout(total=600),
+                ) as resp:
+                    async for line in resp.content:
+                        line = line.strip()
+                        if line:
+                            yield f"data: {line.decode()}\n\n".encode()
+            yield b'data: {"status":"done"}\n\n'
+        except Exception as e:
+            yield f'data: {{"error":"{e}"}}\n\n'.encode()
+
+    return StreamingResponse(
+        pull_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ── Vault browser ──────────────────────────────────────────────────────────────
 
 QDRANT_URL = "http://localhost:6333"

@@ -17,6 +17,7 @@ Exits 1 if the user skips or something goes wrong.
 
 import argparse
 import json
+import os
 import sys
 import textwrap
 from pathlib import Path
@@ -202,8 +203,10 @@ def main():
         print()
         print(f"  Welcome, {result['name']}.")
         print()
-        # Output JSON for the installer to read
-        print(f"__RITUAL_RESULT__:{json.dumps(result)}")
+        result_file = os.environ.get("ECHO_BLOOM_RESULT_FILE")
+        if result_file:
+            with open(result_file, "w") as f:
+                json.dump(result, f)
         sys.exit(0)
     else:
         sys.exit(1)
