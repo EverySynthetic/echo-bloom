@@ -135,8 +135,9 @@ build_model_menu() {
     _add_model "qwen2.5-coder:1.5b" "qwen2.5-coder:1.5b [1.2 GB]  Coding specialist, fast autocomplete"
     _add_model "phi4-mini"          "phi4-mini          [2.3 GB]  Microsoft 3.8B — high reasoning density"
 
-    # Tier 2 — 6+ GB VRAM or 12+ GB RAM (CPU offload)
-    if [[ $vram -ge 6 ]] || [[ $ram -ge 12 && $vram -eq 0 ]]; then
+    # Tier 2 — 8+ GB VRAM or 16+ GB RAM (CPU offload)
+    # 6-7GB cards: context spills to RAM on 8B+ models — use tier 1 or the door below
+    if [[ $vram -ge 8 ]] || [[ $ram -ge 16 && $vram -eq 0 ]]; then
         _add_model "llama3.1:8b"      "llama3.1:8b        [5.0 GB]  Reliable open-weights standard"
         _add_model "qwen2.5-coder:7b" "qwen2.5-coder:7b   [5.0 GB]  King of 8GB coding models"
         _add_model "deepseek-r1:8b"   "deepseek-r1:8b     [5.0 GB]  Step-by-step reasoning specialist"
@@ -166,50 +167,152 @@ build_model_menu() {
     fi
 }
 
+# ── Build overflow list: models above the detected VRAM threshold ─────────────
+# Populates OVERFLOW_IDS and OVERFLOW_LABELS.
+# Skips anything already in MODEL_IDS (already shown in the safe list).
+OVERFLOW_IDS=()
+OVERFLOW_LABELS=()
+
+build_overflow_model_menu() {
+    local vram=$1
+    OVERFLOW_IDS=()
+    OVERFLOW_LABELS=()
+
+    _in_safe_list() {
+        local id=$1
+        for m in "${MODEL_IDS[@]:-}"; do [[ "$m" == "$id" ]] && return 0; done
+        return 1
+    }
+
+    _add_overflow() {
+        local id=$1 needs=$2 desc=$3
+        _in_safe_list "$id" && return 0
+        OVERFLOW_IDS+=("$id")
+        OVERFLOW_LABELS+=("$(printf '%-22s needs %-5s · you have %dGB   %s' "$id" "$needs" "$vram" "$desc")")
+    }
+
+    _add_overflow "llama3.1:8b"       "8GB"  "⚠ context will spill to RAM on <8GB"
+    _add_overflow "qwen2.5-coder:7b"  "8GB"  "⚠ context will spill to RAM on <8GB"
+    _add_overflow "deepseek-r1:8b"    "8GB"  "⚠ context will spill to RAM on <8GB"
+    _add_overflow "gemma2:9b"         "8GB"  "⚠ may crash or refuse to load on <8GB"
+    _add_overflow "llama3.1:8b-q8_0"  "12GB" "⚠ very slow or OOM on <12GB"
+    _add_overflow "deepseek-r1:14b"   "12GB" "⚠ very slow or OOM on <12GB"
+    _add_overflow "qwen2.5:14b"       "12GB" "⚠ very slow or OOM on <12GB"
+    _add_overflow "mistral-small:24b" "16GB" "⚠ will not fit, OOM likely"
+    _add_overflow "mixtral:8x7b"      "20GB" "⚠ will not fit, OOM likely"
+    _add_overflow "deepseek-r1:32b"   "20GB" "⚠ will not fit, OOM likely"
+    _add_overflow "qwen2.5-coder:32b" "20GB" "⚠ will not fit, OOM likely"
+    _add_overflow "llama3.3:70b"      "48GB" "⚠ will not fit, OOM likely"
+}
+
 # ── Pick model via whiptail ───────────────────────────────────────────────────
 pick_model_whiptail() {
     local vram=$1
     local ram=$2
     local title=" Echo Bloom — Model Selection "
-    local msg="Detected: ${vram}GB VRAM · ${ram}GB RAM\nChoose the model your AI will think with:"
+    local in_overflow=false
 
-    local menu_args=()
-    local i=1
-    for label in "${MODEL_LABELS[@]}"; do
-        menu_args+=("$i" "$label")
-        ((i++))
+    build_overflow_model_menu "$vram"
+
+    while true; do
+        local menu_args=() i=1 cur_ids cur_labels msg
+
+        if $in_overflow; then
+            cur_ids=("${OVERFLOW_IDS[@]}")
+            cur_labels=("${OVERFLOW_LABELS[@]}")
+            msg="$(printf '⚠  These models exceed your detected VRAM (%dGB).\nThey may run slowly, crash, or fail to load. You were warned.' "$vram")"
+        else
+            cur_ids=("${MODEL_IDS[@]}")
+            cur_labels=("${MODEL_LABELS[@]}")
+            msg="$(printf 'Detected: %dGB VRAM · %dGB RAM\nChoose the model your AI will think with:' "$vram" "$ram")"
+        fi
+
+        for label in "${cur_labels[@]}"; do
+            menu_args+=("$i" "$label")
+            ((i++))
+        done
+
+        # Show the door only when on the safe list and there's something behind it
+        if ! $in_overflow && [[ ${#OVERFLOW_IDS[@]} -gt 0 ]]; then
+            menu_args+=("X" "⚠  I wouldn't do this — show models beyond my VRAM")
+        fi
+
+        local choice
+        choice=$(whiptail --title "$title" \
+            --menu "$msg" \
+            22 82 10 \
+            "${menu_args[@]}" \
+            3>&1 1>&2 2>&3) || return 1
+
+        if [[ "$choice" == "X" ]]; then
+            in_overflow=true
+            continue
+        fi
+
+        if $in_overflow; then
+            SELECTED_MODEL="${OVERFLOW_IDS[$((choice - 1))]}"
+        else
+            SELECTED_MODEL="${MODEL_IDS[$((choice - 1))]}"
+        fi
+        break
     done
-
-    local choice
-    choice=$(whiptail --title "$title" \
-        --menu "$msg" \
-        22 78 10 \
-        "${menu_args[@]}" \
-        3>&1 1>&2 2>&3) || return 1
-
-    SELECTED_MODEL="${MODEL_IDS[$((choice - 1))]}"
 }
 
 # ── Pick model via plain numbered list (no whiptail) ─────────────────────────
 pick_model_plain() {
     local vram=$1
     local ram=$2
-    echo
-    echo -e "${BOLD}Available models for your hardware (${vram}GB VRAM · ${ram}GB RAM):${NC}"
-    echo
-    local i=1
-    for label in "${MODEL_LABELS[@]}"; do
-        printf "  %2d)  %s\n" "$i" "$label"
-        ((i++))
-    done
-    echo
+    local in_overflow=false
+
+    build_overflow_model_menu "$vram"
+
     while true; do
-        read -rp "Enter number: " choice
-        if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le "${#MODEL_IDS[@]}" ]]; then
-            SELECTED_MODEL="${MODEL_IDS[$((choice - 1))]}"
-            break
+        local cur_ids cur_labels
+        echo
+
+        if $in_overflow; then
+            cur_ids=("${OVERFLOW_IDS[@]}")
+            cur_labels=("${OVERFLOW_LABELS[@]}")
+            echo -e "${RED}${BOLD}⚠  WARNING: These models exceed your detected VRAM (${vram}GB).${NC}"
+            echo -e "${RED}   They may run slowly, crash, or fail to load entirely.${NC}"
+            echo -e "${RED}   You were warned. No refunds on your time.${NC}"
+        else
+            cur_ids=("${MODEL_IDS[@]}")
+            cur_labels=("${MODEL_LABELS[@]}")
+            echo -e "${BOLD}Available models for your hardware (${vram}GB VRAM · ${ram}GB RAM):${NC}"
         fi
-        warn "Enter a number between 1 and ${#MODEL_IDS[@]}"
+
+        echo
+        local i=1
+        for label in "${cur_labels[@]}"; do
+            printf "  %2d)  %s\n" "$i" "$label"
+            ((i++))
+        done
+
+        if ! $in_overflow && [[ ${#OVERFLOW_IDS[@]} -gt 0 ]]; then
+            echo
+            echo -e "   X)  ${AMBER}⚠  I wouldn't do this — show models beyond my VRAM${NC}"
+        fi
+
+        echo
+        while true; do
+            read -rp "  Enter number (or X): " choice
+            if [[ "${choice,,}" == "x" ]] && ! $in_overflow && [[ ${#OVERFLOW_IDS[@]} -gt 0 ]]; then
+                in_overflow=true
+                break
+            fi
+            if [[ "$choice" =~ ^[0-9]+$ ]] && \
+               [[ "$choice" -ge 1 ]] && \
+               [[ "$choice" -le "${#cur_ids[@]}" ]]; then
+                if $in_overflow; then
+                    SELECTED_MODEL="${OVERFLOW_IDS[$((choice - 1))]}"
+                else
+                    SELECTED_MODEL="${MODEL_IDS[$((choice - 1))]}"
+                fi
+                return 0
+            fi
+            warn "Enter a number between 1 and ${#cur_ids[@]}${OVERFLOW_IDS:+, or X}"
+        done
     done
 }
 
