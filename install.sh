@@ -56,18 +56,19 @@ command -v whiptail &>/dev/null && HAS_WHIPTAIL=true
 detect_vram() {
     local vram=0
     if command -v nvidia-smi &>/dev/null; then
-        # Sum VRAM across ALL GPUs
+        # Sum VRAM across ALL GPUs — || true guards against driver-not-loaded exit codes
         local total_mb
         total_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null \
-            | tr -d ' ' | awk '{sum += $1} END {print sum+0}')
+            | tr -d ' ' | awk '{sum += $1} END {print sum+0}') || true
         if [[ "$total_mb" =~ ^[0-9]+$ ]] && [[ "$total_mb" -gt 0 ]]; then
             vram=$(( total_mb / 1024 ))
         fi
     elif command -v rocm-smi &>/dev/null; then
         local raw
+        # grep may exit 1 if format differs; || true prevents set -e from killing us
         raw=$(rocm-smi --showmeminfo vram 2>/dev/null | grep -i 'total' \
-            | grep -oP '\d+' | awk '{sum += $1} END {print sum+0}')
-        vram=$(( raw / 1024 / 1024 ))
+            | grep -oP '\d+' | awk '{sum += $1} END {print sum+0}') || true
+        vram=$(( ${raw:-0} / 1024 / 1024 ))
     fi
     echo "$vram"
 }
@@ -91,7 +92,9 @@ detect_installed_models() {
         while IFS= read -r line; do
             local name
             name=$(echo "$line" | awk '{print $1}')
-            [[ -n "$name" && "$name" != "NAME" ]] && INSTALLED_MODELS+=("$name")
+            if [[ -n "$name" && "$name" != "NAME" ]]; then
+                INSTALLED_MODELS+=("$name")
+            fi
         done < <(ollama list 2>/dev/null)
     fi
 }
