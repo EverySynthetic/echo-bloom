@@ -487,6 +487,41 @@ ensure_ollama_running() {
     fi
 }
 
+# ── Warmup bar: 30s wait + seeds ~/.ollama/id_ed25519 via ollama list ─────────
+_ollama_warmup() {
+    local total=30
+    local width=40
+    info "Letting Ollama initialize (30 sec)..."
+
+    # Kick off ollama list in background — this creates ~/.ollama/id_ed25519
+    # for the current user, which is required before any pull can succeed.
+    ollama list &>/dev/null &
+    local _list_pid=$!
+
+    local i j pos jitter base bar pct
+    for ((i=0; i<total; i++)); do
+        base=$(( (i * (width - 1)) / total ))
+        jitter=$(( (RANDOM % 5) - 2 ))
+        pos=$(( base + jitter ))
+        [[ $pos -lt 0 ]] && pos=0
+        [[ $pos -gt $((width - 1)) ]] && pos=$((width - 1))
+
+        bar=""
+        for ((j=0; j<pos; j++));        do bar+="█"; done
+        for ((j=pos; j<width; j++));    do bar+="░"; done
+
+        pct=$(( (pos * 100) / width ))
+        printf "\r  [%s] %3d%%" "$bar" "$pct"
+        sleep 1
+    done
+
+    wait "$_list_pid" 2>/dev/null || true
+
+    bar=""
+    for ((j=0; j<width; j++)); do bar+="█"; done
+    printf "\r  [%s] 100%%\n\n" "$bar"
+}
+
 # ── Pull selected model (skip if already installed) ───────────────────────────
 pull_model() {
     local model=$1
@@ -1133,6 +1168,7 @@ fi
 ok "Selected: $SELECTED_MODEL"
 
 ensure_ollama_running
+_ollama_warmup
 pull_model "$SELECTED_MODEL"
 
 # Step 3 — Install app
