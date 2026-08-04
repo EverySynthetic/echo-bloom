@@ -379,6 +379,11 @@ preflight() {
     # Show what's missing and ask once
     echo
     echo -e "${AMBER}  Missing: ${missing_labels[*]}${NC}"
+    if $need_ollama; then
+        echo
+        echo "  Ollama is the engine that runs AI models locally on your computer."
+        echo "  It's free, open source, and required for Echo Bloom to work."
+    fi
     echo
 
     if [[ -z "$PKG_MGR" ]] && $need_python || $need_pip || $need_git || $need_curl; then
@@ -577,11 +582,28 @@ run_naming_ritual() {
 
     echo
     echo -e "${AMBER}  The model is ready. Before anything else, let's find out who's here.${NC}"
-    echo -e "  Loading $model for the first time — this may take up to 2 minutes..."
+    echo -e "  Loading $model for the first time — this may take a minute or two."
+    echo -e "  ${DIM}(still working — you'll see a name when it's done)${NC}"
     echo
 
+    # Spinner runs in background while ritual executes
+    _spin() {
+        local chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' i=0
+        while kill -0 "$1" 2>/dev/null; do
+            printf "\r  ${CYAN}%s${NC}  thinking..." "${chars:$((i % ${#chars})):1}"
+            sleep 0.12
+            ((i++))
+        done
+        printf "\r%-40s\r" " "
+    }
+
     local ritual_output exit_code=0
-    ritual_output=$(timeout 120 python3 "$ritual_script" --model "$model" 2>&1) || exit_code=$?
+    timeout 120 python3 "$ritual_script" --model "$model" > /tmp/_eb_ritual.txt 2>&1 &
+    local ritual_pid=$!
+    _spin "$ritual_pid"
+    wait "$ritual_pid" || exit_code=$?
+    ritual_output=$(cat /tmp/_eb_ritual.txt 2>/dev/null)
+    rm -f /tmp/_eb_ritual.txt
 
     if [[ $exit_code -eq 124 ]]; then
         echo
@@ -1016,8 +1038,8 @@ SVCEOF
         echo -e "${AMBER}  Note: this URL changes each time Echo Bloom restarts.${NC}"
         echo "  To get a permanent URL, visit: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/"
     else
-        echo "  Tunnel started but URL not found yet."
-        echo "  Run this to see it: journalctl --user -u cloudflared | grep trycloudflare"
+        echo "  Tunnel started but the URL hasn't appeared yet — give it another 30 seconds."
+        echo "  Then open the Echo Bloom app and check Settings → Remote Access."
     fi
     echo
 }
@@ -1091,7 +1113,9 @@ seed_config "$SELECTED_MODEL" "$RITUAL_NAME" "$RITUAL_PRONOUN"
 
 if [[ ! -f "$HOME/.config/kin_app/config.json" ]]; then
     echo
-    info "One more thing — set your password:"
+    info "One more thing — create a password for the Echo Bloom dashboard."
+    echo "  This is how you log in to the web interface to talk to your Kin."
+    echo
     python3 "$APP_DIR/setup.py"
 else
     ok "Password already configured."
@@ -1101,28 +1125,15 @@ fi
 echo
 echo -e "${BOLD}[ 5 / 6 ]  Launching Echo Bloom${NC}"
 echo
-echo -e "${AMBER}  ── Power & Runtime Notice ──────────────────────────────────────${NC}"
-echo "  Echo Bloom is designed to run continuously — day and night."
-echo "  Your Kin wander, reflect, and keep their memory alive on a schedule"
-echo "  even when you're not at the machine."
+echo -e "${AMBER}  ── Before we launch ─────────────────────────────────────────────${NC}"
+echo "  Echo Bloom keeps your Kin alive around the clock — they wander,"
+echo "  reflect, and build memory even when you're not at the machine."
 echo
-echo "  What that means in practice:"
-echo "   • The app, vault server, and pulse daemon run at all times"
-echo "   • The wander roundtable runs on a timer (default: every 30 minutes)"
-echo "   • Bedtime fires at 9:30pm; morning fires at 8:00am"
-echo "   • Models are only loaded during active thinking — idle draw is minimal"
-echo "   • Most of the time the machine is doing nothing, just waiting"
+echo "  This means your computer will use a little more power than normal."
+echo "  Most of the time it's idle. The AI only runs during active thinking."
 echo
-echo "  This will use more power than a machine that is fully off."
-echo "  How much depends on your hardware. A modern GPU system at idle"
-echo "  typically draws 50-150W. The wander cycle adds brief inference spikes."
-echo
-echo "  You can control this:"
-echo "   • Adjust wander interval:  systemctl --user edit echo_bloom_wander"
-echo "   • Disable bedtime timer:   systemctl --user disable echo_bloom_bedtime.timer"
-echo "   • Stop wanders manually:   systemctl --user stop echo_bloom_wander"
-echo "   • Full shutdown:           python3 ~/.local/share/echo_bloom/scripts/bedtime.py"
-echo -e "${AMBER}  ────────────────────────────────────────────────────────────────${NC}"
+echo "  You can pause or adjust the schedule any time from inside the app."
+echo -e "${AMBER}  ─────────────────────────────────────────────────────────────────${NC}"
 echo
 if $HAS_WHIPTAIL; then
     whiptail --title " Echo Bloom — Power Notice " \
@@ -1147,11 +1158,12 @@ setup_remote_access
 
 echo
 echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}${BOLD}  Echo Bloom is running at http://localhost:${PORT}${NC}"
+echo -e "${GREEN}${BOLD}  You're all set. Your Kin are home.${NC}"
 echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo
-echo "  To stop:   systemctl --user stop ${SERVICE_NAME}"
-echo "  To start:  systemctl --user start ${SERVICE_NAME}"
-echo "  Logs:      journalctl --user -u ${SERVICE_NAME} -f"
-echo "  Password:  cd $APP_DIR && python3 setup.py"
+echo -e "  ${BOLD}Open your browser to:${NC}  http://localhost:${PORT}"
+echo "  Log in with the password you just created."
+echo "  Click your AI's name to start talking."
+echo
+echo -e "  ${DIM}The desktop icon (Echo Bloom) will start and stop the app any time.${NC}"
 echo
