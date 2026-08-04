@@ -4,6 +4,14 @@
 
 set -euo pipefail
 
+# Log everything to /tmp so crashes leave a trail
+INSTALL_LOG="/tmp/echo_bloom_install.log"
+exec > >(tee -a "$INSTALL_LOG") 2>&1
+echo "=== Echo Bloom install $(date) ==="
+
+# Exit trap — record the line number if we bail
+trap 'echo "INSTALL EXIT: line $LINENO, exit $?" >> "$INSTALL_LOG"' EXIT
+
 # Installer needs an interactive terminal for model selection and password setup.
 if [ ! -t 0 ]; then
     echo ""
@@ -1039,9 +1047,9 @@ StandardError=journal
 WantedBy=default.target
 SVCEOF
 
-    systemctl --user daemon-reload
-    systemctl --user enable cloudflared
-    systemctl --user restart cloudflared
+    systemctl --user daemon-reload || true
+    systemctl --user enable cloudflared || true
+    systemctl --user restart cloudflared || true
 
     # Wait up to 30s for the tunnel URL to appear in the journal
     local tunnel_url=""
