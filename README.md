@@ -41,6 +41,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/ma
 This always runs the latest version directly from GitHub. No local copy to go stale.
 The `bash <(curl ...)` form keeps your terminal attached so the installer can ask questions.
 
+**Fish shell** (Garuda and others that ship fish by default):
+```fish
+bash (curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh | psub)
+```
+
 Requires [Ollama](https://ollama.com). The installer will offer to set it up if it's missing.
 
 ---
