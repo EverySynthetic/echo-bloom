@@ -275,14 +275,35 @@ qdrant-client>=1.9.0
 REQEOF
     fi
 
-    # Resolve pip — pip3 by name, python3 -m pip as fallback
+    # Resolve pip — pip3 by name, then python3 -m pip, then try to get it
     local pip_cmd=""
     if command -v pip3 &>/dev/null; then
         pip_cmd="pip3"
     elif python3 -m pip --version &>/dev/null 2>&1; then
         pip_cmd="python3 -m pip"
     else
-        die "pip not found. Install with: sudo pacman -S python-pip  OR  sudo apt install python3-pip"
+        warn "pip not found — trying to bootstrap it..."
+        if python3 -m ensurepip --upgrade &>/dev/null 2>&1; then
+            ok "pip bootstrapped via ensurepip."
+            pip_cmd="python3 -m pip"
+        elif command -v pacman &>/dev/null; then
+            read -rp "  pip is not installed. Install python-pip now? [Y/n] " _yn
+            [[ "${_yn:-Y}" =~ ^[Nn] ]] && die "pip required. Install with: sudo pacman -S python-pip"
+            sudo pacman -S --noconfirm python-pip || die "pacman install failed."
+            pip_cmd="pip3"
+        elif command -v apt-get &>/dev/null; then
+            read -rp "  pip is not installed. Install python3-pip now? [Y/n] " _yn
+            [[ "${_yn:-Y}" =~ ^[Nn] ]] && die "pip required. Install with: sudo apt install python3-pip"
+            sudo apt-get install -y python3-pip || die "apt install failed."
+            pip_cmd="pip3"
+        elif command -v dnf &>/dev/null; then
+            read -rp "  pip is not installed. Install python3-pip now? [Y/n] " _yn
+            [[ "${_yn:-Y}" =~ ^[Nn] ]] && die "pip required. Install with: sudo dnf install python3-pip"
+            sudo dnf install -y python3-pip || die "dnf install failed."
+            pip_cmd="pip3"
+        else
+            die "pip not found. Install it with your package manager and re-run."
+        fi
     fi
 
     $pip_cmd install -q -r "$req" --break-system-packages 2>/dev/null || \
