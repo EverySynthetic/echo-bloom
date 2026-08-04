@@ -436,15 +436,45 @@ preflight() {
         info "Installing Ollama (this may take a minute)..."
         curl -fsSL https://ollama.com/install.sh | sh \
             || die "Ollama install failed. Visit https://ollama.com to install manually, then re-run."
-        if command -v systemctl &>/dev/null; then
-            systemctl --user enable --now ollama 2>/dev/null || \
-                systemctl enable --now ollama 2>/dev/null || true
-        fi
         ok "Ollama installed."
     fi
 
     echo
     ok "All dependencies ready."
+}
+
+# ── Make sure Ollama is actually responding before we try to use it ───────────
+ensure_ollama_running() {
+    # Already up — nothing to do
+    curl -s --max-time 2 http://localhost:11434/api/version &>/dev/null && return 0
+
+    info "Starting Ollama..."
+
+    # ollama.com install script creates a SYSTEM service — try that first
+    if command -v systemctl &>/dev/null; then
+        sudo systemctl start ollama 2>/dev/null || \
+            systemctl --user start ollama 2>/dev/null || true
+    fi
+
+    # Give the service up to 10s to come up
+    local waited=0
+    while ! curl -s --max-time 1 http://localhost:11434/api/version &>/dev/null; do
+        sleep 1
+        ((waited++))
+        [[ $waited -ge 10 ]] && break
+    done
+
+    # Still not up — launch it ourselves as a background process
+    if ! curl -s --max-time 1 http://localhost:11434/api/version &>/dev/null; then
+        nohup ollama serve &>/dev/null &
+        sleep 3
+    fi
+
+    if curl -s --max-time 2 http://localhost:11434/api/version &>/dev/null; then
+        ok "Ollama is running."
+    else
+        die "Could not start Ollama. Please run 'ollama serve' in another terminal and re-run the installer."
+    fi
 }
 
 # ── Pull selected model (skip if already installed) ───────────────────────────
@@ -1096,6 +1126,7 @@ fi
 
 ok "Selected: $SELECTED_MODEL"
 
+ensure_ollama_running
 pull_model "$SELECTED_MODEL"
 
 # Step 3 — Install app
