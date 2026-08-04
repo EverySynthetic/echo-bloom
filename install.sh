@@ -883,15 +883,14 @@ EOF
 # ── Open browser ──────────────────────────────────────────────────────────────
 open_browser() {
     local url="http://localhost:$PORT"
-    info "Opening $url ..."
-    sleep 2
-    if command -v xdg-open &>/dev/null; then
-        xdg-open "$url" &
-    elif command -v open &>/dev/null; then
-        open "$url" &
-    else
-        echo
-        echo -e "${BOLD}Open your browser to: $url${NC}"
+    if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
+        info "Opening $url ..."
+        sleep 2
+        if command -v xdg-open &>/dev/null; then
+            xdg-open "$url" &
+        elif command -v open &>/dev/null; then
+            open "$url" &
+        fi
     fi
 }
 
