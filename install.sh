@@ -624,7 +624,7 @@ run_naming_ritual() {
         while kill -0 "$1" 2>/dev/null; do
             printf "\r  ${CYAN}%s${NC}  thinking..." "${chars:$((i % ${#chars})):1}"
             sleep 0.12
-            ((i++))
+            i=$((i + 1))
         done
         printf "\r%-40s\r" " "
     }
