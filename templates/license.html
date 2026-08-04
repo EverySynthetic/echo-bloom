@@ -73,11 +73,11 @@
   </div>
   {% endif %}
 
-  <!-- Key entry — always visible on expired, optional on trial/licensed -->
-  {% if state in ("expired", "trial", "licensed") %}
+  <!-- Key entry — always visible, even on denied (purchased key bypasses blacklist) -->
+  {% if state in ("expired", "trial", "licensed", "denied") %}
   <div class="license-key-section">
     <div class="license-key-label">
-      {% if state == "expired" %}Already have a key?{% else %}Enter a new key{% endif %}
+      {% if state in ("expired", "denied") %}Already have a key? Enter it here{% else %}Enter a new key{% endif %}
     </div>
     <form class="license-key-form" onsubmit="activateKey(event)">
       <input class="license-key-input" id="license-key-input"

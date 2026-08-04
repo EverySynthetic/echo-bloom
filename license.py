@@ -186,7 +186,11 @@ def _call_server(path: str, body: dict, timeout: int = 8) -> dict:
     data = json.dumps(body).encode()
     req  = urllib.request.Request(
         f"{TRIAL_SERVER}{path}", data=data,
-        headers={"Content-Type": "application/json"}, method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "EchoBloom/1.0",
+        },
+        method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
