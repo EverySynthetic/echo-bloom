@@ -275,18 +275,19 @@ qdrant-client>=1.9.0
 REQEOF
     fi
 
-    # Try pip3, then python3 -m pip
+    # Resolve pip — pip3 by name, python3 -m pip as fallback
+    local pip_cmd=""
     if command -v pip3 &>/dev/null; then
-        pip3 install -q -r "$req" --break-system-packages 2>/dev/null || \
-            pip3 install -q -r "$req" || \
-            die "pip3 install failed. Run: pip3 install -r $req"
-    elif python3 -m pip &>/dev/null 2>&1; then
-        python3 -m pip install -q -r "$req" --break-system-packages 2>/dev/null || \
-            python3 -m pip install -q -r "$req" || \
-            die "pip install failed. Run: python3 -m pip install -r $req"
+        pip_cmd="pip3"
+    elif python3 -m pip --version &>/dev/null 2>&1; then
+        pip_cmd="python3 -m pip"
     else
-        die "pip not found. Install Python pip and re-run."
+        die "pip not found. Install with: sudo pacman -S python-pip  OR  sudo apt install python3-pip"
     fi
+
+    $pip_cmd install -q -r "$req" --break-system-packages 2>/dev/null || \
+        $pip_cmd install -q -r "$req" || \
+        die "$pip_cmd install failed. Run: $pip_cmd install -r $req"
     ok "Dependencies installed."
 }
 
