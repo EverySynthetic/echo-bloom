@@ -355,6 +355,11 @@ function populateNodeSelect() {
     opt.textContent = 'This machine';
     sel.appendChild(opt);
   }
+  // Auto-select first option and load models so the dropdown is visible immediately
+  if (!sel.value) {
+    sel.selectedIndex = 1;
+    if (sel.value) onNodeSelect();
+  }
 }
 
 function onNodeSelect() {
