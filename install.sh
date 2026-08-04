@@ -1076,21 +1076,16 @@ ok "Selected: $SELECTED_MODEL"
 
 pull_model "$SELECTED_MODEL"
 
-# Step 4 — Install app
+# Step 3 — Install app
 echo
-echo -e "${BOLD}[ 3 / 6 ]  Meet your Kin${NC}"
-run_naming_ritual "$SELECTED_MODEL"
-
-# Step 5 — Install deps + set password + deploy scripts
-echo
-echo -e "${BOLD}[ 4 / 6 ]  Installing app${NC}"
+echo -e "${BOLD}[ 3 / 6 ]  Installing app${NC}"
 cd "$APP_DIR"
 install_deps
 deploy_scripts
 
-# Step 5 — Meet your Kin (deps are installed, so requests is available)
+# Step 4 — Meet your Kin (deps are installed, so requests is available)
 echo
-echo -e "${BOLD}[ 5 / 7 ]  Meet your Kin${NC}"
+echo -e "${BOLD}[ 4 / 6 ]  Meet your Kin${NC}"
 run_naming_ritual "$SELECTED_MODEL"
 seed_config "$SELECTED_MODEL" "$RITUAL_NAME" "$RITUAL_PRONOUN"
 
