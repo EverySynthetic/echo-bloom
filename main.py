@@ -6,6 +6,7 @@ Setup: python setup.py  (first run only)
 """
 
 import os
+import re
 import sys
 import json
 import asyncio
@@ -984,15 +985,25 @@ async def api_onboard_autosave(request: Request, _=Depends(require_auth)):
         except Exception:
             pass
 
+    kin_list = body.get("kin", existing.get("kin", []))
+    for k in kin_list:
+        if "name" in k:
+            k["name"] = _sanitize_kin_name(k["name"])
+
     config_path.write_text(json.dumps({
         "nodes":     body.get("nodes", existing.get("nodes", [])),
-        "kin":       body.get("kin",   existing.get("kin",   [])),
+        "kin":       kin_list,
         "owner":     body.get("owner", existing.get("owner", {})),
         "vault_url": body.get("vault_url") or existing.get("vault_url") or "http://localhost:8765",
     }, indent=2))
 
     cl.reload_config()
     return {"ok": True}
+
+
+def _sanitize_kin_name(name: str) -> str:
+    """Strip characters that break URL path segments. ? # & = / \ % + all cause routing failures."""
+    return re.sub(r'[?#&=/\\%+]', '', name).strip() or "Kin"
 
 
 @app.post("/api/onboard/save")
@@ -1004,6 +1015,7 @@ async def api_onboard_save(request: Request, _=Depends(require_auth)):
     palette = ["#4fc3f7", "#a5d6a7", "#ce93d8", "#fff176", "#ffab91", "#f48fb1", "#80cbc4"]
     kin_list = body.get("kin", [])
     for i, k in enumerate(kin_list):
+        k["name"] = _sanitize_kin_name(k.get("name", ""))
         if not k.get("color"):
             k["color"] = palette[i % len(palette)]
         k.setdefault("db", "")
