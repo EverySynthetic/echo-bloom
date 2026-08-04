@@ -988,23 +988,17 @@ setup_cloudflare() {
     info "Setting up Cloudflare Tunnel (public HTTPS URL)..."
 
     # Install cloudflared
-    if ! command -v cloudflared &>/dev/null; then
-        if command -v pacman &>/dev/null; then
-            if command -v yay &>/dev/null; then
-                yay -S --noconfirm cloudflared 2>/dev/null || _install_cloudflared_binary
-            else
-                _install_cloudflared_binary
-            fi
-        elif command -v apt-get &>/dev/null; then
-            curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
-                | sudo tee /usr/share/keyrings/cloudflare-main.gpg > /dev/null
-            echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] \
-                https://pkg.cloudflare.com/cloudflared jammy main" \
-                | sudo tee /etc/apt/sources.list.d/cloudflared.list
-            sudo apt-get update -q && sudo apt-get install -y cloudflared
-        else
+    if ! command -v cloudflared &>/dev/null && \
+       ! [[ -x "$HOME/.local/bin/cloudflared" ]]; then
+        local installed=false
+        if command -v pacman &>/dev/null && command -v yay &>/dev/null; then
+            yay -S --noconfirm cloudflared 2>/dev/null && installed=true || true
+        fi
+        if ! $installed; then
             _install_cloudflared_binary
         fi
+    elif [[ -x "$HOME/.local/bin/cloudflared" ]]; then
+        export PATH="$HOME/.local/bin:$PATH"
     fi
     ok "cloudflared installed."
 
@@ -1019,8 +1013,11 @@ _install_cloudflared_binary() {
     local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
     [[ "$arch" == "aarch64" ]] && url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"
     info "Downloading cloudflared binary..."
-    curl -fsSL "$url" -o /tmp/cloudflared
-    sudo install -m 755 /tmp/cloudflared /usr/local/bin/cloudflared
+    mkdir -p "$HOME/.local/bin"
+    curl -fsSL "$url" -o "$HOME/.local/bin/cloudflared" \
+        || die "Could not download cloudflared. Check your internet connection."
+    chmod +x "$HOME/.local/bin/cloudflared"
+    export PATH="$HOME/.local/bin:$PATH"
 }
 
 _setup_quick_tunnel() {
