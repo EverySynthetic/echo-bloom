@@ -162,9 +162,19 @@ def _read_trial_token() -> dict | None:
     raw = TRIAL_TOKEN_PATH.read_text().strip()
     if not raw:
         return None
-    # Denial stored as plain text so we can read it without crypto
+    # Denial stored as plain text so we can read it without crypto.
+    # If the denial was caused by a transport error (HTTP 4xx/5xx, timeout,
+    # connection refused) rather than a genuine server-side blacklist decision,
+    # delete the token so registration is retried on the next launch.
     if raw.startswith("DENIED:"):
-        return {"state": "denied", "reason": raw[7:]}
+        reason = raw[7:]
+        transport_error = any(x in reason for x in (
+            "HTTP Error", "URLError", "timeout", "Connection", "Error 4", "Error 5"
+        ))
+        if transport_error:
+            TRIAL_TOKEN_PATH.unlink(missing_ok=True)
+            return None
+        return {"state": "denied", "reason": reason}
     if raw.startswith("OFFLINE:"):
         # Grace period token — has a local expiry timestamp
         try:
