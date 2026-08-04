@@ -493,9 +493,13 @@ _ollama_warmup() {
     local width=40
     info "Letting Ollama initialize (30 sec)..."
 
-    # Kick off ollama list in background — this creates ~/.ollama/id_ed25519
-    # for the current user, which is required before any pull can succeed.
-    ollama list &>/dev/null &
+    # Kick off key generation in background — ollama list doesn't hit the
+    # registry so it doesn't create the key; openssl generates the PKCS8
+    # ed25519 key that Ollama's Go code expects at ~/.ollama/id_ed25519.
+    if [[ ! -f "$HOME/.ollama/id_ed25519" ]]; then
+        mkdir -p "$HOME/.ollama"
+        openssl genpkey -algorithm ed25519 -out "$HOME/.ollama/id_ed25519" 2>/dev/null &
+    fi
     local _list_pid=$!
 
     local i j pos jitter base bar pct
@@ -529,6 +533,14 @@ pull_model() {
         ok "Model already installed: $model"
         return
     fi
+    # Safety net: generate the user's Ollama identity key if still missing.
+    # Ollama installs as system user 'ollama'; the per-user key at
+    # ~/.ollama/id_ed25519 doesn't exist until ollama runs as this user.
+    if [[ ! -f "$HOME/.ollama/id_ed25519" ]]; then
+        mkdir -p "$HOME/.ollama"
+        openssl genpkey -algorithm ed25519 -out "$HOME/.ollama/id_ed25519" 2>/dev/null || true
+    fi
+
     info "Pulling $model — this may take a few minutes..."
     ollama pull "$model"
     ok "Model ready: $model"
