@@ -1060,7 +1060,7 @@ SVCEOF
         waited=$((waited + 2))
         echo -n "."
         tunnel_url=$(journalctl --user -u cloudflared --no-pager -n 50 2>/dev/null \
-            | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1)
+            | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1 || true)
     done
     echo
 
