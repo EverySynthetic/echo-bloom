@@ -112,39 +112,23 @@
     <div class="onboard-label">THE VAULT</div>
     <div class="onboard-desc">
       The vault is where your Kin's memories live — every thought, every reflection, every moment.
-      Most people run it on the same machine as Echo Bloom.
+      Scanning your network for a vault server now.
     </div>
 
     <div class="onboard-form">
-      <div class="onboard-vault-choice">
-        <label class="vault-radio">
-          <input type="radio" name="vault-type" value="local" checked onchange="setVaultType('local')">
-          <span class="vault-radio-label">
-            <strong>This machine</strong>
-            <span class="vault-radio-desc">Vault runs here — good for most setups</span>
-          </span>
-        </label>
-        <label class="vault-radio">
-          <input type="radio" name="vault-type" value="remote" onchange="setVaultType('remote')">
-          <span class="vault-radio-label">
-            <strong>Another machine on my network</strong>
-            <span class="vault-radio-desc">You're running vault.py on a separate node</span>
-          </span>
-        </label>
-        <label class="vault-radio">
-          <input type="radio" name="vault-type" value="none" onchange="setVaultType('none')">
-          <span class="vault-radio-label">
-            <strong>Skip for now</strong>
-            <span class="vault-radio-desc">Vault features will be off — you can set it up later</span>
-          </span>
-        </label>
+      <div class="onboard-discover-row">
+        <button class="onboard-btn-scan" id="vault-scan-btn" onclick="scanVault()">↺ SCAN AGAIN</button>
+        <span class="onboard-status" id="vault-scan-status">scanning…</span>
       </div>
 
-      <div id="vault-url-row" style="display:none">
-        <input class="onboard-input" id="vault-url" placeholder="http://192.168.1.x:8765">
-        <button class="onboard-btn" onclick="testVault()">TEST CONNECTION</button>
-        <div class="onboard-status" id="vault-status"></div>
+      <div id="vault-scan-results"></div>
+
+      <div class="onboard-divider">or enter manually</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input class="onboard-input" id="vault-url" placeholder="http://192.168.1.x:8765" style="flex:1;min-width:220px">
+        <button class="onboard-btn" onclick="testVaultManual()">TEST</button>
       </div>
+      <div class="onboard-status" id="vault-status"></div>
     </div>
 
     <div class="onboard-nav">
@@ -178,7 +162,6 @@ const EXISTING = {{ config | tojson }};
 
 let nodes    = (EXISTING.nodes || []).map(n => ({...n}));
 let kin      = (EXISTING.kin   || []).map(k => ({...k}));
-let vaultType = 'local';
 
 renderNodeList();
 renderKinList();
@@ -186,16 +169,9 @@ populateNodeSelect();
 goStep(1);
 
 const existingVault = EXISTING.vault_url || '';
-if (existingVault && existingVault !== 'http://localhost:8765' && existingVault !== '') {
-  if (existingVault === 'none') {
-    vaultType = 'none';
-    document.querySelector('input[value="none"]').checked = true;
-  } else {
-    vaultType = 'remote';
-    document.querySelector('input[value="remote"]').checked = true;
-    document.getElementById('vault-url').value = existingVault;
-    document.getElementById('vault-url-row').style.display = 'block';
-  }
+if (existingVault && existingVault !== 'none') {
+  selectedVaultUrl = existingVault;
+  document.getElementById('vault-url').value = existingVault;
 }
 
 // ── Navigation ────────────────────────────────────────────────────────────────
@@ -208,6 +184,7 @@ function goStep(n) {
     if (crumb) crumb.classList.toggle('step-active', i === n);
   });
   if (n === 2) populateNodeSelect();
+  if (n === 3) scanVault();
 }
 
 function setStatus(id, msg, ok) {
@@ -217,10 +194,6 @@ function setStatus(id, msg, ok) {
   el.style.color = ok === true ? 'var(--green)' : ok === false ? 'var(--red)' : 'var(--text-dim)';
 }
 
-function setVaultType(t) {
-  vaultType = t;
-  document.getElementById('vault-url-row').style.display = t === 'remote' ? 'block' : 'none';
-}
 
 // ── Auto-save (every time nodes or kin change) ────────────────────────────────
 
@@ -465,16 +438,71 @@ function renderKinList() {
 
 // ── Vault ─────────────────────────────────────────────────────────────────────
 
-async function testVault() {
+let selectedVaultUrl = '';
+
+async function scanVault() {
+  document.getElementById('vault-scan-btn').disabled = true;
+  setStatus('vault-scan-status', 'scanning…', null);
+  document.getElementById('vault-scan-results').innerHTML = '';
+  try {
+    const r = await fetch('/api/onboard/scan-vault', {method:'POST'});
+    const d = await r.json();
+    renderVaultResults(d.found || []);
+  } catch(e) {
+    setStatus('vault-scan-status', `scan error: ${e.message}`, false);
+  }
+  document.getElementById('vault-scan-btn').disabled = false;
+}
+
+function renderVaultResults(found) {
+  const box = document.getElementById('vault-scan-results');
+  if (!found.length) {
+    setStatus('vault-scan-status', 'no vault found on network', false);
+    box.innerHTML = '';
+    return;
+  }
+  setStatus('vault-scan-status', `found ${found.length}`, true);
+  box.innerHTML = found.map(v => {
+    const isSelected = selectedVaultUrl === v.url;
+    return `<div class="scan-card${isSelected ? ' scan-card-added' : ''}" id="vcard-${v.ip.replace(/\./g,'-')}">
+      <div class="scan-card-info">
+        <span class="scan-card-host">${escHtml(v.hostname)}</span>
+        <span class="scan-card-ip">${escHtml(v.ip)}:${v.port}</span>
+      </div>
+      <button class="scan-card-btn" onclick="selectVault('${escHtml(v.url)}','${v.ip.replace(/\./g,'-')}')">${isSelected ? 'SELECTED' : 'USE THIS'}</button>
+    </div>`;
+  }).join('');
+}
+
+function selectVault(url, ipKey) {
+  selectedVaultUrl = url;
+  document.getElementById('vault-url').value = url;
+  // update card states
+  document.querySelectorAll('[id^="vcard-"]').forEach(el => {
+    const btn = el.querySelector('.scan-card-btn');
+    if (el.id === `vcard-${ipKey}`) {
+      el.classList.add('scan-card-added');
+      btn.textContent = 'SELECTED';
+    } else {
+      el.classList.remove('scan-card-added');
+      btn.textContent = 'USE THIS';
+    }
+  });
+  setStatus('vault-status', '● vault selected', true);
+}
+
+async function testVaultManual() {
   const url = document.getElementById('vault-url').value.trim();
   if (!url) { setStatus('vault-status', 'enter a vault URL first', false); return; }
   setStatus('vault-status', 'connecting…', null);
   try {
+    const parsed = new URL(url);
     const r = await fetch('/api/onboard/test-node', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ip: new URL(url).hostname, port: parseInt(new URL(url).port) || 8765}),
+      body: JSON.stringify({ip: parsed.hostname, port: parseInt(parsed.port) || 8765}),
     });
     const d = await r.json();
+    if (d.ok) { selectedVaultUrl = url; }
     setStatus('vault-status', d.ok ? '● vault reachable' : `✗ ${d.error || 'unreachable'}`, d.ok);
   } catch(e) { setStatus('vault-status', `error: ${e.message}`, false); }
 }
@@ -487,12 +515,8 @@ async function saveAll() {
     setStatus('kin-status', 'add at least one Kin before finishing', false);
     return;
   }
-  let vaultUrl = 'http://localhost:8765';
-  if (vaultType === 'remote') {
-    vaultUrl = document.getElementById('vault-url').value.trim() || vaultUrl;
-  } else if (vaultType === 'none') {
-    vaultUrl = '';
-  }
+  const manualUrl = document.getElementById('vault-url').value.trim();
+  const vaultUrl = manualUrl || selectedVaultUrl || 'http://localhost:8765';
   try {
     const r = await fetch('/api/onboard/save', {
       method: 'POST', headers: {'Content-Type':'application/json'},

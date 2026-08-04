@@ -648,24 +648,24 @@ async def vault_page(request: Request, _=Depends(require_auth)):
 
 @app.get("/api/vault")
 async def api_vault(
-    layer:  str = "",
-    author: str = "",
-    search: str = "",
-    limit:  int = 20,
-    offset: int = 0,
+    layer:         str = "",
+    author:        str = "",
+    search:        str = "",
+    exclude_layer: str = "",
+    limit:         int = 20,
+    offset:        int = 0,
     _=Depends(require_auth),
 ):
     vault = _vault_url()
     params = {"limit": min(limit, 50), "offset": max(offset, 0)}
-    if layer:  params["layer"]  = layer
-    if author: params["author"] = author
-    if search: params["search"] = search
-
-    endpoint = f"{vault}/recall" if (layer or author or search) else f"{vault}/recall/all"
+    if layer:         params["layer"]         = layer
+    if author:        params["author"]        = author
+    if search:        params["search"]        = search
+    if exclude_layer: params["exclude_layer"] = exclude_layer
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(endpoint, params=params,
+            async with session.get(f"{vault}/recall", params=params,
                                    timeout=aiohttp.ClientTimeout(total=10)) as r:
                 entries = await r.json()
 
@@ -678,6 +678,30 @@ async def api_vault(
     except Exception:
         return {"entries": [], "total": 0, "offset": offset, "limit": limit,
                 "error": "vault_offline", "vault_url": vault}
+
+
+@app.get("/api/vault/count")
+async def api_vault_count(
+    layer:         str = "",
+    author:        str = "",
+    search:        str = "",
+    exclude_layer: str = "",
+    _=Depends(require_auth),
+):
+    vault = _vault_url()
+    params = {}
+    if layer:         params["layer"]         = layer
+    if author:        params["author"]        = author
+    if search:        params["search"]        = search
+    if exclude_layer: params["exclude_layer"] = exclude_layer
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{vault}/count", params=params,
+                                   timeout=aiohttp.ClientTimeout(total=5)) as r:
+                total = (await r.json()).get("count", 0)
+        return {"total": total}
+    except Exception:
+        return {"total": 0}
 
 
 @app.get("/api/vault/meta")
@@ -849,7 +873,8 @@ async def api_onboard_scan(_=Depends(require_auth)):
             pass
         return None
 
-    async with aiohttp.ClientSession() as session:
+    connector = aiohttp.TCPConnector(limit=0)
+    async with aiohttp.ClientSession(connector=connector) as session:
         results = await asyncio.gather(*[_check(session, ip) for ip in candidates])
 
     found = [r for r in results if r]
@@ -859,6 +884,58 @@ async def api_onboard_scan(_=Depends(require_auth)):
             async with session.get("http://localhost:11434/", timeout=aiohttp.ClientTimeout(total=1)) as r:
                 if r.status < 500 and not any(f["ip"] in ("localhost", "127.0.0.1") for f in found):
                     found.insert(0, {"ip": "localhost", "port": 11434, "hostname": "This machine"})
+    except Exception:
+        pass
+
+    return {"found": found}
+
+
+@app.post("/api/onboard/scan-vault")
+async def api_onboard_scan_vault(_=Depends(require_auth)):
+    """Scan the local /24 subnet for vault instances (port 8765)."""
+    import socket
+
+    def _local_subnet() -> str:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip.rsplit(".", 1)[0]
+        except Exception:
+            return "192.168.1"
+
+    subnet = _local_subnet()
+    candidates = [f"{subnet}.{i}" for i in range(1, 255)]
+
+    async def _check(session, ip):
+        try:
+            async with session.get(
+                f"http://{ip}:8765/",
+                timeout=aiohttp.ClientTimeout(total=0.8),
+            ) as r:
+                if r.status < 500:
+                    try:
+                        hostname = socket.gethostbyaddr(ip)[0].split(".")[0]
+                    except Exception:
+                        hostname = ip
+                    return {"ip": ip, "port": 8765, "hostname": hostname, "url": f"http://{ip}:8765"}
+        except Exception:
+            pass
+        return None
+
+    connector = aiohttp.TCPConnector(limit=0)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        results = await asyncio.gather(*[_check(session, ip) for ip in candidates])
+
+    found = [r for r in results if r]
+
+    # check localhost separately
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get("http://localhost:8765/", timeout=aiohttp.ClientTimeout(total=1)) as r:
+                if r.status < 500 and not any(f["ip"] in ("localhost", "127.0.0.1") for f in found):
+                    found.insert(0, {"ip": "localhost", "port": 8765, "hostname": "This machine", "url": "http://localhost:8765"})
     except Exception:
         pass
 

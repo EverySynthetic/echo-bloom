@@ -55,28 +55,28 @@ command -v whiptail &>/dev/null && HAS_WHIPTAIL=true
 # ── Detect VRAM ───────────────────────────────────────────────────────────────
 detect_vram() {
     local vram=0
+    local total_mb=0
     if command -v nvidia-smi &>/dev/null; then
-        # Sum VRAM across ALL GPUs
-        local total_mb
         total_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null \
-            | tr -d ' ' | awk '{sum += $1} END {print sum+0}')
+            | tr -d ' ' | awk '{sum += $1} END {print sum+0}') || total_mb=0
         if [[ "$total_mb" =~ ^[0-9]+$ ]] && [[ "$total_mb" -gt 0 ]]; then
             vram=$(( total_mb / 1024 ))
         fi
     elif command -v rocm-smi &>/dev/null; then
-        local raw
+        local raw=0
         raw=$(rocm-smi --showmeminfo vram 2>/dev/null | grep -i 'total' \
-            | grep -oP '\d+' | awk '{sum += $1} END {print sum+0}')
-        vram=$(( raw / 1024 / 1024 ))
+            | grep -oP '\d+' | awk '{sum += $1} END {print sum+0}') || raw=0
+        [[ "$raw" =~ ^[0-9]+$ ]] && vram=$(( raw / 1024 / 1024 )) || vram=0
     fi
     echo "$vram"
 }
 
 # ── Detect RAM (in GB) ────────────────────────────────────────────────────────
 detect_ram() {
-    local ram_mb
-    ram_mb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-    echo $(( ram_mb / 1024 / 1024 ))
+    local ram_kb=0
+    ram_kb=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}') || ram_kb=0
+    [[ "$ram_kb" =~ ^[0-9]+$ ]] || ram_kb=0
+    echo $(( ram_kb / 1024 / 1024 ))
 }
 
 # ── Detect AVX2 ───────────────────────────────────────────────────────────────
@@ -228,33 +228,130 @@ pick_model_plain() {
     done
 }
 
-# ── Check / install Ollama ────────────────────────────────────────────────────
-ensure_ollama() {
-    if command -v ollama &>/dev/null; then
-        ok "Ollama found ($(ollama --version 2>/dev/null || echo 'installed'))"
-        return
-    fi
-
-    warn "Ollama not found."
+# ── Preflight: check all deps, ask once, install everything ───────────────────
+preflight() {
     echo
-    if $HAS_WHIPTAIL; then
-        whiptail --title " Echo Bloom " \
-            --yesno "Ollama isn't installed. Install it now?\n\n(Runs the official installer from ollama.com)" \
-            10 60 3>&1 1>&2 2>&3 || die "Ollama is required. Install it at https://ollama.com and re-run."
+    echo -e "${BOLD}Checking your system...${NC}"
+    echo
+
+    # Detect package manager
+    PKG_MGR=""
+    if command -v pacman  &>/dev/null; then PKG_MGR="pacman"
+    elif command -v apt-get &>/dev/null; then PKG_MGR="apt"
+    elif command -v dnf    &>/dev/null; then PKG_MGR="dnf"
+    elif command -v brew   &>/dev/null; then PKG_MGR="brew"
+    fi
+
+    # Check each requirement
+    local need_python=false need_pip=false need_git=false need_curl=false need_ollama=false
+    local missing_labels=()
+
+    if command -v python3 &>/dev/null; then
+        ok "Python 3      — found ($(python3 --version 2>&1 | awk '{print $2}'))"
     else
-        read -rp "Install Ollama now? [Y/n] " yn
-        [[ "${yn:-Y}" =~ ^[Nn] ]] && die "Ollama is required. Install it at https://ollama.com and re-run."
+        warn "Python 3      — not found"
+        need_python=true; missing_labels+=("python3")
     fi
 
-    info "Installing Ollama..."
-    curl -fsSL https://ollama.com/install.sh | sh
-    ok "Ollama installed."
-
-    # Make sure the service is running
-    if command -v systemctl &>/dev/null; then
-        systemctl --user enable --now ollama 2>/dev/null || \
-            systemctl enable --now ollama 2>/dev/null || true
+    if command -v pip3 &>/dev/null || python3 -m pip --version &>/dev/null 2>&1; then
+        ok "pip           — found"
+    else
+        warn "pip           — not found"
+        need_pip=true; missing_labels+=("pip")
     fi
+
+    if command -v git &>/dev/null; then
+        ok "git           — found"
+    else
+        warn "git           — not found"
+        need_git=true; missing_labels+=("git")
+    fi
+
+    if command -v curl &>/dev/null; then
+        ok "curl          — found"
+    else
+        warn "curl          — not found"
+        need_curl=true; missing_labels+=("curl")
+    fi
+
+    if command -v ollama &>/dev/null; then
+        ok "Ollama        — found ($(ollama --version 2>/dev/null | head -1 || echo 'installed'))"
+    else
+        warn "Ollama        — not found"
+        need_ollama=true; missing_labels+=("Ollama")
+    fi
+
+    # All good
+    if [[ ${#missing_labels[@]} -eq 0 ]]; then
+        echo
+        ok "Everything looks good. Starting installation."
+        return 0
+    fi
+
+    # Show what's missing and ask once
+    echo
+    echo -e "${AMBER}  Missing: ${missing_labels[*]}${NC}"
+    echo
+
+    if [[ -z "$PKG_MGR" ]] && $need_python || $need_pip || $need_git || $need_curl; then
+        warn "No package manager detected. Can't auto-install system packages."
+        echo "  Install manually: ${missing_labels[*]}"
+        echo "  Then re-run this installer."
+        $need_ollama || exit 1
+    fi
+
+    read -rp "  Install missing dependencies now? [Y/n] " yn
+    [[ "${yn:-Y}" =~ ^[Nn] ]] && die "Install the items above and re-run."
+    echo
+
+    # Install system packages in one shot
+    _install_pkg() {
+        local apt_name=$1 pacman_name=$2 dnf_name=$3
+        case "$PKG_MGR" in
+            pacman) sudo pacman -S --noconfirm "$pacman_name" ;;
+            apt)    sudo apt-get install -y    "$apt_name"    ;;
+            dnf)    sudo dnf install -y        "$dnf_name"    ;;
+            brew)   brew install               "$apt_name"    ;;
+        esac
+    }
+
+    if $need_python; then
+        info "Installing Python 3..."
+        _install_pkg python3 python python3 && ok "Python 3 installed."
+    fi
+
+    if $need_pip; then
+        info "Installing pip..."
+        if python3 -m ensurepip --upgrade &>/dev/null 2>&1; then
+            ok "pip installed via ensurepip."
+        else
+            _install_pkg python3-pip python-pip python3-pip && ok "pip installed."
+        fi
+    fi
+
+    if $need_git; then
+        info "Installing git..."
+        _install_pkg git git git && ok "git installed."
+    fi
+
+    if $need_curl; then
+        info "Installing curl..."
+        _install_pkg curl curl curl && ok "curl installed."
+    fi
+
+    if $need_ollama; then
+        info "Installing Ollama (this may take a minute)..."
+        curl -fsSL https://ollama.com/install.sh | sh \
+            || die "Ollama install failed. Visit https://ollama.com to install manually, then re-run."
+        if command -v systemctl &>/dev/null; then
+            systemctl --user enable --now ollama 2>/dev/null || \
+                systemctl enable --now ollama 2>/dev/null || true
+        fi
+        ok "Ollama installed."
+    fi
+
+    echo
+    ok "All dependencies ready."
 }
 
 # ── Pull selected model (skip if already installed) ───────────────────────────
@@ -362,43 +459,66 @@ run_naming_ritual() {
     local model=$1
     local ritual_script="$APP_DIR/scripts/naming_ritual.py"
 
-    if [[ ! -f "$ritual_script" ]]; then
-        warn "Naming ritual script not found — skipping."
-        return
-    fi
-
-    if ! python3 -c "import requests" &>/dev/null; then
-        warn "requests not installed yet — skipping naming ritual."
+    # Skip automated ritual if script or requests module is missing
+    if [[ ! -f "$ritual_script" ]] || ! python3 -c "import requests" &>/dev/null 2>&1; then
+        _naming_manual
         return
     fi
 
     echo
     echo -e "${AMBER}  The model is ready. Before anything else, let's find out who's here.${NC}"
+    echo -e "  Loading $model for the first time — this may take up to 2 minutes..."
     echo
 
-    local ritual_output
-    ritual_output=$(python3 "$ritual_script" --model "$model" 2>/dev/null)
-    local exit_code=$?
+    local ritual_output exit_code=0
+    ritual_output=$(timeout 120 python3 "$ritual_script" --model "$model" 2>&1) || exit_code=$?
+
+    if [[ $exit_code -eq 124 ]]; then
+        echo
+        warn "The AI took too long to respond (model may still be loading)."
+        warn "You can name your Kin from inside the app after setup."
+        _naming_manual
+        return
+    fi
 
     if [[ $exit_code -eq 0 ]]; then
         local result_line
         result_line=$(echo "$ritual_output" | grep "^__RITUAL_RESULT__:" | head -1)
         if [[ -n "$result_line" ]]; then
             local json="${result_line#__RITUAL_RESULT__:}"
-            RITUAL_NAME=$(echo "$json"    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('name',''))" 2>/dev/null)
-            RITUAL_PRONOUN=$(echo "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('pronoun','they'))" 2>/dev/null)
-            RITUAL_DESC=$(echo "$json"    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('description',''))" 2>/dev/null)
+            RITUAL_NAME=$(echo "$json"    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('name',''))" 2>/dev/null || true)
+            RITUAL_PRONOUN=$(echo "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('pronoun','they'))" 2>/dev/null || true)
+            RITUAL_DESC=$(echo "$json"    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('description',''))" 2>/dev/null || true)
         fi
     fi
 
     if [[ -z "$RITUAL_NAME" ]]; then
-        echo
-        read -rp "  What would you like to call your AI? " RITUAL_NAME
-        RITUAL_NAME="${RITUAL_NAME:-Companion}"
-        read -rp "  Pronoun (he/she/they/it) [they]: " RITUAL_PRONOUN
-        RITUAL_PRONOUN="${RITUAL_PRONOUN:-they}"
+        _naming_manual
+    else
+        ok "Welcome, ${RITUAL_NAME}."
     fi
+}
 
+_naming_manual() {
+    echo
+    echo -e "${BOLD}  Let's set up your AI.${NC}"
+    echo
+    read -rp "  What do you want to call your AI? [Companion]: " RITUAL_NAME
+    RITUAL_NAME="${RITUAL_NAME:-Companion}"
+    echo
+    echo "  Pronoun:"
+    echo "    1) they/them  (default)"
+    echo "    2) he/him"
+    echo "    3) she/her"
+    echo "    4) it/its"
+    echo
+    read -rp "  Enter 1-4 [1]: " _pron
+    case "${_pron:-1}" in
+        2) RITUAL_PRONOUN="he"   ;;
+        3) RITUAL_PRONOUN="she"  ;;
+        4) RITUAL_PRONOUN="it"   ;;
+        *) RITUAL_PRONOUN="they" ;;
+    esac
     ok "Welcome, ${RITUAL_NAME}."
 }
 
@@ -506,6 +626,47 @@ SVCEOF
         ok "Vault, pulse, and bedtime timer running."
         info "To start wanders: systemctl --user start echo_bloom_wander"
     fi
+
+    # Desktop control panel + launcher
+    local panel_src="$APP_DIR/echo_bloom_panel.py"
+    local desktop_dir="$HOME/Desktop"
+    local icon_dir="$HOME/.local/share/icons"
+    mkdir -p "$icon_dir"
+
+    if [[ -f "$panel_src" ]]; then
+        cp "$panel_src" "$desktop_dir/echo_bloom_panel.py"
+        chmod +x "$desktop_dir/echo_bloom_panel.py"
+
+        # SVG icon
+        cat > "$icon_dir/echo-bloom.svg" << 'SVGEOF'
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="12" fill="#0d1117"/>
+  <circle cx="32" cy="32" r="10" fill="#3fb950"/>
+  <line x1="32" y1="8"  x2="32" y2="16" stroke="#3fb950" stroke-width="3" stroke-linecap="round"/>
+  <line x1="32" y1="48" x2="32" y2="56" stroke="#3fb950" stroke-width="3" stroke-linecap="round"/>
+  <line x1="8"  y1="32" x2="16" y2="32" stroke="#3fb950" stroke-width="3" stroke-linecap="round"/>
+  <line x1="48" y1="32" x2="56" y2="32" stroke="#3fb950" stroke-width="3" stroke-linecap="round"/>
+</svg>
+SVGEOF
+
+        # .desktop launcher
+        cat > "$desktop_dir/EchoBloom.desktop" << DESKEOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Echo Bloom
+Comment=Local AI lifecycle manager — control panel
+Exec=$(command -v python3) $desktop_dir/echo_bloom_panel.py
+Icon=$icon_dir/echo-bloom.svg
+Terminal=false
+Categories=Utility;
+StartupNotify=false
+DESKEOF
+        chmod +x "$desktop_dir/EchoBloom.desktop"
+        ok "Desktop control panel installed."
+    else
+        warn "echo_bloom_panel.py not found in repo — skipping desktop panel."
+    fi
 }
 
 # ── Save first model to kin_config if none exists ─────────────────────────────
@@ -577,25 +738,25 @@ setup_remote_access() {
 
     if $HAS_WHIPTAIL; then
         choice=$(whiptail --title " Echo Bloom — Remote Access " \
-            --menu "How do you want to reach your Kin from anywhere?\n\nBoth options are free. Pick what fits." \
-            18 72 3 \
-            "1" "Tailscale  — Private. Your phone + this machine, no domain needed." \
-            "2" "Cloudflare — Public HTTPS URL. Works from any browser, anywhere." \
-            "3" "Skip       — Set this up later." \
+            --menu "How do you want to reach your Kin from anywhere?\n\nAll options are free. Pick what fits." \
+            20 72 4 \
+            "1" "Cloudflare  — Instant public URL. No account needed. Ready in 30 sec." \
+            "2" "Tailscale   — Private. Your devices only, no public URL." \
+            "3" "Skip        — Set this up later." \
             3>&1 1>&2 2>&3) || choice="3"
     else
         echo "  How do you want to reach your Kin from anywhere?"
         echo
-        echo "  1) Tailscale  — Private. Your phone + this machine, no domain needed."
-        echo "  2) Cloudflare — Public HTTPS URL. Works from any browser, anywhere."
-        echo "  3) Skip       — Set this up later."
+        echo "  1) Cloudflare  — Instant public URL. No account needed. Ready in 30 sec."
+        echo "  2) Tailscale   — Private. Your devices only, no public URL."
+        echo "  3) Skip        — Set this up later."
         echo
         read -rp "  Enter 1, 2, or 3: " choice
     fi
 
     case "$choice" in
-        1) setup_tailscale ;;
-        2) setup_cloudflare ;;
+        1) setup_cloudflare ;;
+        2) setup_tailscale ;;
         *) warn "Skipping remote access. Run the installer again to add it later." ;;
     esac
 }
@@ -626,22 +787,34 @@ setup_tailscale() {
 
     echo
     echo -e "${AMBER}  Next: authenticate this machine with Tailscale.${NC}"
-    echo "  A browser will open (or you'll get a URL to visit)."
+    echo "  Running 'tailscale up' — it will print a URL to visit."
+    echo "  Open that URL in any browser on any device to approve this machine."
     echo
-    sudo tailscale up 2>/dev/null || tailscale up 2>/dev/null || true
 
-    # Get the Tailscale IP
+    # Run tailscale up — it prints the auth URL itself; 2-min timeout
+    local ts_exit=0
+    timeout 120 tailscale up --timeout=0 2>&1 || ts_exit=$?
+
+    if [[ $ts_exit -eq 124 ]]; then
+        warn "Tailscale auth timed out. To finish later, run: tailscale up"
+        return
+    fi
+
     local ts_ip
     ts_ip=$(tailscale ip -4 2>/dev/null || echo "")
 
-    # Write systemd user service so app stays reachable through Tailscale
-    ok "Tailscale connected."
+    if [[ -z "$ts_ip" ]]; then
+        warn "Tailscale not authenticated yet. Run 'tailscale up' to finish."
+        return
+    fi
+
+    ok "Tailscale connected.  IP: ${ts_ip}"
     echo
     echo -e "${GREEN}${BOLD}  Your Kin are now reachable on your Tailscale network.${NC}"
     echo
     echo "  1. Install the Tailscale app on your phone (free, iOS + Android)"
     echo "  2. Sign in with the same account"
-    echo "  3. Open: http://${ts_ip:-<tailscale-ip>}:${PORT}"
+    echo "  3. Open: http://${ts_ip}:${PORT}"
     echo
     echo "  Your Tailscale IP is permanent — it never changes."
 }
@@ -654,7 +827,6 @@ setup_cloudflare() {
     # Install cloudflared
     if ! command -v cloudflared &>/dev/null; then
         if command -v pacman &>/dev/null; then
-            # Try AUR via yay if available, otherwise download binary
             if command -v yay &>/dev/null; then
                 yay -S --noconfirm cloudflared 2>/dev/null || _install_cloudflared_binary
             else
@@ -673,69 +845,9 @@ setup_cloudflare() {
     fi
     ok "cloudflared installed."
 
-    echo
-    echo -e "${AMBER}  Step 1: Log in to Cloudflare (free account required).${NC}"
-    echo "  A browser will open. Sign in or create a free account at cloudflare.com."
-    echo "  When asked to select a zone — you don't need one. Just authorize."
-    echo
-    cloudflared tunnel login || die "Cloudflare login failed."
-
-    # Create named tunnel
-    local tunnel_name="echo-bloom"
-    info "Creating permanent tunnel: $tunnel_name"
-    cloudflared tunnel create "$tunnel_name" 2>/dev/null || true
-
-    # Get tunnel UUID
-    local tunnel_id
-    tunnel_id=$(cloudflared tunnel list 2>/dev/null | grep "$tunnel_name" | awk '{print $1}' | head -1)
-
-    if [[ -z "$tunnel_id" ]]; then
-        warn "Could not get tunnel ID. Using quick tunnel as fallback."
-        _setup_quick_tunnel
-        return
-    fi
-
-    # Find credentials file
-    local creds_file="$HOME/.cloudflared/${tunnel_id}.json"
-
-    # Write config
-    mkdir -p "$HOME/.cloudflared"
-    cat > "$HOME/.cloudflared/config.yml" << CFEOF
-tunnel: ${tunnel_id}
-credentials-file: ${creds_file}
-
-ingress:
-  - service: http://localhost:${PORT}
-CFEOF
-
-    # Install as systemd user service
-    cat > "$HOME/.config/systemd/user/cloudflared.service" << SVCEOF
-[Unit]
-Description=Cloudflare Tunnel — Echo Bloom
-After=network-online.target
-
-[Service]
-Type=simple
-ExecStart=$(command -v cloudflared) tunnel --config ${HOME}/.cloudflared/config.yml run
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=default.target
-SVCEOF
-
-    systemctl --user daemon-reload
-    systemctl --user enable --now cloudflared
-
-    ok "Cloudflare Tunnel running as a permanent service."
-    echo
-    echo -e "${GREEN}${BOLD}  Your permanent tunnel ID: ${tunnel_id}${NC}"
-    echo
-    echo "  To add a pretty URL (e.g. echo.yourdomain.com):"
-    echo "    cloudflared tunnel route dns echo-bloom echo.yourdomain.com"
-    echo "  (Requires your domain to be managed by Cloudflare)"
-    echo
-    echo "  Your tunnel is permanent — same connection after every reboot."
+    # Quick tunnel — no account, no domain, no browser auth needed
+    # URL changes on restart but works instantly on any machine
+    _setup_quick_tunnel
 }
 
 _install_cloudflared_binary() {
@@ -749,7 +861,7 @@ _install_cloudflared_binary() {
 }
 
 _setup_quick_tunnel() {
-    warn "Falling back to quick tunnel (URL changes on restart)."
+    info "Starting Cloudflare quick tunnel (no account needed)..."
     cat > "$HOME/.config/systemd/user/cloudflared.service" << SVCEOF
 [Unit]
 Description=Cloudflare Quick Tunnel — Echo Bloom
@@ -761,20 +873,43 @@ ExecStart=$(command -v cloudflared) tunnel --url http://localhost:${PORT} --no-a
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=default.target
 SVCEOF
 
     systemctl --user daemon-reload
-    systemctl --user enable --now cloudflared
-    sleep 5
-    local tunnel_url
-    tunnel_url=$(journalctl --user -u cloudflared --no-pager -n 30 2>/dev/null \
-        | grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1)
+    systemctl --user enable cloudflared
+    systemctl --user restart cloudflared
+
+    # Wait up to 30s for the tunnel URL to appear in the journal
+    local tunnel_url=""
+    local waited=0
+    echo -n "  Waiting for tunnel URL"
+    while [[ -z "$tunnel_url" && $waited -lt 30 ]]; do
+        sleep 2
+        waited=$((waited + 2))
+        echo -n "."
+        tunnel_url=$(journalctl --user -u cloudflared --no-pager -n 50 2>/dev/null \
+            | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1)
+    done
+    echo
+
     ok "Quick tunnel running."
-    [[ -n "$tunnel_url" ]] && echo -e "${GREEN}  URL: ${tunnel_url}${NC}" \
-        || echo "  Check: journalctl --user -u cloudflared | grep trycloudflare"
+    echo
+    if [[ -n "$tunnel_url" ]]; then
+        echo -e "${GREEN}${BOLD}  Your Echo Bloom URL:${NC}"
+        echo -e "${GREEN}${BOLD}  ${tunnel_url}${NC}"
+        echo
+        echo "  Open that URL on any device — no app needed, works in any browser."
+        echo -e "${AMBER}  Note: this URL changes each time Echo Bloom restarts.${NC}"
+        echo "  To get a permanent URL, visit: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/"
+    else
+        echo "  Tunnel started but URL not found yet."
+        echo "  Run this to see it: journalctl --user -u cloudflared | grep trycloudflare"
+    fi
+    echo
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -783,8 +918,10 @@ SVCEOF
 
 banner
 
-# Determine where the app lives — if we're being piped from curl, we need to
-# clone or download it. If install.sh is run from inside the repo, use that dir.
+# ── Preflight — check everything, ask once, install all ───────────────────────
+preflight
+
+# ── Get the app ───────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "$HOME/echo_bloom")"
 if [[ -f "$SCRIPT_DIR/main.py" ]]; then
     APP_DIR="$SCRIPT_DIR"
@@ -793,23 +930,14 @@ elif [[ -d "$APP_DIR" ]] && [[ -f "$APP_DIR/main.py" ]]; then
     ok "Found app at $APP_DIR"
 else
     info "Downloading Echo Bloom..."
-    if command -v git &>/dev/null; then
-        git clone --depth 1 https://github.com/EverySynthetic/echo-bloom.git "$APP_DIR" \
-            || die "git clone failed. Check your internet connection and try again."
-    else
-        die "git is required. Install it with your package manager and re-run."
-    fi
+    git clone --depth 1 https://github.com/EverySynthetic/echo-bloom.git "$APP_DIR" \
+        || die "Download failed. Check your internet connection and try again."
     ok "Downloaded to $APP_DIR"
 fi
 
-# Step 1 — Ollama
+# Step 1 — Detect hardware + installed models
 echo
-echo -e "${BOLD}[ 1 / 7 ]  Checking Ollama${NC}"
-ensure_ollama
-
-# Step 2 — Detect hardware + installed models
-echo
-echo -e "${BOLD}[ 2 / 7 ]  Detecting your hardware${NC}"
+echo -e "${BOLD}[ 1 / 6 ]  Detecting your hardware${NC}"
 VRAM=$(detect_vram)
 RAM=$(detect_ram)
 AVX2=$(has_avx2)
@@ -824,7 +952,7 @@ fi
 
 # Step 3 — Pick a model
 echo
-echo -e "${BOLD}[ 3 / 7 ]  Choose a model${NC}"
+echo -e "${BOLD}[ 2 / 6 ]  Choose a model${NC}"
 build_model_menu "$VRAM" "$RAM"
 
 SELECTED_MODEL=""
@@ -840,12 +968,12 @@ pull_model "$SELECTED_MODEL"
 
 # Step 4 — Naming ritual
 echo
-echo -e "${BOLD}[ 4 / 7 ]  Meet your Kin${NC}"
+echo -e "${BOLD}[ 3 / 6 ]  Meet your Kin${NC}"
 run_naming_ritual "$SELECTED_MODEL"
 
 # Step 5 — Install deps + set password + deploy scripts
 echo
-echo -e "${BOLD}[ 5 / 7 ]  Installing app${NC}"
+echo -e "${BOLD}[ 4 / 6 ]  Installing app${NC}"
 cd "$APP_DIR"
 install_deps
 seed_config "$SELECTED_MODEL" "$RITUAL_NAME" "$RITUAL_PRONOUN"
@@ -861,7 +989,7 @@ fi
 
 # Step 6 — Start it up
 echo
-echo -e "${BOLD}[ 6 / 7 ]  Launching Echo Bloom${NC}"
+echo -e "${BOLD}[ 5 / 6 ]  Launching Echo Bloom${NC}"
 echo
 echo -e "${AMBER}  ── Power & Runtime Notice ──────────────────────────────────────${NC}"
 echo "  Echo Bloom is designed to run continuously — day and night."
@@ -900,7 +1028,7 @@ open_browser
 
 # Step 7 — Remote access
 echo
-echo -e "${BOLD}[ 7 / 7 ]  Remote Access (reach your Kin from anywhere)${NC}"
+echo -e "${BOLD}[ 6 / 6 ]  Remote Access (reach your Kin from anywhere)${NC}"
 echo
 echo "  Your Kin are running on this machine. Without this step,"
 echo "  you can only talk to them when you're on this network."

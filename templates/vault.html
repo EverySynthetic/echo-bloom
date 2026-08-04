@@ -26,6 +26,9 @@
            onkeydown="if(event.key==='Enter') resetAndLoad()">
     <button class="vault-search-btn" onclick="resetAndLoad()">SEARCH</button>
     <button class="vault-search-btn vault-clear-btn" onclick="clearFilters()">CLEAR</button>
+    <label class="vault-toggle-label">
+      <input type="checkbox" id="hide-heartbeat" checked onchange="resetAndLoad()"> hide pulse
+    </label>
   </div>
 
   <!-- Semantic mode controls -->
@@ -100,7 +103,7 @@ async function loadMeta() {
 
 // ── Feed ─────────────────────────────────────────────────────────────────────
 
-function resetAndLoad() { offset = 0; loadFeed(); }
+function resetAndLoad() { offset = -1; loadFeed(); }  // -1 = jump to newest
 
 function clearFilters() {
   document.getElementById('filter-layer').value  = '';
@@ -113,13 +116,32 @@ async function loadFeed() {
   const layer  = document.getElementById('filter-layer').value;
   const author = document.getElementById('filter-author').value;
   const search = document.getElementById('filter-search').value.trim();
+  const hideHeartbeat = document.getElementById('hide-heartbeat').checked;
 
   document.getElementById('vault-entries').innerHTML = '<div class="vault-loading">loading…</div>';
 
+  const excludeLayer = (hideHeartbeat && !layer) ? 'heartbeat' : '';
+
+  // resolve offset: -1 means "start at most recent page" — needs total first
+  if (offset === -1) {
+    try {
+      const cp = new URLSearchParams();
+      if (layer)        cp.set('layer',         layer);
+      if (author)       cp.set('author',        author);
+      if (search)       cp.set('search',        search);
+      if (excludeLayer) cp.set('exclude_layer', excludeLayer);
+      const cr = await fetch(`/api/vault/count?${cp}`);
+      const cd = await cr.json();
+      const t = cd.total || 0;
+      offset = Math.max(0, t - LIMIT);
+    } catch(e) { offset = 0; }
+  }
+
   const params = new URLSearchParams({limit: LIMIT, offset});
-  if (layer)  params.set('layer',  layer);
-  if (author) params.set('author', author);
-  if (search) params.set('search', search);
+  if (layer)        params.set('layer',         layer);
+  if (author)       params.set('author',        author);
+  if (search)       params.set('search',        search);
+  if (excludeLayer) params.set('exclude_layer', excludeLayer);
 
   try {
     const r = await fetch(`/api/vault?${params}`);
@@ -153,10 +175,6 @@ function showVaultOffline(url) {
         Or configure a different vault URL in <a href="/onboard?step=3">Setup → Vault</a>.
       </div>
     </div>`;
-}
-
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function goPage(dir) {
