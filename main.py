@@ -501,7 +501,11 @@ async def api_transcribe(request: Request, _=Depends(require_auth)):
     if not audio:
         return {"ok": False, "error": "No audio data."}
 
-    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
+    # Firefox records audio/ogg, Chrome records audio/webm — pick the right extension
+    ct = request.headers.get("content-type", "audio/webm").lower()
+    suffix = ".ogg" if "ogg" in ct else ".webm"
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
         f.write(audio)
         tmp = f.name
     try:
@@ -515,17 +519,101 @@ async def api_transcribe(request: Request, _=Depends(require_auth)):
         _os.unlink(tmp)
 
 
+# ── Voice management ───────────────────────────────────────────────────────────
+
+_PIPER_DIRS = [
+    Path.home() / "piper",
+    Path.home() / "piper-voices",
+    Path.home() / ".local/share/piper",
+    Path("/usr/share/piper"),
+    Path("/usr/local/share/piper"),
+    Path("/usr/share/piper-tts"),
+]
+
+
+def _voice_label(path: str) -> str:
+    """en_US-lessac-medium → Lessac Medium"""
+    stem  = Path(path).stem
+    parts = stem.split("-")
+    if len(parts) >= 3:
+        return f"{parts[-2].capitalize()} {parts[-1].capitalize()}"
+    return stem
+
+
+def _find_voice_file(filename: str) -> str | None:
+    for d in _PIPER_DIRS:
+        if d.is_dir():
+            candidate = d / filename
+            if candidate.exists():
+                return str(candidate)
+    return None
+
+
+def _list_installed_voices() -> list[dict]:
+    seen, voices = set(), []
+    for d in _PIPER_DIRS:
+        if d.is_dir():
+            for f in sorted(d.glob("*.onnx")):
+                if f.name not in seen:
+                    seen.add(f.name)
+                    voices.append({
+                        "file":  f.name,
+                        "path":  str(f),
+                        "label": _voice_label(str(f)),
+                    })
+    return voices
+
+
+def _voice_for_kin(kin_name: str) -> str | None:
+    """Return absolute path to the preferred voice for this Kin, or first installed."""
+    cfg = _load_kin_cfg()
+    for k in cfg.get("kin", []):
+        if k.get("name") == kin_name and k.get("voice"):
+            path = _find_voice_file(k["voice"])
+            if path:
+                return path
+    return _find_piper_voice()
+
+
+@app.get("/api/speech/voices/installed")
+async def api_voices_installed(_=Depends(require_auth)):
+    return {"voices": _list_installed_voices()}
+
+
+@app.get("/api/kin/{name}/voice")
+async def api_get_kin_voice(name: str, _=Depends(require_auth)):
+    cfg = _load_kin_cfg()
+    for k in cfg.get("kin", []):
+        if k.get("name") == name:
+            return {"voice_file": k.get("voice", "")}
+    return {"voice_file": ""}
+
+
+@app.post("/api/kin/{name}/voice")
+async def api_set_kin_voice(name: str, request: Request, _=Depends(require_auth)):
+    body       = await request.json()
+    voice_file = (body.get("voice_file") or "").strip()
+    cfg = _load_kin_cfg()
+    for k in cfg.get("kin", []):
+        if k.get("name") == name:
+            k["voice"] = voice_file
+            _save_kin_cfg(cfg)
+            return {"ok": True}
+    return {"ok": False, "error": f"Kin '{name}' not found"}
+
+
 @app.post("/api/tts")
 async def api_tts(request: Request, _=Depends(require_auth)):
     from fastapi.responses import Response as _Resp
     import tempfile, os as _os
 
-    body  = await request.json()
-    text  = (body.get("text") or "").strip()[:3000]
+    body     = await request.json()
+    text     = (body.get("text")     or "").strip()[:3000]
+    kin_name = (body.get("kin_name") or "").strip()
     if not text:
         raise HTTPException(400, "No text.")
 
-    voice = _find_piper_voice()
+    voice = _voice_for_kin(kin_name) if kin_name else _find_piper_voice()
     if not voice:
         raise HTTPException(503, "No Piper voice model found. Download one to ~/piper/ or ~/piper-voices/.")
 
@@ -704,8 +792,16 @@ async def api_pull_model(request: Request, _=Depends(require_auth)):
 
 # ── Vault browser ──────────────────────────────────────────────────────────────
 
-QDRANT_URL = "http://localhost:6333"
-_DEFAULT_VAULT = "http://localhost:8765"
+_DEFAULT_QDRANT = "http://192.168.1.115:6333"
+_DEFAULT_VAULT  = "http://localhost:8765"
+
+
+def _qdrant_url() -> str:
+    try:
+        cfg = json.loads(_KIN_CONFIG_PATH.read_text())
+        return cfg.get("qdrant_url") or _DEFAULT_QDRANT
+    except Exception:
+        return _DEFAULT_QDRANT
 
 
 def _vault_url() -> str:
@@ -811,7 +907,7 @@ async def api_vault_semantic(q: str, limit: int = 10, _=Depends(require_auth)):
                 return {"results": [], "error": "embedding failed"}
 
             async with session.post(
-                f"{QDRANT_URL}/collections/kin_memories/points/search",
+                f"{_qdrant_url()}/collections/kin_memories/points/search",
                 json={"vector": embedding, "limit": min(limit, 20), "with_payload": True},
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as r:
@@ -908,6 +1004,142 @@ async def api_core_remove(request: Request, _=Depends(require_auth)):
                 _save_kin_cfg(cfg)
             return {"ok": True, "count": len(core)}
     return {"ok": False, "error": f"Kin '{kin_name}' not found"}
+
+
+# ── Ingestion pipeline ─────────────────────────────────────────────────────────
+# Embed text (or fetched URL) into Qdrant + store full doc in the vault.
+# The embedded chunks become available in kin_memory's semantic search.
+
+import re as _re
+import uuid as _uuid
+
+
+def _chunk_text(text: str, max_chars: int = 700) -> list[str]:
+    """Split text into chunks at paragraph/sentence boundaries."""
+    chunks: list[str] = []
+    for para in _re.split(r'\n{2,}', text):
+        para = para.strip()
+        if not para:
+            continue
+        if len(para) <= max_chars:
+            chunks.append(para)
+            continue
+        buf = ""
+        for sent in _re.split(r'(?<=[.!?])\s+', para):
+            if len(buf) + len(sent) + 1 <= max_chars:
+                buf = (buf + " " + sent).strip() if buf else sent
+            else:
+                if buf:
+                    chunks.append(buf)
+                buf = sent if len(sent) <= max_chars else ""
+                if len(sent) > max_chars:
+                    for i in range(0, len(sent), max_chars):
+                        chunks.append(sent[i:i + max_chars])
+        if buf:
+            chunks.append(buf)
+    return [c for c in chunks if len(c.strip()) > 20]
+
+
+@app.post("/api/ingest")
+async def api_ingest(request: Request, _=Depends(require_auth)):
+    body     = await request.json()
+    kin_name = (body.get("kin_name") or "").strip()
+    content  = (body.get("content")  or "").strip()
+    url      = (body.get("url")      or "").strip()
+    source   = (body.get("source")   or "").strip()
+
+    if not kin_name:
+        return {"ok": False, "error": "kin_name required"}
+
+    if url and not content:
+        if not _fetch_allowed(url):
+            from urllib.parse import urlparse
+            host = urlparse(url).netloc.lstrip("www.")
+            return {"ok": False, "error": f"{host} is not in the fetch whitelist — paste the text instead"}
+        try:
+            content = await _fetch_page_text(url, max_chars=8000)
+        except Exception as e:
+            return {"ok": False, "error": f"Fetch failed: {e}"}
+        if not source:
+            source = url
+
+    if not content:
+        return {"ok": False, "error": "content or url required"}
+    if not source:
+        source = "manual ingest"
+
+    # Store full document in vault
+    vault    = _vault_url()
+    vault_id = None
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{vault}/remember",
+                json={
+                    "author":     kin_name,
+                    "layer":      "document",
+                    "content":    f"[Source: {source}]\n\n{content[:6000]}",
+                    "tags":       f"ingested",
+                    "visibility": "shared",
+                },
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as r:
+                rdata = await r.json()
+                vault_id = rdata.get("id")
+    except Exception:
+        pass  # vault offline — still embed
+
+    # Chunk and embed into Qdrant
+    chunks   = _chunk_text(content)
+    if not chunks:
+        return {"ok": False, "error": "No usable text after chunking"}
+
+    qdrant   = _qdrant_url()
+    embedded = 0
+    errors: list[str] = []
+
+    async with aiohttp.ClientSession() as session:
+        for chunk in chunks:
+            try:
+                async with session.post(
+                    "http://localhost:11434/api/embeddings",
+                    json={"model": "nomic-embed-text", "prompt": chunk},
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as r:
+                    emb = (await r.json()).get("embedding", [])
+                if not emb:
+                    errors.append("embedding returned empty")
+                    continue
+
+                async with session.put(
+                    f"{qdrant}/collections/kin_memories/points",
+                    json={"points": [{
+                        "id":      str(_uuid.uuid4()),
+                        "vector":  emb,
+                        "payload": {
+                            "author":   kin_name,
+                            "content":  chunk,
+                            "layer":    "document",
+                            "source":   source,
+                            "vault_id": vault_id,
+                        },
+                    }]},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as r:
+                    if r.status < 300:
+                        embedded += 1
+                    else:
+                        errors.append(f"qdrant {r.status}")
+            except Exception as e:
+                errors.append(str(e)[:60])
+
+    return {
+        "ok":       embedded > 0,
+        "chunks":   len(chunks),
+        "embedded": embedded,
+        "vault_id": vault_id,
+        "errors":   errors[:3],
+    }
 
 
 # ── Onboarding ─────────────────────────────────────────────────────────────────

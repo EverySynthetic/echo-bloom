@@ -82,6 +82,10 @@
                   onclick="handleTTSClick()" title="Toggle voice response">
             ♪
           </button>
+          <select class="voice-select" id="voice-select" title="Voice for {{ kin.name }}"
+                  onchange="setKinVoice(this.value)">
+            <option value="">voice…</option>
+          </select>
           {% else %}
           <span class="tool-btn tool-disabled"
                 title="Speech requires 8GB+ RAM (you have {{ hw.ram_gb }}GB RAM)">◎</span>
@@ -320,17 +324,25 @@ async function captureVision() {
 
 async function initRecording() {
   const stream = await navigator.mediaDevices.getUserMedia({audio: true});
-  mediaRecorder = new MediaRecorder(stream, {mimeType: 'audio/webm'});
+  // Firefox records ogg/opus; Chrome records webm. Detect what's supported.
+  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
+    ? 'audio/ogg;codecs=opus'
+    : '';
+  const opts = mimeType ? {mimeType} : {};
+  mediaRecorder = new MediaRecorder(stream, opts);
+  const recordingMime = mediaRecorder.mimeType || 'audio/webm';
   mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
   mediaRecorder.onstop = async () => {
-    const blob = new Blob(audioChunks, {type: 'audio/webm'});
+    const blob = new Blob(audioChunks, {type: recordingMime});
     audioChunks = [];
     const btn = document.getElementById('mic-btn');
     btn.textContent = '…';
     try {
       const r = await fetch('/api/transcribe', {
         method: 'POST',
-        headers: {'Content-Type': 'audio/webm'},
+        headers: {'Content-Type': recordingMime},
         body: blob,
       });
       const d = await r.json();
@@ -338,6 +350,8 @@ async function initRecording() {
         const input = document.getElementById('chat-input');
         input.value = (input.value ? input.value + ' ' : '') + d.text;
         input.focus();
+      } else if (!d.ok) {
+        console.warn('Transcription failed:', d.error);
       }
     } catch(err) { console.warn('Transcription error:', err); }
     finally { btn.textContent = '◎'; btn.classList.remove('tool-active'); }
@@ -536,7 +550,7 @@ async function speakText(text) {
     const r = await fetch('/api/tts', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text}),
+      body: JSON.stringify({text, kin_name: KIN_NAME}),
     });
     if (!r.ok) {
       console.warn('TTS failed:', r.status, await r.text().catch(() => ''));
@@ -553,6 +567,42 @@ async function speakText(text) {
     src.connect(_audioCtx.destination);
     src.start(0);
   } catch(err) { console.warn('TTS error:', err); }
+}
+
+// ── Voice select dropdown ─────────────────────────────────────────────────────
+
+async function loadVoiceSelect() {
+  const sel = document.getElementById('voice-select');
+  if (!sel) return;
+  try {
+    const [instR, kinR] = await Promise.all([
+      fetch('/api/speech/voices/installed'),
+      fetch(`/api/kin/${encodeURIComponent(KIN_NAME)}/voice`),
+    ]);
+    const instD = await instR.json();
+    const kinD  = await kinR.json();
+    const voices = instD.voices || [];
+    if (!voices.length) { sel.style.display = 'none'; return; }
+    sel.innerHTML = '<option value="">voice…</option>';
+    for (const v of voices) {
+      const opt = document.createElement('option');
+      opt.value = v.file;
+      opt.textContent = v.label;
+      sel.appendChild(opt);
+    }
+    if (kinD.voice) sel.value = kinD.voice;
+  } catch(e) { if (sel) sel.style.display = 'none'; }
+}
+
+async function setKinVoice(voiceFile) {
+  if (!voiceFile) return;
+  try {
+    await fetch(`/api/kin/${encodeURIComponent(KIN_NAME)}/voice`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({voice: voiceFile}),
+    });
+  } catch(e) { console.warn('setKinVoice failed:', e); }
 }
 
 // ── Thoughts sidebar ──────────────────────────────────────────────────────────
@@ -577,6 +627,7 @@ async function loadThoughts() {
 }
 
 loadThoughts();
+loadVoiceSelect();
 restoreHistory();
 </script>
 {% endblock %}

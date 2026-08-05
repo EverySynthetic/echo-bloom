@@ -1782,3 +1782,106 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   white-space: pre-wrap;
   line-height: 1.6;
 }
+
+/* ── Voice select (kin.html toolbar) ──────────────────────────────────────── */
+
+.voice-select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: var(--font);
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  max-width: 150px;
+  transition: border-color 0.15s;
+}
+.voice-select:hover { border-color: var(--text-dim); }
+.voice-select:focus { outline: none; border-color: var(--kin-color); color: var(--text); }
+
+/* ── Ingest tab (vault.html) ──────────────────────────────────────────────── */
+
+.ingest-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 8px 0;
+}
+.ingest-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.ingest-label {
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+  min-width: 70px;
+}
+.ingest-input {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.ingest-input:focus { outline: none; border-color: var(--kin-color); }
+.ingest-textarea {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 8px;
+  border-radius: 3px;
+  width: 100%;
+  resize: vertical;
+  min-height: 120px;
+}
+.ingest-textarea:focus { outline: none; border-color: var(--kin-color); }
+.ingest-select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.ingest-select:focus { outline: none; border-color: var(--kin-color); color: var(--text); }
+.ingest-submit {
+  background: none;
+  border: 1px solid var(--kin-color);
+  color: var(--kin-color);
+  font-family: var(--font);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  padding: 6px 18px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.ingest-submit:hover { background: var(--kin-color); color: var(--bg); }
+.ingest-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+.ingest-status {
+  font-size: 11px;
+  padding: 6px 0;
+  min-height: 20px;
+  color: var(--text-dim);
+}
+.ingest-status.ok  { color: var(--green); }
+.ingest-status.err { color: var(--red); }
+.ingest-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}

@@ -10,6 +10,7 @@
     <div class="vault-mode-toggle">
       <button class="mode-btn mode-active" id="btn-feed" onclick="setMode('feed')">FEED</button>
       <button class="mode-btn" id="btn-semantic" onclick="setMode('semantic')">SEMANTIC SEARCH</button>
+      <button class="mode-btn" id="btn-ingest" onclick="setMode('ingest')">INGEST</button>
     </div>
   </div>
 
@@ -29,6 +30,41 @@
     <label class="vault-toggle-label">
       <input type="checkbox" id="hide-heartbeat" checked onchange="resetAndLoad()"> hide pulse
     </label>
+  </div>
+
+  <!-- Ingest mode controls -->
+  <div class="vault-controls" id="ingest-controls" style="display:none; flex-direction:column; align-items:stretch">
+    <div class="ingest-form">
+      <div class="ingest-row">
+        <span class="ingest-label">for kin</span>
+        <select class="ingest-select" id="ingest-kin">
+          {% for k in all_kin %}
+          <option value="{{ k.name }}">{{ k.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="ingest-row">
+        <span class="ingest-label">URL</span>
+        <input class="ingest-input" id="ingest-url" type="url"
+               placeholder="https://… (optional — fetches page text)"
+               autocomplete="off">
+      </div>
+      <div class="ingest-row">
+        <span class="ingest-label">source</span>
+        <input class="ingest-input" id="ingest-source" type="text"
+               placeholder="label for this document (e.g. Wikipedia: Mena AR)"
+               autocomplete="off">
+      </div>
+      <div>
+        <textarea class="ingest-textarea" id="ingest-text"
+                  placeholder="Paste text here — or leave blank if using a URL above"></textarea>
+        <div class="ingest-hint">Text is chunked into ~700-char segments, embedded, and stored in Qdrant + vault so it shows up in semantic search.</div>
+      </div>
+      <div class="ingest-row">
+        <button class="ingest-submit" id="ingest-btn" onclick="doIngest()">INGEST</button>
+        <span class="ingest-status" id="ingest-status"></span>
+      </div>
+    </div>
   </div>
 
   <!-- Semantic mode controls -->
@@ -72,10 +108,13 @@ function setMode(m) {
   mode = m;
   document.getElementById('btn-feed').classList.toggle('mode-active', m === 'feed');
   document.getElementById('btn-semantic').classList.toggle('mode-active', m === 'semantic');
+  document.getElementById('btn-ingest').classList.toggle('mode-active', m === 'ingest');
   document.getElementById('feed-controls').style.display     = m === 'feed'     ? 'flex' : 'none';
   document.getElementById('semantic-controls').style.display = m === 'semantic' ? 'flex' : 'none';
+  document.getElementById('ingest-controls').style.display   = m === 'ingest'   ? 'flex' : 'none';
   document.getElementById('vault-pagination').style.display  = m === 'feed'     ? 'flex' : 'none';
   if (m === 'feed') loadFeed();
+  else if (m === 'ingest') document.getElementById('vault-entries').innerHTML = '';
   else document.getElementById('vault-entries').innerHTML = '<div class="vault-empty">Enter a query to search memory by meaning.</div>';
 }
 
@@ -350,6 +389,56 @@ async function flagCore(kin_name, content, btn) {
       alert(d.error || 'Could not flag memory.');
     }
   } catch(e) { btn.textContent = '!'; }
+}
+
+// ── Ingest ────────────────────────────────────────────────────────────────────
+
+async function doIngest() {
+  const kinName = document.getElementById('ingest-kin').value.trim();
+  const url     = document.getElementById('ingest-url').value.trim();
+  const text    = document.getElementById('ingest-text').value.trim();
+  const source  = document.getElementById('ingest-source').value.trim();
+  const status  = document.getElementById('ingest-status');
+  const btn     = document.getElementById('ingest-btn');
+
+  if (!kinName) { status.textContent = 'Select a Kin first.'; status.className = 'ingest-status err'; return; }
+  if (!url && !text) { status.textContent = 'Paste text or enter a URL.'; status.className = 'ingest-status err'; return; }
+
+  btn.disabled = true;
+  status.textContent = url && !text ? 'Fetching page…' : 'Ingesting…';
+  status.className = 'ingest-status';
+
+  try {
+    const body = {kin_name: kinName};
+    if (url)    body.url    = url;
+    if (text)   body.content = text;
+    if (source) body.source  = source;
+
+    const r = await fetch('/api/ingest', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      status.textContent = `Done — ${d.embedded}/${d.chunks} chunks embedded` +
+        (d.vault_id ? `, vault #${d.vault_id}` : '') +
+        (d.errors && d.errors.length ? ` (${d.errors.length} errors)` : '');
+      status.className = 'ingest-status ok';
+      // clear form on success
+      document.getElementById('ingest-url').value  = '';
+      document.getElementById('ingest-text').value = '';
+      document.getElementById('ingest-source').value = '';
+    } else {
+      status.textContent = d.error || 'Ingest failed.';
+      status.className = 'ingest-status err';
+    }
+  } catch(e) {
+    status.textContent = 'Network error: ' + e.message;
+    status.className = 'ingest-status err';
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
