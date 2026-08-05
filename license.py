@@ -195,11 +195,15 @@ def _read_trial_token() -> dict | None:
             expiry = int(parts[1])
             now    = int(time.time())
             if now > expiry:
-                return {"state": "expired"}
+                # Grace period over and we were offline; delete so ensure_trial_start
+                # can reach the server now that it's presumably reachable.
+                TRIAL_TOKEN_PATH.unlink(missing_ok=True)
+                return None
             days_left = max(0, int((expiry - now) / 86400) + 1)
             return {"state": "trial", "days_left": days_left, "offline": True}
         except Exception:
-            return {"state": "invalid"}
+            TRIAL_TOKEN_PATH.unlink(missing_ok=True)
+            return None
     return _parse_trial_token(raw)
 
 
