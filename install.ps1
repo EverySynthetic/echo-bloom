@@ -238,22 +238,57 @@ try {
     $ICON_ICO = ""
 }
 
-# ── Launcher ──────────────────────────────────────────────────────────────────
+# ── Launcher (manual / fallback — opens a visible window with uvicorn output) ─
 
-# Starts uvicorn, then a hidden background process polls :8090 and opens the
-# browser once the app is ready — no manual "go to localhost:8090" needed.
 $bat = @"
 @echo off
 chcp 65001 >nul
 title Echo Bloom
 cd /d "$APP_DIR"
 echo Starting Echo Bloom on http://localhost:8090 ...
-start "" powershell -WindowStyle Hidden -Command "& { `$i=0; while(`$i -lt 30){ Start-Sleep 2; try{ `$r=Invoke-WebRequest http://localhost:8090 -UseBasicParsing -TimeoutSec 2 -EA Stop; if(`$r.StatusCode -lt 500){ Start-Process 'http://localhost:8090'; break } }catch{}; `$i++ } }"
 $PYTHON -m uvicorn main:app --host 0.0.0.0 --port 8090
 pause
 "@
 [System.IO.File]::WriteAllText($LAUNCHER, $bat, [System.Text.Encoding]::UTF8)
 Write-Step "Launcher: $LAUNCHER" 'Green'
+
+# ── Browser opener (what the icon actually runs — no visible window) ───────────
+#
+# Checks if the app is already up. If yes, open browser immediately.
+# If not, start the scheduled task and wait up to 30 s before opening.
+# This is what the Start Menu shortcut and desktop icon call.
+
+$OPENER = "$INSTALL_DIR\open_echo_bloom.ps1"
+$opener_script = @'
+$url  = 'http://localhost:8090'
+$task = 'EchoBloom'
+
+function Test-AppUp {
+    try {
+        $r = Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+        return $r.StatusCode -lt 500
+    } catch { return $false }
+}
+
+if (Test-AppUp) {
+    Start-Process $url
+    exit
+}
+
+# Not up — make sure the scheduled task is running
+Start-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
+
+# Wait up to 30 s then open
+for ($i = 0; $i -lt 15; $i++) {
+    Start-Sleep 2
+    if (Test-AppUp) { Start-Process $url; exit }
+}
+
+# Last resort: open anyway and let the browser handle it
+Start-Process $url
+'@
+[System.IO.File]::WriteAllText($OPENER, $opener_script, [System.Text.Encoding]::UTF8)
+Write-Step "Browser opener: $OPENER" 'Green'
 
 # ── Scheduled task (auto-start at login, survives window close) ───────────────
 
@@ -275,13 +310,14 @@ try {
     Write-Step "Scheduled task skipped: $_" 'Yellow'
 }
 
-# ── Start Menu shortcut ───────────────────────────────────────────────────────
+# ── Start Menu shortcut (runs hidden opener, no CMD window) ──────────────────
 
 try {
     $wsh = New-Object -ComObject WScript.Shell
     $lnk = $wsh.CreateShortcut("$SHORTCUT_DIR\Echo Bloom.lnk")
-    $lnk.TargetPath       = $LAUNCHER
-    $lnk.WorkingDirectory = $APP_DIR
+    $lnk.TargetPath       = 'powershell.exe'
+    $lnk.Arguments        = "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$OPENER`""
+    $lnk.WorkingDirectory = $INSTALL_DIR
     $lnk.Description      = 'Echo Bloom — Local AI Lifecycle Manager'
     if ($ICON_ICO -and (Test-Path $ICON_ICO)) { $lnk.IconLocation = "$ICON_ICO, 0" }
     $lnk.Save()
