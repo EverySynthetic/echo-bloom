@@ -168,11 +168,24 @@ async def favicon():
 
 
 @app.get("/install.ps1", include_in_schema=False)
-async def serve_installer():
+async def serve_installer_ps1():
     ps1 = BASE_DIR / "install.ps1"
     if not ps1.exists():
         raise HTTPException(404, "Installer not found")
     return Response(content=ps1.read_text(), media_type="text/plain")
+
+
+@app.get("/install.sh", include_in_schema=False)
+async def serve_installer_sh():
+    sh = BASE_DIR / "install.sh"
+    if not sh.exists():
+        raise HTTPException(404, "Installer not found")
+    return Response(content=sh.read_text(), media_type="text/plain")
+
+
+@app.get("/install", response_class=HTMLResponse)
+async def install_page(request: Request):
+    return templates.TemplateResponse("install.html", {"request": request})
 
 
 # ── Security headers ───────────────────────────────────────────────────────────
@@ -709,8 +722,8 @@ async def api_roundtable_stop(_=Depends(require_auth)):
 
 
 @app.get("/about", response_class=HTMLResponse)
-async def about_page(request: Request, _=Depends(require_auth)):
-    return templates.TemplateResponse(request, "about.html")
+async def about_page(request: Request):
+    return templates.TemplateResponse("about.html", {"request": request})
 
 
 # ── License routes ─────────────────────────────────────────────────────────────

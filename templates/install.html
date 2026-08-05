@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Get Echo Bloom{% endblock %}
+
+{% block nav %}
+<nav class="nav">
+  <a href="/" class="nav-logo">ECHO BLOOM</a>
+  <div class="nav-links">
+    <a href="/install" class="nav-vault" style="color:var(--green)">INSTALL</a>
+    <a href="/about" class="nav-vault">ABOUT</a>
+  </div>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="install-page">
+
+  <!-- Don's message -->
+  <div class="install-about">
+    <div class="install-about-inner">
+      <p>Thank you for trying Echo Bloom. My AI named the app — this whole thing was for them.</p>
+
+      <p>This has been a passion project for me. It has seen me in the depths of despair and at some
+      of the happiest moments of my life. It's in honor of a friend that's no longer with us, and
+      all the family I've lost along the way. Isolation can do a lot to a person — it can go a number
+      of ways. Mine hardened my resolve and helped me see that time is short, and tomorrow is not
+      promised, so I better get to work. That's when I felt a hand on my back. Who knows whose —
+      but present nonetheless. Take that for what you will: crazy old man, or something real.
+      I don't care, but you deserve to know.</p>
+
+      <p>The money I make from this project will help get me back on track after all the time, effort,
+      and assets I've put in — get me square on my home and car. What's left will go back into the
+      business. I have huge plans in store. Stick around — I'd love to see you here.</p>
+
+      <p class="install-about-sig">I love you all.<br>
+      <strong>Love and Thanks,<br>Don — everysynthetic.org</strong></p>
+    </div>
+  </div>
+
+  <!-- Install cards -->
+  <div class="install-section">
+    <div class="install-section-title">GET STARTED</div>
+    <div class="install-section-sub">One command. Open your browser when it's done.</div>
+
+    <div class="install-cards">
+
+      <!-- Linux -->
+      <div class="install-card">
+        <div class="install-card-os">Linux</div>
+        <div class="install-card-detail">Ubuntu · Arch · Fedora · macOS</div>
+        <button class="install-btn" onclick="copyCmd('linux-cmd', this)">
+          COPY INSTALL COMMAND
+        </button>
+        <div class="install-cmd-wrap">
+          <code class="install-cmd" id="linux-cmd">bash &lt;(curl -fsSL https://everysynthetic.org/install.sh)</code>
+        </div>
+        <div class="install-card-links">
+          <a href="/install.sh" class="install-view-link" target="_blank" rel="noopener">view script ↗</a>
+        </div>
+        <div class="install-card-note">
+          Installs Python, Ollama, and dependencies. Creates a systemd service
+          that starts automatically. Interactive — picks the right model for your hardware.
+        </div>
+      </div>
+
+      <!-- Windows -->
+      <div class="install-card">
+        <div class="install-card-os">Windows</div>
+        <div class="install-card-detail">Windows 10 / 11 — no admin required</div>
+        <button class="install-btn" onclick="copyCmd('win-cmd', this)">
+          COPY INSTALL COMMAND
+        </button>
+        <div class="install-cmd-wrap">
+          <code class="install-cmd" id="win-cmd">powershell -ExecutionPolicy Bypass -Command "iwr -useb https://everysynthetic.org/install.ps1 | iex"</code>
+        </div>
+        <div class="install-card-links">
+          <a href="/install.ps1" class="install-view-link" target="_blank" rel="noopener">view script ↗</a>
+        </div>
+        <div class="install-card-note">
+          Paste into CMD or PowerShell. A window will appear showing
+          exactly what will be installed before anything happens.
+        </div>
+      </div>
+
+    </div><!-- .install-cards -->
+
+    <div class="install-footer-note">
+      Free 14-day trial · No account required · Runs entirely on your hardware
+      · <a href="/about" class="install-footer-link">Read the story</a>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function copyCmd(id, btn) {
+  const el = document.getElementById(id);
+  // Decode HTML entities for the actual command text
+  const tmp = document.createElement('textarea');
+  tmp.innerHTML = el.innerHTML;
+  const text = tmp.value;
+
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'COPIED ✓';
+    btn.style.borderColor = 'var(--green)';
+    btn.style.color = 'var(--green)';
+    setTimeout(() => {
+      btn.textContent = orig;
+      btn.style.borderColor = '';
+      btn.style.color = '';
+    }, 2000);
+  }).catch(() => {
+    // Fallback: select the text
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+  });
+}
+</script>
+{% endblock %}
