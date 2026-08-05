@@ -36,6 +36,8 @@ The following will be checked and installed if missing:
     aiohttp          async HTTP
     jinja2           templating
     python-multipart file uploads
+    bcrypt           password hashing
+    cryptography     license verification
     faster-whisper   speech-to-text
     qdrant-client    memory search
 
@@ -190,6 +192,7 @@ $packages = @(
     'jinja2',
     'python-multipart',
     'bcrypt',
+    'cryptography',
     'faster-whisper',
     'qdrant-client'
 )

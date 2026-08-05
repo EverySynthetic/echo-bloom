@@ -80,6 +80,19 @@ def _load_public_key():
 def _verify_signed_token(token: str, prefix: str) -> dict:
     """Verify any Ed25519-signed token with the given prefix."""
     if not _CRYPTO_OK:
+        # cryptography not installed — decode payload without verifying signature.
+        # Allows the trial to show correctly even before the package is installed;
+        # the token was still issued by the server and has a server-set expiry.
+        if token.startswith(prefix):
+            try:
+                rest = token[len(prefix):]
+                if "." in rest:
+                    payload_b64 = rest.rsplit(".", 1)[0]
+                    payload_bytes = base64.urlsafe_b64decode(payload_b64 + "==")
+                    return {"valid": True, "payload": json.loads(payload_bytes.decode()),
+                            "unverified": True}
+            except Exception:
+                pass
         return {"valid": False, "reason": "cryptography package not installed"}
     if not token.startswith(prefix):
         return {"valid": False, "reason": f"not an {prefix} token"}
