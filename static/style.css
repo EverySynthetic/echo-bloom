@@ -1501,6 +1501,21 @@ a:hover { color: var(--text); }
 /* ── Kin node selector dot ──────────────────────────────────────── */
 .onboard-node-dot       { font-size: 12px; margin-left: 8px; }
 
+/* ── Model picker (no-models panel) ─────────────────────────────── */
+.onboard-model-grid     { display: flex; flex-direction: column; gap: 6px; }
+.onboard-model-row      { display: flex; align-items: center; justify-content: space-between;
+                          padding: 8px 10px; background: var(--surface2); border: 1px solid var(--border);
+                          border-radius: 4px; cursor: pointer; gap: 10px; }
+.onboard-model-row:hover { border-color: var(--amber); }
+.onboard-model-selected  { border-color: var(--green) !important; }
+.onboard-model-info     { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.onboard-model-name     { font-size: 0.85rem; font-weight: 600; color: var(--text); }
+.onboard-model-meta     { font-size: 0.75rem; color: var(--text-muted); }
+.onboard-btn-pull-sm    { padding: 4px 10px; font-size: 0.75rem; background: var(--surface2);
+                          border: 1px solid var(--green); color: var(--green);
+                          border-radius: 3px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+.onboard-btn-pull-sm:hover { background: var(--green); color: var(--bg); }
+
 .vault-toggle-label { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-dim); cursor:pointer; white-space:nowrap; }
 .vault-toggle-label input { accent-color: var(--green); cursor:pointer; }
 

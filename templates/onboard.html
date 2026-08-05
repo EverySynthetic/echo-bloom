@@ -85,8 +85,26 @@
       <select class="onboard-input" id="kin-model-select" style="display:none">
         <option value="">— pick a model —</option>
       </select>
-      <input class="onboard-input" id="kin-model-input" style="display:none"
-             placeholder="model name — e.g. llama3.2:latest, mistral:7b">
+
+      <!-- shown when Ollama has no models yet -->
+      <div id="kin-no-models" style="display:none">
+        <div class="onboard-desc" style="margin:8px 0 12px;color:var(--text-dim);font-size:0.82rem">
+          No models installed yet. Pick one below and pull it — or type a name if you know what you want.
+        </div>
+        <div class="onboard-model-grid" id="kin-model-grid"></div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+          <input class="onboard-input" id="kin-model-input" style="flex:1;margin:0"
+                 placeholder="or type a model name — e.g. llama3.2:latest">
+          <button class="onboard-btn" style="margin:0;padding:6px 14px;font-size:0.8rem"
+                  onclick="pullTyped()">PULL</button>
+        </div>
+        <div id="kin-pull-bar" style="display:none;margin-top:10px">
+          <div style="background:var(--border);border-radius:3px;height:6px;overflow:hidden">
+            <div id="kin-pull-fill" style="height:100%;width:0%;background:var(--green);transition:width 0.3s"></div>
+          </div>
+          <div id="kin-pull-status" style="font-size:0.78rem;color:var(--text-dim);margin-top:4px"></div>
+        </div>
+      </div>
 
       <select class="onboard-input" id="kin-pronoun">
         <option value="they">they/them</option>
@@ -378,24 +396,111 @@ function onNodeSelect() {
   }
 }
 
+const RECOMMENDED_MODELS = [
+  { name: 'llama3.2:latest',  label: 'Llama 3.2 3B',   size: '2.0 GB',  vram: '4 GB+',  note: 'fast, great for most machines' },
+  { name: 'llama3.2:1b',      label: 'Llama 3.2 1B',   size: '1.3 GB',  vram: '2 GB+',  note: 'smallest, lowest VRAM' },
+  { name: 'llama3.1:8b',      label: 'Llama 3.1 8B',   size: '4.7 GB',  vram: '8 GB+',  note: 'smart, widely used' },
+  { name: 'mistral:7b',       label: 'Mistral 7B',      size: '4.1 GB',  vram: '8 GB+',  note: 'strong reasoning' },
+  { name: 'gemma3:4b',        label: 'Gemma 3 4B',      size: '3.3 GB',  vram: '6 GB+',  note: 'Google, great for chat' },
+  { name: 'qwen2.5:7b',       label: 'Qwen 2.5 7B',     size: '4.4 GB',  vram: '8 GB+',  note: 'multilingual, capable' },
+  { name: 'phi4-mini:latest', label: 'Phi-4 Mini',      size: '2.5 GB',  vram: '4 GB+',  note: 'Microsoft, efficient' },
+  { name: 'llama3.1:70b',     label: 'Llama 3.1 70B',   size: '40 GB',   vram: '48 GB+', note: 'large — needs serious hardware' },
+];
+
+function renderModelGrid() {
+  const grid = document.getElementById('kin-model-grid');
+  grid.innerHTML = RECOMMENDED_MODELS.map(m => `
+    <div class="onboard-model-row" onclick="selectRecommended('${m.name}')">
+      <div class="onboard-model-info">
+        <span class="onboard-model-name">${m.label}</span>
+        <span class="onboard-model-meta">${m.size} · ${m.vram} · ${m.note}</span>
+      </div>
+      <button class="onboard-btn onboard-btn-pull-sm" onclick="event.stopPropagation();pullModel('${m.name}')">PULL</button>
+    </div>
+  `).join('');
+}
+
+function selectRecommended(name) {
+  document.getElementById('kin-model-input').value = name;
+  document.querySelectorAll('.onboard-model-row').forEach(r => r.classList.remove('onboard-model-selected'));
+  event.currentTarget.classList.add('onboard-model-selected');
+}
+
+async function pullModel(name) {
+  const host = document.getElementById('kin-node-select').value ||
+               document.getElementById('kin-host').value.trim() ||
+               'http://localhost:11434';
+  document.getElementById('kin-model-input').value = name;
+  const bar    = document.getElementById('kin-pull-bar');
+  const fill   = document.getElementById('kin-pull-fill');
+  const status = document.getElementById('kin-pull-status');
+  bar.style.display = 'block';
+  fill.style.width  = '0%';
+  status.textContent = 'starting pull…';
+  setStatus('kin-status', `pulling ${name}…`, null);
+  try {
+    const r = await fetch('/api/pull-model', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({host, model: name}),
+    });
+    const reader = r.body.getReader();
+    const dec    = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const d = JSON.parse(line.slice(6));
+          if (d.error) { status.textContent = 'Error: ' + d.error; setStatus('kin-status', 'pull failed', false); return; }
+          if (d.status === 'done') {
+            fill.style.width = '100%';
+            status.textContent = 'done!';
+            setStatus('kin-status', `${name} ready — fill in a name and click ADD KIN`, true);
+            // Reload model dropdown now that it's available
+            await loadModels(host);
+            return;
+          }
+          if (d.total && d.completed) {
+            const pct = Math.round((d.completed / d.total) * 100);
+            fill.style.width = pct + '%';
+            status.textContent = (d.status || 'pulling') + ' ' + pct + '%';
+          } else if (d.status) {
+            status.textContent = d.status;
+          }
+        } catch(e) {}
+      }
+    }
+  } catch(e) {
+    status.textContent = 'error: ' + e.message;
+    setStatus('kin-status', 'pull failed', false);
+  }
+}
+
+function pullTyped() {
+  const name = document.getElementById('kin-model-input').value.trim();
+  if (!name) { setStatus('kin-status', 'enter a model name first', false); return; }
+  pullModel(name);
+}
+
 async function loadModels(hostOverride) {
   const host = hostOverride ||
                document.getElementById('kin-node-select').value ||
                document.getElementById('kin-host').value.trim();
   if (!host) { setStatus('kin-status', 'pick a node first', false); return false; }
-  setStatus('kin-status', 'loading models…', null);
+  setStatus('kin-status', 'checking for models…', null);
   try {
     const r = await fetch('/api/onboard/models', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({host}),
     });
     const d = await r.json();
-    if (!d.ok || !d.models.length) {
-      setStatus('kin-status', d.error || "no models found — is Ollama running on that machine?", false);
-      return false;
-    }
-    const sel = document.getElementById('kin-model-select');
-    const inp = document.getElementById('kin-model-input');
+    const sel      = document.getElementById('kin-model-select');
+    const noModels = document.getElementById('kin-no-models');
     if (d.ok && d.models.length) {
       sel.innerHTML = '<option value="">— pick a model —</option>';
       d.models.forEach(m => {
@@ -403,19 +508,20 @@ async function loadModels(hostOverride) {
         opt.value = m; opt.textContent = m;
         sel.appendChild(opt);
       });
-      sel.style.display = 'block';
-      inp.style.display = 'none';
+      sel.style.display  = 'block';
+      noModels.style.display = 'none';
       setStatus('kin-status', `${d.models.length} model${d.models.length !== 1 ? 's' : ''} available`, true);
     } else {
-      sel.style.display = 'none';
-      inp.style.display = 'block';
-      setStatus('kin-status', d.error || "no models pulled yet — type a model name to pull on first run", null);
+      sel.style.display  = 'none';
+      noModels.style.display = 'block';
+      renderModelGrid();
+      setStatus('kin-status', d.ok ? 'no models installed — pull one below' : (d.error || 'could not reach Ollama'), d.ok ? null : false);
     }
     return true;
   } catch(e) {
-    const inp = document.getElementById('kin-model-input');
-    inp.style.display = 'block';
-    setStatus('kin-status', "couldn't reach Ollama — type a model name to use", null);
+    document.getElementById('kin-no-models').style.display = 'block';
+    renderModelGrid();
+    setStatus('kin-status', "couldn't reach Ollama", false);
     return false;
   }
 }
@@ -424,7 +530,7 @@ function addKin() {
   const name    = document.getElementById('kin-name').value.trim();
   const sel     = document.getElementById('kin-model-select');
   const inp     = document.getElementById('kin-model-input');
-  const model   = (sel.style.display !== 'none' ? sel.value : inp.value).trim();
+  const model   = (sel.style.display !== 'none' && sel.value ? sel.value : inp.value).trim();
   const host    = document.getElementById('kin-node-select').value ||
                   document.getElementById('kin-host').value.trim();
   const pronoun = document.getElementById('kin-pronoun').value;
@@ -439,6 +545,7 @@ function addKin() {
   document.getElementById('kin-name').value = '';
   document.getElementById('kin-model-select').value = '';
   document.getElementById('kin-model-input').value = '';
+  document.getElementById('kin-pull-bar').style.display = 'none';
   setStatus('kin-status', `${name} added.`, true);
 }
 
