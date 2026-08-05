@@ -1236,6 +1236,51 @@ async def api_onboard_models(request: Request, _=Depends(require_auth)):
         return {"ok": False, "error": str(e)}
 
 
+@app.get("/api/onboard/vram")
+async def api_onboard_vram(_=Depends(require_auth)):
+    """Detect GPU VRAM in GB. Returns 0 if detection fails."""
+    import subprocess, re, sys
+    vram = 0
+    # nvidia-smi (works on Linux and Windows with NVIDIA GPU)
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0:
+            total_mb = sum(int(x.strip()) for x in r.stdout.strip().splitlines() if x.strip().isdigit())
+            vram = total_mb // 1024
+    except Exception:
+        pass
+    # rocm-smi (AMD on Linux)
+    if vram == 0:
+        try:
+            r = subprocess.run(
+                ["rocm-smi", "--showmeminfo", "vram"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0:
+                for line in r.stdout.splitlines():
+                    m = re.search(r'(\d+)', line)
+                    if m and "Total" in line:
+                        vram = int(m.group(1)) // 1024 // 1024
+        except Exception:
+            pass
+    # Windows WMI fallback (no nvidia-smi)
+    if vram == 0 and sys.platform == "win32":
+        try:
+            r = subprocess.run(
+                ["powershell", "-Command",
+                 "(Get-WmiObject Win32_VideoController | Measure-Object AdapterRAM -Sum).Sum"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0 and r.stdout.strip().isdigit():
+                vram = int(r.stdout.strip()) // 1024 // 1024 // 1024
+        except Exception:
+            pass
+    return {"vram": vram}
+
+
 @app.post("/api/onboard/test-model")
 async def api_test_model(request: Request, _=Depends(require_auth)):
     body  = await request.json()

@@ -1515,6 +1515,14 @@ a:hover { color: var(--text); }
                           border: 1px solid var(--green); color: var(--green);
                           border-radius: 3px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
 .onboard-btn-pull-sm:hover { background: var(--green); color: var(--bg); }
+.onboard-model-warn     { border-color: var(--amber) !important; opacity: 0.75; }
+.onboard-model-warn:hover { opacity: 1; }
+.onboard-model-overflow-hdr { font-size: 0.78rem; color: var(--amber); padding: 8px 4px 4px;
+                               border-top: 1px solid var(--border); margin-top: 4px; }
+.onboard-model-overflow-btn { font-size: 0.8rem; color: var(--amber); padding: 8px 10px;
+                               border: 1px dashed var(--amber); border-radius: 4px; margin-top: 6px;
+                               cursor: pointer; text-align: center; opacity: 0.7; }
+.onboard-model-overflow-btn:hover { opacity: 1; background: var(--surface2); }
 
 .vault-toggle-label { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-dim); cursor:pointer; white-space:nowrap; }
 .vault-toggle-label input { accent-color: var(--green); cursor:pointer; }

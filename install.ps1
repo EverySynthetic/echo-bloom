@@ -124,15 +124,26 @@ foreach ($cmd in @('python', 'python3', 'py')) {
 if (-not $PYTHON) {
     if (Test-Cmd 'winget') {
         Install-Winget 'Python.Python.3.11' 'Python 3.11'
+        Write-Step "Waiting for Python to settle..." 'DarkGray'
+        Start-Sleep -Seconds 5
+        Refresh-Path
     } else {
         Write-Step "winget not found — downloading Python 3.11 directly..." 'Yellow'
         $tmp = "$env:TEMP\python_setup.exe"
         Get-File 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe' $tmp 'Python 3.11'
         Start-Process -FilePath $tmp -ArgumentList '/quiet','InstallAllUsers=0','PrependPath=1' -Wait
-        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 5
         Refresh-Path
     }
-    $PYTHON = 'python'
+    # Re-detect after install — winget may have registered a different command name
+    $PYTHON = $null
+    foreach ($cmd in @('python', 'python3', 'py')) {
+        try {
+            $v = & $cmd --version 2>&1
+            if ($v -match '3\.(1[0-9]|[2-9]\d)') { $PYTHON = $cmd; break }
+        } catch {}
+    }
+    if (-not $PYTHON) { $PYTHON = 'python' }
 }
 
 Write-Step "Python: OK  ($(& $PYTHON --version 2>&1))" 'Green'
@@ -142,14 +153,24 @@ Write-Step "Python: OK  ($(& $PYTHON --version 2>&1))" 'Green'
 if (-not (Test-Cmd 'ollama')) {
     if (Test-Cmd 'winget') {
         Install-Winget 'Ollama.Ollama' 'Ollama'
+        Write-Step "Waiting for Ollama to settle..." 'DarkGray'
+        Start-Sleep -Seconds 5
+        Refresh-Path
     } else {
         Write-Step "Downloading Ollama installer..." 'Yellow'
         $tmp = "$env:TEMP\OllamaSetup.exe"
         Get-File 'https://ollama.com/download/OllamaSetup.exe' $tmp 'Ollama'
         Start-Process -FilePath $tmp -ArgumentList '/SILENT' -Wait
-        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 5
         Refresh-Path
     }
+}
+
+# Give Ollama's background service a moment to start after a fresh install
+if (-not (Test-Cmd 'ollama')) {
+    Write-Step "Ollama not yet on PATH — waiting a bit more..." 'Yellow'
+    Start-Sleep -Seconds 8
+    Refresh-Path
 }
 
 Write-Step "Ollama: OK" 'Green'
@@ -159,6 +180,8 @@ Write-Step "Ollama: OK" 'Green'
 if (-not (Test-Cmd 'ffmpeg')) {
     if (Test-Cmd 'winget') {
         Install-Winget 'Gyan.FFmpeg' 'ffmpeg'
+        Start-Sleep -Seconds 3
+        Refresh-Path
     } else {
         Write-Step "ffmpeg not found and winget unavailable — voice features may be limited" 'Yellow'
     }

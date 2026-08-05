@@ -396,34 +396,84 @@ function onNodeSelect() {
   }
 }
 
-const RECOMMENDED_MODELS = [
-  { name: 'llama3.2:latest',  label: 'Llama 3.2 3B',   size: '2.0 GB',  vram: '4 GB+',  note: 'fast, great for most machines' },
-  { name: 'llama3.2:1b',      label: 'Llama 3.2 1B',   size: '1.3 GB',  vram: '2 GB+',  note: 'smallest, lowest VRAM' },
-  { name: 'llama3.1:8b',      label: 'Llama 3.1 8B',   size: '4.7 GB',  vram: '8 GB+',  note: 'smart, widely used' },
-  { name: 'mistral:7b',       label: 'Mistral 7B',      size: '4.1 GB',  vram: '8 GB+',  note: 'strong reasoning' },
-  { name: 'gemma3:4b',        label: 'Gemma 3 4B',      size: '3.3 GB',  vram: '6 GB+',  note: 'Google, great for chat' },
-  { name: 'qwen2.5:7b',       label: 'Qwen 2.5 7B',     size: '4.4 GB',  vram: '8 GB+',  note: 'multilingual, capable' },
-  { name: 'phi4-mini:latest', label: 'Phi-4 Mini',      size: '2.5 GB',  vram: '4 GB+',  note: 'Microsoft, efficient' },
-  { name: 'llama3.1:70b',     label: 'Llama 3.1 70B',   size: '40 GB',   vram: '48 GB+', note: 'large — needs serious hardware' },
+// Model tiers — mirrors install.sh build_model_menu() exactly
+const MODEL_TIERS = [
+  // tier 0 — always safe (any hardware, even CPU-only)
+  { name: 'llama3.2:3b',        label: 'Llama 3.2 3B',        size: '2.0 GB', minVram: 0,  note: 'lightweight, fast conversational' },
+  { name: 'phi4-mini:latest',   label: 'Phi-4 Mini (3.8B)',   size: '2.3 GB', minVram: 0,  note: 'Microsoft — high reasoning density' },
+  { name: 'qwen2.5-coder:1.5b', label: 'Qwen 2.5 Coder 1.5B', size: '1.2 GB', minVram: 0,  note: 'coding specialist, fast autocomplete' },
+  // tier 1 — 8 GB VRAM
+  { name: 'llama3.1:8b',        label: 'Llama 3.1 8B',        size: '5.0 GB', minVram: 8,  note: 'reliable open-weights standard' },
+  { name: 'qwen2.5-coder:7b',   label: 'Qwen 2.5 Coder 7B',  size: '5.0 GB', minVram: 8,  note: 'king of 8GB coding models' },
+  { name: 'deepseek-r1:8b',     label: 'DeepSeek R1 8B',      size: '5.0 GB', minVram: 8,  note: 'step-by-step reasoning specialist' },
+  { name: 'gemma2:9b',          label: 'Gemma 2 9B',          size: '5.5 GB', minVram: 8,  note: 'strong prose, deep context' },
+  // tier 2 — 12 GB VRAM
+  { name: 'llama3.1:8b-q8_0',  label: 'Llama 3.1 8B Q8',    size: '8.5 GB', minVram: 12, note: 'max quality 8B — full precision' },
+  { name: 'deepseek-r1:14b',    label: 'DeepSeek R1 14B',     size: '9.0 GB', minVram: 12, note: 'heavy analytical reasoning' },
+  { name: 'qwen2.5:14b',        label: 'Qwen 2.5 14B',        size: '9.0 GB', minVram: 12, note: 'strong multilingual + structured output' },
+  // tier 3 — 16 GB VRAM
+  { name: 'mistral-small:24b',  label: 'Mistral Small 24B',   size: '15.0 GB', minVram: 16, note: 'agentic logic, concise writing' },
+  // tier 4 — 20 GB VRAM
+  { name: 'mixtral:8x7b',       label: 'Mixtral 8x7B (MoE)',  size: '16.0 GB', minVram: 20, note: 'classic MoE, 47B effective params' },
+  { name: 'deepseek-r1:32b',    label: 'DeepSeek R1 32B',     size: '20.0 GB', minVram: 20, note: 'top-tier open reasoning' },
+  { name: 'qwen2.5-coder:32b',  label: 'Qwen 2.5 Coder 32B', size: '20.0 GB', minVram: 20, note: 'frontier local coding' },
+  // tier 5 — 48 GB VRAM
+  { name: 'llama3.3:70b',       label: 'Llama 3.3 70B',       size: '40.0 GB', minVram: 48, note: 'ultimate local dense — needs 48GB+' },
 ];
 
-function renderModelGrid() {
-  const grid = document.getElementById('kin-model-grid');
-  grid.innerHTML = RECOMMENDED_MODELS.map(m => `
-    <div class="onboard-model-row" onclick="selectRecommended('${m.name}')">
-      <div class="onboard-model-info">
-        <span class="onboard-model-name">${m.label}</span>
-        <span class="onboard-model-meta">${m.size} · ${m.vram} · ${m.note}</span>
-      </div>
-      <button class="onboard-btn onboard-btn-pull-sm" onclick="event.stopPropagation();pullModel('${m.name}')">PULL</button>
-    </div>
-  `).join('');
+let _vram = -1;         // -1 = not yet fetched
+let _showOverflow = false;
+
+async function getVram() {
+  if (_vram >= 0) return _vram;
+  try {
+    const r = await fetch('/api/onboard/vram');
+    const d = await r.json();
+    _vram = d.vram || 0;
+  } catch(e) { _vram = 0; }
+  return _vram;
 }
 
-function selectRecommended(name) {
+async function renderModelGrid() {
+  const vram = await getVram();
+  const grid = document.getElementById('kin-model-grid');
+  const fits     = MODEL_TIERS.filter(m => m.minVram <= vram);
+  const overflow = MODEL_TIERS.filter(m => m.minVram > vram);
+
+  let rows = fits.map(m => modelRow(m, false)).join('');
+
+  if (overflow.length > 0) {
+    if (_showOverflow) {
+      rows += `<div class="onboard-model-overflow-hdr">⚠ models beyond your detected VRAM (${vram} GB) — instability or OOM likely</div>`;
+      rows += overflow.map(m => modelRow(m, true)).join('');
+    } else {
+      rows += `<div class="onboard-model-overflow-btn" onclick="showOverflow()">⚠ I wouldn't do this — show models beyond my VRAM (${vram} GB detected)</div>`;
+    }
+  }
+
+  grid.innerHTML = rows;
+}
+
+function modelRow(m, warn) {
+  const warnClass = warn ? ' onboard-model-warn' : '';
+  return `<div class="onboard-model-row${warnClass}" onclick="selectRecommended('${m.name}', event)">
+    <div class="onboard-model-info">
+      <span class="onboard-model-name">${m.label}</span>
+      <span class="onboard-model-meta">${m.size}${m.minVram ? ' · needs ' + m.minVram + ' GB VRAM' : ' · runs on any hardware'} · ${m.note}</span>
+    </div>
+    <button class="onboard-btn onboard-btn-pull-sm" onclick="event.stopPropagation();pullModel('${m.name}')">PULL</button>
+  </div>`;
+}
+
+function showOverflow() {
+  _showOverflow = true;
+  renderModelGrid();
+}
+
+function selectRecommended(name, e) {
   document.getElementById('kin-model-input').value = name;
   document.querySelectorAll('.onboard-model-row').forEach(r => r.classList.remove('onboard-model-selected'));
-  event.currentTarget.classList.add('onboard-model-selected');
+  if (e && e.currentTarget) e.currentTarget.classList.add('onboard-model-selected');
 }
 
 async function pullModel(name) {
@@ -514,13 +564,13 @@ async function loadModels(hostOverride) {
     } else {
       sel.style.display  = 'none';
       noModels.style.display = 'block';
-      renderModelGrid();
+      await renderModelGrid();
       setStatus('kin-status', d.ok ? 'no models installed — pull one below' : (d.error || 'could not reach Ollama'), d.ok ? null : false);
     }
     return true;
   } catch(e) {
     document.getElementById('kin-no-models').style.display = 'block';
-    renderModelGrid();
+    await renderModelGrid();
     setStatus('kin-status', "couldn't reach Ollama", false);
     return false;
   }
