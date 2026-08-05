@@ -855,17 +855,13 @@ SVCEOF
         cp "$panel_src" "$desktop_dir/echo_bloom_panel.py"
         chmod +x "$desktop_dir/echo_bloom_panel.py"
 
-        # SVG icon
-        cat > "$icon_dir/echo-bloom.svg" << 'SVGEOF'
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="12" fill="#0d1117"/>
-  <circle cx="32" cy="32" r="10" fill="#3fb950"/>
-  <line x1="32" y1="8"  x2="32" y2="16" stroke="#3fb950" stroke-width="3" stroke-linecap="round"/>
-  <line x1="32" y1="48" x2="32" y2="56" stroke="#3fb950" stroke-width="3" stroke-linecap="round"/>
-  <line x1="8"  y1="32" x2="16" y2="32" stroke="#3fb950" stroke-width="3" stroke-linecap="round"/>
-  <line x1="48" y1="32" x2="56" y2="32" stroke="#3fb950" stroke-width="3" stroke-linecap="round"/>
-</svg>
-SVGEOF
+        # Install icon from app static files
+        local icon_dest="$icon_dir/hicolor/512x512/apps/echo-bloom.png"
+        mkdir -p "$(dirname "$icon_dest")"
+        if [[ -f "$APP_DIR/static/icons/icon-512.png" ]]; then
+            cp "$APP_DIR/static/icons/icon-512.png" "$icon_dest"
+            gtk-update-icon-cache "$icon_dir/hicolor" 2>/dev/null || true
+        fi
 
         # .desktop launcher
         cat > "$desktop_dir/EchoBloom.desktop" << DESKEOF
@@ -875,7 +871,7 @@ Type=Application
 Name=Echo Bloom
 Comment=Local AI lifecycle manager — control panel
 Exec=$(command -v python3) $desktop_dir/echo_bloom_panel.py
-Icon=$icon_dir/echo-bloom.svg
+Icon=echo-bloom
 Terminal=false
 Categories=Utility;
 StartupNotify=false
