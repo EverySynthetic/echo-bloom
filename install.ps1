@@ -252,6 +252,26 @@ pause
 [System.IO.File]::WriteAllText($LAUNCHER, $bat, [System.Text.Encoding]::UTF8)
 Write-Step "Launcher: $LAUNCHER" 'Green'
 
+# ── Scheduled task (auto-start at login, survives window close) ───────────────
+
+try {
+    $action    = New-ScheduledTaskAction -Execute $PYTHON `
+                   -Argument "-m uvicorn main:app --host 0.0.0.0 --port 8090" `
+                   -WorkingDirectory $APP_DIR
+    $trigger   = New-ScheduledTaskTrigger -AtLogon
+    $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+                   -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0 `
+                   -RestartInterval (New-TimeSpan -Minutes 2) -RestartCount 5
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME `
+                   -LogonType Interactive -RunLevel Highest
+    Unregister-ScheduledTask -TaskName 'EchoBloom' -Confirm:$false -ErrorAction SilentlyContinue
+    Register-ScheduledTask -TaskName 'EchoBloom' -Action $action -Trigger $trigger `
+                           -Settings $settings -Principal $principal | Out-Null
+    Write-Step "Scheduled task: registered (auto-starts at login)" 'Green'
+} catch {
+    Write-Step "Scheduled task skipped: $_" 'Yellow'
+}
+
 # ── Start Menu shortcut ───────────────────────────────────────────────────────
 
 try {
