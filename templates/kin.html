@@ -483,6 +483,22 @@ if (micBtn) {
 
 // ── Speech — TTS ──────────────────────────────────────────────────────────────
 
+let _audioCtx = null;
+
+function _unlockAudio() {
+  // Browsers block audio.play() without a prior user gesture.
+  // Call this on the button click so future plays are permitted.
+  try {
+    if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (_audioCtx.state === 'suspended') _audioCtx.resume();
+    const buf = _audioCtx.createBuffer(1, 1, 22050);
+    const src = _audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(_audioCtx.destination);
+    src.start(0);
+  } catch(e) {}
+}
+
 function toggleTTS() {
   ttsEnabled = !ttsEnabled;
   const btn = document.getElementById('tts-btn');
@@ -492,6 +508,7 @@ function toggleTTS() {
 
 async function handleTTSClick() {
   if (ttsEnabled) { toggleTTS(); return; }
+  _unlockAudio(); // unlock while we still have the user gesture
   await ensureSpeech(() => toggleTTS());
 }
 
@@ -502,12 +519,15 @@ async function speakText(text) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({text}),
     });
-    if (!r.ok) return;
+    if (!r.ok) {
+      console.warn('TTS failed:', r.status, await r.text().catch(() => ''));
+      return;
+    }
     const blob = await r.blob();
     const url  = URL.createObjectURL(blob);
     const audio = new Audio(url);
     audio.onended = () => URL.revokeObjectURL(url);
-    audio.play();
+    audio.play().catch(err => console.warn('Audio play blocked:', err));
   } catch(err) { console.warn('TTS error:', err); }
 }
 

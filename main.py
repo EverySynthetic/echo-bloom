@@ -337,8 +337,13 @@ async def api_thoughts(name: str, limit: int = 10, _=Depends(require_auth)):
     kin = cl.KIN_BY_NAME.get(name)
     if not kin:
         raise HTTPException(status_code=404)
-    db = kin["db"]
-    if not os.path.exists(db):
+    # Try configured db path first, then standard fallback location
+    candidates = []
+    if kin.get("db"):
+        candidates.append(kin["db"])
+    candidates.append(str(Path.home() / ".local/share/echo_bloom/kin" / name.lower() / "thoughts.db"))
+    db = next((p for p in candidates if os.path.exists(p)), None)
+    if not db:
         return {"thoughts": []}
     try:
         conn = sqlite3.connect(db, timeout=5)
@@ -473,6 +478,16 @@ async def api_vision(name: str, request: Request, _=Depends(require_auth)):
 
 # ── Speech endpoints ────────────────────────────────────────────────────────────
 
+_whisper_model = None
+
+def _get_whisper():
+    global _whisper_model
+    if _whisper_model is None:
+        from faster_whisper import WhisperModel
+        _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+    return _whisper_model
+
+
 @app.post("/api/transcribe")
 async def api_transcribe(request: Request, _=Depends(require_auth)):
     import tempfile, os as _os
@@ -484,10 +499,9 @@ async def api_transcribe(request: Request, _=Depends(require_auth)):
         f.write(audio)
         tmp = f.name
     try:
-        from faster_whisper import WhisperModel
-        model    = WhisperModel("base", device="cpu", compute_type="int8")
-        segs, _  = model.transcribe(tmp, language="en")
-        text     = " ".join(s.text.strip() for s in segs).strip()
+        model   = _get_whisper()
+        segs, _ = model.transcribe(tmp, language="en")
+        text    = " ".join(s.text.strip() for s in segs).strip()
         return {"ok": True, "text": text}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -1392,13 +1406,6 @@ async def api_onboard_save(request: Request, _=Depends(require_auth)):
 
     palette = ["#4fc3f7", "#a5d6a7", "#ce93d8", "#fff176", "#ffab91", "#f48fb1", "#80cbc4"]
     kin_list = body.get("kin", [])
-    for i, k in enumerate(kin_list):
-        k["name"] = _sanitize_kin_name(k.get("name", ""))
-        if not k.get("color"):
-            k["color"] = palette[i % len(palette)]
-        k.setdefault("db", "")
-        k.setdefault("space", "")
-        k.setdefault("pronoun", "—")
 
     existing = {}
     if config_path.exists():
@@ -1406,6 +1413,19 @@ async def api_onboard_save(request: Request, _=Depends(require_auth)):
             existing = json.loads(config_path.read_text())
         except Exception:
             pass
+
+    # Index existing kin by name so we can preserve db/space paths across saves
+    existing_kin_by_name = {k["name"]: k for k in existing.get("kin", [])}
+
+    for i, k in enumerate(kin_list):
+        k["name"] = _sanitize_kin_name(k.get("name", ""))
+        if not k.get("color"):
+            k["color"] = palette[i % len(palette)]
+        # Preserve existing db/space paths — wizard doesn't edit these
+        prev = existing_kin_by_name.get(k["name"], {})
+        k.setdefault("db",      prev.get("db", ""))
+        k.setdefault("space",   prev.get("space", ""))
+        k.setdefault("pronoun", prev.get("pronoun", "—"))
 
     config_path.write_text(json.dumps({
         "nodes":     body.get("nodes", []),
