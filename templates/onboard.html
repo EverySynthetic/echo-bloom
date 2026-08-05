@@ -85,6 +85,8 @@
       <select class="onboard-input" id="kin-model-select" style="display:none">
         <option value="">— pick a model —</option>
       </select>
+      <input class="onboard-input" id="kin-model-input" style="display:none"
+             placeholder="model name — e.g. llama3.2:latest, mistral:7b">
 
       <select class="onboard-input" id="kin-pronoun">
         <option value="they">they/them</option>
@@ -393,30 +395,42 @@ async function loadModels(hostOverride) {
       return false;
     }
     const sel = document.getElementById('kin-model-select');
-    sel.innerHTML = '<option value="">— pick a model —</option>';
-    d.models.forEach(m => {
-      const opt = document.createElement('option');
-      opt.value = m; opt.textContent = m;
-      sel.appendChild(opt);
-    });
-    sel.style.display = 'block';
-    setStatus('kin-status', `${d.models.length} model${d.models.length !== 1 ? 's' : ''} available`, true);
+    const inp = document.getElementById('kin-model-input');
+    if (d.ok && d.models.length) {
+      sel.innerHTML = '<option value="">— pick a model —</option>';
+      d.models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m; opt.textContent = m;
+        sel.appendChild(opt);
+      });
+      sel.style.display = 'block';
+      inp.style.display = 'none';
+      setStatus('kin-status', `${d.models.length} model${d.models.length !== 1 ? 's' : ''} available`, true);
+    } else {
+      sel.style.display = 'none';
+      inp.style.display = 'block';
+      setStatus('kin-status', d.error || "no models pulled yet — type a model name to pull on first run", null);
+    }
     return true;
   } catch(e) {
-    setStatus('kin-status', `error: ${e.message}`, false);
+    const inp = document.getElementById('kin-model-input');
+    inp.style.display = 'block';
+    setStatus('kin-status', "couldn't reach Ollama — type a model name to use", null);
     return false;
   }
 }
 
 function addKin() {
   const name    = document.getElementById('kin-name').value.trim();
-  const model   = document.getElementById('kin-model-select').value.trim();
+  const sel     = document.getElementById('kin-model-select');
+  const inp     = document.getElementById('kin-model-input');
+  const model   = (sel.style.display !== 'none' ? sel.value : inp.value).trim();
   const host    = document.getElementById('kin-node-select').value ||
                   document.getElementById('kin-host').value.trim();
   const pronoun = document.getElementById('kin-pronoun').value;
   if (!name)  { setStatus('kin-status', "give them a name", false); return; }
   if (!host)  { setStatus('kin-status', "pick a node first", false); return; }
-  if (!model) { setStatus('kin-status', "pick a model", false); return; }
+  if (!model) { setStatus('kin-status', "enter or pick a model name", false); return; }
   const nodeMatch = nodes.find(n => host.includes(n.ip));
   const nodeName  = nodeMatch ? nodeMatch.name : 'Local';
   kin.push({name, model, host, pronoun, node: nodeName, db: '', space: ''});
@@ -424,6 +438,7 @@ function addKin() {
   autosave();
   document.getElementById('kin-name').value = '';
   document.getElementById('kin-model-select').value = '';
+  document.getElementById('kin-model-input').value = '';
   setStatus('kin-status', `${name} added.`, true);
 }
 
