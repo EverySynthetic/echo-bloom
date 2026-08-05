@@ -257,6 +257,20 @@ $launch = [System.Windows.Forms.MessageBox]::Show(
 
 if ($launch -eq 'Yes') {
     Start-Process -FilePath $LAUNCHER
-    Start-Sleep -Seconds 3
-    Start-Process 'http://localhost:8090'
+    Write-Host "  Waiting for Echo Bloom to start..." -ForegroundColor DarkGray
+    $ready = $false
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Seconds 2
+        try {
+            $r = Invoke-WebRequest -Uri 'http://localhost:8090' -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+            if ($r.StatusCode -lt 500) { $ready = $true; break }
+        } catch {}
+    }
+    if ($ready) {
+        Start-Process 'http://localhost:8090'
+    } else {
+        Write-Host "  App is taking longer than expected." -ForegroundColor Yellow
+        Write-Host "  Once the Echo Bloom window shows 'Application startup complete', open:" -ForegroundColor Yellow
+        Write-Host "  http://localhost:8090" -ForegroundColor Cyan
+    }
 }
