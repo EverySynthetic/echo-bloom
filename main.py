@@ -185,7 +185,7 @@ async def serve_installer_sh():
 
 @app.get("/install", response_class=HTMLResponse)
 async def install_page(request: Request):
-    return templates.TemplateResponse("install.html", {"request": request})
+    return templates.TemplateResponse(request, "install.html")
 
 
 # ── Security headers ───────────────────────────────────────────────────────────
@@ -266,8 +266,7 @@ async def check_setup():
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, error: str = ""):
-    return templates.TemplateResponse("login.html", {
-        "request":    request,
+    return templates.TemplateResponse(request, "login.html", {
         "error":      error,
         "configured": auth.is_configured(),
     })
@@ -278,12 +277,12 @@ async def setup_password(request: Request, password: str = Form(...), confirm: s
     if auth.is_configured():
         return RedirectResponse("/login", status_code=303)
     if len(password) < 4:
-        return templates.TemplateResponse("login.html", {
-            "request": request, "error": "Password must be at least 4 characters.", "configured": False,
+        return templates.TemplateResponse(request, "login.html", {
+            "error": "Password must be at least 4 characters.", "configured": False,
         })
     if password != confirm:
-        return templates.TemplateResponse("login.html", {
-            "request": request, "error": "Passwords don't match.", "configured": False,
+        return templates.TemplateResponse(request, "login.html", {
+            "error": "Passwords don't match.", "configured": False,
         })
     auth.set_password(password)
     auth.mark_setup_complete()
@@ -747,7 +746,7 @@ async def api_roundtable_stop(_=Depends(require_auth)):
 
 @app.get("/about", response_class=HTMLResponse)
 async def about_page(request: Request):
-    return templates.TemplateResponse("about.html", {"request": request})
+    return templates.TemplateResponse(request, "about.html")
 
 
 # ── License routes ─────────────────────────────────────────────────────────────
