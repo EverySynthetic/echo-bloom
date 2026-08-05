@@ -275,42 +275,11 @@ pause
 [System.IO.File]::WriteAllText($LAUNCHER, $bat, [System.Text.Encoding]::UTF8)
 Write-Step "Launcher: $LAUNCHER" 'Green'
 
-# ── Browser opener (what the icon actually runs — no visible window) ───────────
-#
-# Checks if the app is already up. If yes, open browser immediately.
-# If not, start the scheduled task and wait up to 30 s before opening.
-# This is what the Start Menu shortcut and desktop icon call.
+# ── Browser opener (what the icon runs — shows a progress window while waiting) ─
 
 $OPENER = "$INSTALL_DIR\open_echo_bloom.ps1"
-$opener_script = @'
-$url  = 'http://localhost:8090'
-$task = 'EchoBloom'
-
-function Test-AppUp {
-    try {
-        $r = Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
-        return $r.StatusCode -lt 500
-    } catch { return $false }
-}
-
-if (Test-AppUp) {
-    Start-Process $url
-    exit
-}
-
-# Not up — make sure the scheduled task is running
-Start-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
-
-# Wait up to 30 s then open
-for ($i = 0; $i -lt 15; $i++) {
-    Start-Sleep 2
-    if (Test-AppUp) { Start-Process $url; exit }
-}
-
-# Last resort: open anyway and let the browser handle it
-Start-Process $url
-'@
-[System.IO.File]::WriteAllText($OPENER, $opener_script, [System.Text.Encoding]::UTF8)
+Write-Step "Downloading browser opener..."
+Get-File 'https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/open_echo_bloom.ps1' $OPENER
 Write-Step "Browser opener: $OPENER" 'Green'
 
 # ── Scheduled task (auto-start at login, survives window close) ───────────────
