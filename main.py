@@ -167,6 +167,14 @@ async def favicon():
     return RedirectResponse("/static/icons/icon-192.png", status_code=301)
 
 
+@app.get("/install.ps1", include_in_schema=False)
+async def serve_installer():
+    ps1 = BASE_DIR / "install.ps1"
+    if not ps1.exists():
+        raise HTTPException(404, "Installer not found")
+    return Response(content=ps1.read_text(), media_type="text/plain")
+
+
 # ── Security headers ───────────────────────────────────────────────────────────
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
