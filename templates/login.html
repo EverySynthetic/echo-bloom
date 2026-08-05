@@ -13,21 +13,27 @@
     <div class="login-card">
       <div class="login-logo">ECHO BLOOM</div>
       <div class="login-sub">Local AI Infrastructure</div>
+      {% if not configured %}
+      <div class="login-sub" style="margin-bottom:16px;color:#606060">First run — set a password to get started.</div>
+      {% endif %}
       {% if error %}
         <div class="login-error">{{ error }}</div>
       {% endif %}
+      {% if configured %}
       <form method="POST" action="/login" class="login-form">
-        <input
-          type="password"
-          name="password"
-          placeholder="password"
-          autofocus
-          autocomplete="current-password"
-          class="login-input"
-          required
-        >
+        <input type="password" name="password" placeholder="password"
+               autofocus autocomplete="current-password" class="login-input" required>
         <button type="submit" class="login-btn">ENTER</button>
       </form>
+      {% else %}
+      <form method="POST" action="/setup-password" class="login-form">
+        <input type="password" name="password" placeholder="choose a password"
+               autofocus autocomplete="new-password" class="login-input" required>
+        <input type="password" name="confirm" placeholder="confirm password"
+               autocomplete="new-password" class="login-input" required style="margin-top:8px">
+        <button type="submit" class="login-btn">SET PASSWORD</button>
+      </form>
+      {% endif %}
     </div>
   </div>
 </body>

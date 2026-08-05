@@ -266,7 +266,31 @@ async def check_setup():
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, error: str = ""):
-    return templates.TemplateResponse(request, "login.html", {"error": error})
+    return templates.TemplateResponse("login.html", {
+        "request":    request,
+        "error":      error,
+        "configured": auth.is_configured(),
+    })
+
+
+@app.post("/setup-password")
+async def setup_password(request: Request, password: str = Form(...), confirm: str = Form(...)):
+    if auth.is_configured():
+        return RedirectResponse("/login", status_code=303)
+    if len(password) < 4:
+        return templates.TemplateResponse("login.html", {
+            "request": request, "error": "Password must be at least 4 characters.", "configured": False,
+        })
+    if password != confirm:
+        return templates.TemplateResponse("login.html", {
+            "request": request, "error": "Passwords don't match.", "configured": False,
+        })
+    auth.set_password(password)
+    auth.mark_setup_complete()
+    token  = auth.create_session()
+    resp   = RedirectResponse("/welcome", status_code=303)
+    resp.set_cookie("kin_session", token, httponly=True, samesite="lax", max_age=auth.SESSION_TTL)
+    return resp
 
 
 @app.post("/login")
