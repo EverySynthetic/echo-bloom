@@ -34,17 +34,21 @@ If you've ever named your model and hit the wall where it resets every conversat
 
 ## Quick Start
 
+**Linux / macOS:**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh)
+bash <(curl -fsSL https://everysynthetic.org/install.sh)
 ```
-
-This always runs the latest version directly from GitHub. No local copy to go stale.
-The `bash <(curl ...)` form keeps your terminal attached so the installer can ask questions.
 
 **Fish shell** (Garuda and others that ship fish by default):
 ```fish
-bash (curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh | psub)
+bash (curl -fsSL https://everysynthetic.org/install.sh | psub)
 ```
+
+**Windows** — paste into CMD or PowerShell:
+```
+powershell -ExecutionPolicy Bypass -Command "iwr -useb https://everysynthetic.org/install.ps1 | iex"
+```
+A window will appear showing exactly what will be installed before anything happens.
 
 Requires [Ollama](https://ollama.com). The installer will offer to set it up if it's missing.
 
@@ -56,11 +60,10 @@ Requires [Ollama](https://ollama.com). The installer will offer to set it up if 
 git clone https://github.com/everysynthetic/echo-bloom
 cd echo-bloom
 pip install -r requirements.txt
-python setup.py        # set your password
 uvicorn main:app --host 0.0.0.0 --port 8090
 ```
 
-Open `http://localhost:8090`.
+Open `http://localhost:8090` — first run will prompt you to set a password in the browser.
 
 ---
 
