@@ -523,11 +523,16 @@ async function speakText(text) {
       console.warn('TTS failed:', r.status, await r.text().catch(() => ''));
       return;
     }
-    const blob = await r.blob();
-    const url  = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audio.onended = () => URL.revokeObjectURL(url);
-    audio.play().catch(err => console.warn('Audio play blocked:', err));
+    const arrayBuf = await r.arrayBuffer();
+    // Use AudioContext (unlocked on button click) instead of new Audio() —
+    // Firefox blocks HTMLAudioElement.play() even with prior gesture
+    if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (_audioCtx.state === 'suspended') await _audioCtx.resume();
+    const decoded = await _audioCtx.decodeAudioData(arrayBuf);
+    const src = _audioCtx.createBufferSource();
+    src.buffer = decoded;
+    src.connect(_audioCtx.destination);
+    src.start(0);
   } catch(err) { console.warn('TTS error:', err); }
 }
 
