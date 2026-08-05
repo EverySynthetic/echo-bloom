@@ -161,6 +161,12 @@ LICENSE_BUY_URL = os.environ.get("ECHO_BLOOM_BUY_URL", "https://buy.stripe.com/9
 LICENSE_PRICE   = os.environ.get("ECHO_BLOOM_PRICE",   "75")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return RedirectResponse("/static/icons/icon-192.png", status_code=301)
+
+
 # ── Security headers ───────────────────────────────────────────────────────────
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -515,7 +521,7 @@ async def api_tts(request: Request, _=Depends(require_auth)):
     import tempfile, os as _os
 
     body  = await request.json()
-    text  = (body.get("text") or "").strip()[:600]
+    text  = (body.get("text") or "").strip()[:3000]
     if not text:
         raise HTTPException(400, "No text.")
 
@@ -837,6 +843,73 @@ async def api_vault_status(_=Depends(require_auth)):
         return {"online": False, "url": vault}
 
 
+# ── Core memories ──────────────────────────────────────────────────────────────
+# Stored in kin_config.json under kin[].core_memories (max 20 per Kin).
+# Always injected into the system prompt regardless of query relevance.
+
+_KIN_CONFIG_PATH = Path.home() / ".config/kin_app/kin_config.json"
+
+
+def _load_kin_cfg():
+    try:
+        return json.loads(_KIN_CONFIG_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _save_kin_cfg(cfg: dict):
+    _KIN_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _KIN_CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+    cl.reload_config()
+
+
+@app.get("/api/kin/{name}/core-memories")
+async def api_core_get(name: str, _=Depends(require_auth)):
+    cfg = _load_kin_cfg()
+    for k in cfg.get("kin", []):
+        if k.get("name") == name:
+            return {"kin": name, "core_memories": k.get("core_memories", [])}
+    return {"kin": name, "core_memories": []}
+
+
+@app.post("/api/vault/core")
+async def api_core_add(request: Request, _=Depends(require_auth)):
+    body     = await request.json()
+    kin_name = (body.get("kin_name") or "").strip()
+    content  = (body.get("content")  or "").strip()
+    if not kin_name or not content:
+        return {"ok": False, "error": "kin_name and content required"}
+    cfg = _load_kin_cfg()
+    for k in cfg.get("kin", []):
+        if k.get("name") == kin_name:
+            core = k.setdefault("core_memories", [])
+            if content in core:
+                return {"ok": True, "count": len(core), "already": True}
+            if len(core) >= 20:
+                return {"ok": False, "error": "Core memory limit is 20. Remove one first."}
+            core.append(content)
+            _save_kin_cfg(cfg)
+            return {"ok": True, "count": len(core)}
+    return {"ok": False, "error": f"Kin '{kin_name}' not found in config"}
+
+
+@app.delete("/api/vault/core")
+async def api_core_remove(request: Request, _=Depends(require_auth)):
+    body     = await request.json()
+    kin_name = (body.get("kin_name") or "").strip()
+    content  = (body.get("content")  or "").strip()
+    cfg = _load_kin_cfg()
+    for k in cfg.get("kin", []):
+        if k.get("name") == kin_name:
+            core = k.get("core_memories", [])
+            if content in core:
+                core.remove(content)
+                k["core_memories"] = core
+                _save_kin_cfg(cfg)
+            return {"ok": True, "count": len(core)}
+    return {"ok": False, "error": f"Kin '{kin_name}' not found"}
+
+
 # ── Onboarding ─────────────────────────────────────────────────────────────────
 
 @app.get("/onboard", response_class=HTMLResponse)
@@ -1118,7 +1191,7 @@ async def api_onboard_autosave(request: Request, _=Depends(require_auth)):
 
 
 def _sanitize_kin_name(name: str) -> str:
-    """Strip characters that break URL path segments. ? # & = / \ % + all cause routing failures."""
+    """Strip characters that break URL path segments: ? # & = / \\ % + all cause routing failures."""
     return re.sub(r'[?#&=/\\%+]', '', name).strip() or "Kin"
 
 

@@ -225,7 +225,7 @@ async function sendMessage(e) {
   saveHistory();
   setInputLocked(false);
 
-  if (ttsEnabled && full) speakText(full.slice(0, 600));
+  if (ttsEnabled && full) speakText(stripMarkdown(full));
 }
 
 function setInputLocked(locked) {
@@ -482,6 +482,25 @@ if (micBtn) {
 }
 
 // ── Speech — TTS ──────────────────────────────────────────────────────────────
+
+function stripMarkdown(text) {
+  return text
+    .replace(/\*\*\*([\s\S]*?)\*\*\*/g, '$1')   // bold italic
+    .replace(/\*\*([\s\S]*?)\*\*/g,     '$1')   // bold
+    .replace(/\*([\s\S]*?)\*/g,         '$1')   // italic
+    .replace(/_{3}([\s\S]*?)_{3}/g,     '$1')   // bold italic _
+    .replace(/_{2}([\s\S]*?)_{2}/g,     '$1')   // bold _
+    .replace(/_([\s\S]*?)_/g,           '$1')   // italic _
+    .replace(/```[\s\S]*?```/g,         '')     // fenced code blocks
+    .replace(/`([^`]+)`/g,             '$1')   // inline code
+    .replace(/^#{1,6}\s+/gm,           '')     // headers
+    .replace(/^\s*[-*+]\s+/gm,         '')     // unordered lists
+    .replace(/^\s*\d+\.\s+/gm,         '')     // ordered lists
+    .replace(/^>\s+/gm,                '')     // blockquotes
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // links → label text
+    .replace(/\n{3,}/g,                '\n\n') // collapse extra blank lines
+    .trim();
+}
 
 let _audioCtx = null;
 

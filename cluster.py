@@ -242,7 +242,8 @@ async def stream_chat(kin_name, message, history=None):
             sys.path.insert(0, search_path)
     try:
         from kin_memory import get_context
-        system_ctx = get_context(kin_name, message, wander_limit=2, vault_limit=3)
+        system_ctx = get_context(kin_name, message, wander_limit=2, vault_limit=3,
+                                 db_path=kin.get("db"))
     except Exception:
         pass
 

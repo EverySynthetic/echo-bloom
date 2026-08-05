@@ -1259,6 +1259,19 @@ a:hover { color: var(--text); }
 }
 .mem-expand:hover { color: var(--text-dim); }
 
+.mem-core-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+.mem-core-btn:hover  { color: var(--amber); }
+.mem-core-btn.core-active { color: var(--amber); }
+
 .vault-pagination {
   display: flex;
   align-items: center;

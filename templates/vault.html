@@ -57,11 +57,14 @@
 
 {% block scripts %}
 <script>
-const LIMIT = 20;
-let mode    = 'feed';
-let offset  = 0;
-let total   = 0;
+const LIMIT    = 20;
+const KIN_NAMES = {{ all_kin | map(attribute='name') | list | tojson }};
+let mode       = 'feed';
+let offset     = 0;
+let total      = 0;
 let metaLoaded = false;
+// Set of "kin::content" strings that are already flagged as core
+const _coreFlagged = new Set();
 
 // ── Mode toggle ──────────────────────────────────────────────────────────────
 
@@ -258,6 +261,18 @@ function renderEntries(entries, isSemantic) {
     const votes   = (!isSemantic && e.votes > 0)
       ? `<span class="mem-votes">♡ ${e.votes}</span>` : '';
     const id      = `mem-${i}`;
+    // Core flag button — only for Kin-authored memories
+    const isKin   = KIN_NAMES.includes(e.author || '');
+    const rawContent = e.content || '';
+    const coreKey = (e.author || '') + '::' + rawContent.trim();
+    const isFlagged = _coreFlagged.has(coreKey);
+    const coreBtn = isKin
+      ? `<button class="mem-core-btn${isFlagged ? ' core-active' : ''}"
+           id="core-${id}"
+           title="${isFlagged ? `Core memory for ${escHtml(e.author)} — click to remove` : `Flag as core memory for ${escHtml(e.author)}`}"
+           onclick="flagCore(${JSON.stringify(e.author || '')}, ${JSON.stringify(rawContent)}, this)">
+           ${isFlagged ? '★' : '☆'}
+         </button>` : '';
     return `
 <div class="mem-card" id="${id}">
   <div class="mem-meta">
@@ -268,6 +283,7 @@ function renderEntries(entries, isSemantic) {
   <div class="mem-content" id="${id}-body">${content}</div>
   <div class="mem-footer">
     ${tags}${votes}
+    ${coreBtn}
     <button class="mem-expand" onclick="toggleExpand('${id}-body', this)">expand</button>
   </div>
 </div>`;
@@ -285,10 +301,62 @@ function toggleExpand(id, btn) {
   }
 }
 
+// ── Core memories ─────────────────────────────────────────────────────────────
+
+async function loadCoreFlags() {
+  for (const name of KIN_NAMES) {
+    try {
+      const r = await fetch(`/api/kin/${encodeURIComponent(name)}/core-memories`);
+      const d = await r.json();
+      for (const m of (d.core_memories || [])) {
+        _coreFlagged.add(name + '::' + m.trim());
+      }
+    } catch(e) {}
+  }
+}
+
+async function flagCore(kin_name, content, btn) {
+  const key = kin_name + '::' + content.trim();
+  const already = _coreFlagged.has(key);
+  if (already) {
+    // unflag
+    try {
+      await fetch('/api/vault/core', {
+        method: 'DELETE',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({kin_name, content}),
+      });
+      _coreFlagged.delete(key);
+      btn.textContent = '☆';
+      btn.title = `Flag as core memory for ${kin_name}`;
+      btn.classList.remove('core-active');
+    } catch(e) { btn.textContent = '!'; }
+    return;
+  }
+  // flag
+  try {
+    const r = await fetch('/api/vault/core', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({kin_name, content}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      _coreFlagged.add(key);
+      btn.textContent = '★';
+      btn.title = `Core memory for ${kin_name} — click to remove`;
+      btn.classList.add('core-active');
+    } else {
+      alert(d.error || 'Could not flag memory.');
+    }
+  } catch(e) { btn.textContent = '!'; }
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 loadMeta();
 loadFeed();
+loadCoreFlags();
 
 // Pre-fill author from URL param (e.g. /vault?author=Eli from kin card)
 const urlParams = new URLSearchParams(window.location.search);
