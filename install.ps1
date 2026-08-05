@@ -216,10 +216,40 @@ if (-not (Test-Path $configFile)) {
     Write-Step "Config: exists, leaving it alone" 'DarkGray'
 }
 
+# ── Icon ──────────────────────────────────────────────────────────────────────
+
+$ICON_PNG = "$APP_DIR\static\icons\icon-512.png"
+$ICON_ICO = "$INSTALL_DIR\echo-bloom.ico"
+try {
+    Add-Type -AssemblyName System.Drawing
+    $bmp  = [System.Drawing.Bitmap]::new($ICON_PNG)
+    $hico = $bmp.GetHicon()
+    $ico  = [System.Drawing.Icon]::FromHandle($hico)
+    $fs   = [System.IO.FileStream]::new($ICON_ICO, [System.IO.FileMode]::Create)
+    $ico.Save($fs)
+    $fs.Close()
+    $bmp.Dispose()
+    Write-Step "Icon: converted" 'Green'
+} catch {
+    Write-Step "Icon conversion skipped: $_" 'Yellow'
+    $ICON_ICO = ""
+}
+
 # ── Launcher ──────────────────────────────────────────────────────────────────
 
-$bat = "@echo off`r`nchcp 65001 >nul`r`ntitle Echo Bloom`r`ncd /d `"$APP_DIR`"`r`necho Starting Echo Bloom on http://localhost:8090`r`n$PYTHON -m uvicorn main:app --host 0.0.0.0 --port 8090`r`npause`r`n"
-[System.IO.File]::WriteAllText($LAUNCHER, $bat, [System.Text.Encoding]::ASCII)
+# Starts uvicorn, then a hidden background process polls :8090 and opens the
+# browser once the app is ready — no manual "go to localhost:8090" needed.
+$bat = @"
+@echo off
+chcp 65001 >nul
+title Echo Bloom
+cd /d "$APP_DIR"
+echo Starting Echo Bloom on http://localhost:8090 ...
+start "" powershell -WindowStyle Hidden -Command "& { `$i=0; while(`$i -lt 30){ Start-Sleep 2; try{ `$r=Invoke-WebRequest http://localhost:8090 -UseBasicParsing -TimeoutSec 2 -EA Stop; if(`$r.StatusCode -lt 500){ Start-Process 'http://localhost:8090'; break } }catch{}; `$i++ } }"
+$PYTHON -m uvicorn main:app --host 0.0.0.0 --port 8090
+pause
+"@
+[System.IO.File]::WriteAllText($LAUNCHER, $bat, [System.Text.Encoding]::UTF8)
 Write-Step "Launcher: $LAUNCHER" 'Green'
 
 # ── Start Menu shortcut ───────────────────────────────────────────────────────
@@ -230,6 +260,7 @@ try {
     $lnk.TargetPath       = $LAUNCHER
     $lnk.WorkingDirectory = $APP_DIR
     $lnk.Description      = 'Echo Bloom — Local AI Lifecycle Manager'
+    if ($ICON_ICO -and (Test-Path $ICON_ICO)) { $lnk.IconLocation = "$ICON_ICO, 0" }
     $lnk.Save()
     Write-Step "Start Menu shortcut: created" 'Green'
 } catch {
