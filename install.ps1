@@ -189,6 +189,7 @@ $packages = @(
     'aiohttp',
     'jinja2',
     'python-multipart',
+    'bcrypt',
     'faster-whisper',
     'qdrant-client'
 )
@@ -217,7 +218,7 @@ if (-not (Test-Path $configFile)) {
 
 # ── Launcher ──────────────────────────────────────────────────────────────────
 
-$bat = "@echo off`r`ntitle Echo Bloom`r`ncd /d `"$APP_DIR`"`r`necho Starting Echo Bloom on http://localhost:8090`r`n$PYTHON -m uvicorn main:app --host 0.0.0.0 --port 8090`r`npause`r`n"
+$bat = "@echo off`r`nchcp 65001 >nul`r`ntitle Echo Bloom`r`ncd /d `"$APP_DIR`"`r`necho Starting Echo Bloom on http://localhost:8090`r`n$PYTHON -m uvicorn main:app --host 0.0.0.0 --port 8090`r`npause`r`n"
 [System.IO.File]::WriteAllText($LAUNCHER, $bat, [System.Text.Encoding]::ASCII)
 Write-Step "Launcher: $LAUNCHER" 'Green'
 
