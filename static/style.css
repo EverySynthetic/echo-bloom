@@ -2198,3 +2198,37 @@ a.install-btn {
 }
 .install-alt summary:hover { color: var(--text); }
 .install-btn-alt { margin-top: 10px; }
+
+/* Windows blocking guidance. Smart App Control blocks downloaded files with no
+   "run anyway", but a command the user types is not a downloaded file — so the
+   command is the workaround, not a lesser fallback. Presented, not buried. */
+.install-warn {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--amber, #dca03c);
+  background: var(--surface);
+  font-size: 11.5px;
+  line-height: 1.75;
+  color: var(--text-dim);
+}
+.install-warn-title {
+  color: var(--amber, #dca03c);
+  letter-spacing: 0.1em;
+  font-size: 10.5px;
+  margin-bottom: 8px;
+}
+.install-warn strong { color: var(--text); font-weight: 500; }
+.install-warn-list {
+  margin: 8px 0 10px;
+  padding-left: 18px;
+}
+.install-warn-list li { margin-bottom: 8px; }
+
+.install-alt-open { margin-top: 18px; }
+.install-alt-label {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}

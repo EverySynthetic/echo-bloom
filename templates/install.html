@@ -61,20 +61,45 @@
         </a>
         <div class="install-card-note install-card-note-tight">
           Download it, then double-click. A step-by-step window walks you
-          through everything — no surprises, nothing typed.
-          <br>
-          <span class="install-card-dim">If Windows asks, choose “More info → Run anyway”
-          — the file isn’t signed yet.</span>
+          through everything — nothing to type.
         </div>
-        <details class="install-alt">
-          <summary>prefer a command?</summary>
+
+        <div class="install-warn">
+          <div class="install-warn-title">If Windows blocks it</div>
+          Echo Bloom isn’t code-signed yet — a certificate costs more than this
+          project currently makes. Two ways past it, and the second one needs
+          nothing turned off:
+          <ol class="install-warn-list">
+            <li>
+              <strong>SmartScreen</strong> — “Windows protected your PC” →
+              <em>More info</em> → <em>Run anyway</em>.
+            </li>
+            <li>
+              <strong>Smart App Control</strong> (some Windows 11 machines) will
+              block the file outright with no “run anyway”. Rather than turn it
+              off, <strong>use the command below instead</strong> — a command you
+              type isn’t a downloaded file, so Smart App Control doesn’t apply
+              to it. Same installer, same result.
+            </li>
+          </ol>
+          <span class="install-card-dim">Turning Smart App Control off does work,
+          but on Windows 11 it can’t be switched back on without reinstalling —
+          so try the command first.</span>
+        </div>
+
+        <div class="install-alt-open">
+          <div class="install-alt-label">Command (works with Smart App Control on)</div>
           <button class="install-btn install-btn-alt" onclick="copyCmd('win-cmd', this)">
             COPY INSTALL COMMAND
           </button>
           <div class="install-cmd-wrap">
             <code class="install-cmd" id="win-cmd">powershell -ExecutionPolicy Bypass -Command "iwr -useb https://everysynthetic.org/install_wizard.ps1 | iex"</code>
           </div>
-        </details>
+          <div class="install-card-note install-card-note-tight install-card-dim">
+            Press <strong>Win</strong>, type <em>powershell</em>, hit Enter, then
+            paste with <strong>Ctrl+V</strong> and press Enter.
+          </div>
+        </div>
         <div class="install-card-links">
           <a href="/install_wizard.ps1" class="install-view-link" target="_blank" rel="noopener">view wizard ↗</a>
           &nbsp;·&nbsp;
