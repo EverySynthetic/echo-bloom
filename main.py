@@ -299,6 +299,11 @@ async def check_setup():
         # Existing install without the flag — mark done so tour doesn't fire
         auth.mark_setup_complete()
 
+    # Warm the hardware-caps cache in the background so the first page load
+    # isn't blocked by WMI / nvidia-smi subprocess calls (can be 10+ s on Windows).
+    import threading
+    threading.Thread(target=get_hw_caps, daemon=True).start()
+
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @app.get("/login", response_class=HTMLResponse)
