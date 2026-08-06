@@ -10,6 +10,7 @@ Trial token:   EBT-{base64url(json_payload)}.{base64url(signature)}
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import time
@@ -89,8 +90,15 @@ def _verify_signed_token(token: str, prefix: str) -> dict:
     """Verify any Ed25519-signed token with the given prefix."""
     if not _CRYPTO_OK:
         # cryptography not installed — decode payload without verifying signature.
-        # Allows the trial to show correctly even before the package is installed;
+        # Allows the TRIAL to show correctly even before the package is installed;
         # the token was still issued by the server and has a server-set expiry.
+        #
+        # Never for EB1-. Accepting an unverified permanent key meant
+        # `pip uninstall cryptography` plus one file write bought the product
+        # for free. A trial is time-boxed; a forged permanent key is forever.
+        if prefix != "EBT-":
+            return {"valid": False,
+                    "reason": "cryptography package not installed — cannot verify a license key"}
         if token.startswith(prefix):
             try:
                 rest = token[len(prefix):]
@@ -138,7 +146,7 @@ def verify_key(key: str) -> dict:
     expires   = payload.get("expires", 0)
 
     if ktype == "trial" and expires:
-        now = int(time.time())
+        now = _now()
         if now > expires:
             return {"valid": False, "reason": "trial key expired",
                     "type": "trial", "email": email}
@@ -168,11 +176,13 @@ def _parse_trial_token(token: str) -> dict:
         return {"state": "denied", "reason": payload.get("reason", "blacklisted")}
 
     expires = payload.get("expires", 0)
-    now     = int(time.time())
+    now     = _now()
     if expires and now > expires:
         return {"state": "expired"}
 
-    days_left = max(0, int((expires - now) / 86400) + 1) if expires else 0
+    # No +1: with it, a fresh 14-day trial advertised "15 days remaining",
+    # contradicting the copy on the license page.
+    days_left = max(0, -(-(expires - now) // 86400)) if expires else 0
     return {"state": "trial", "days_left": days_left}
 
 
@@ -197,11 +207,22 @@ def _read_trial_token() -> dict | None:
             return None
         return {"state": "denied", "reason": reason}
     if raw.startswith("OFFLINE:"):
-        # Grace period token — has a local expiry timestamp
+        # Grace period token — has a local expiry timestamp.
         try:
             parts  = raw.split(":", 2)
             expiry = int(parts[1])
-            now    = int(time.time())
+            now    = _now()
+            # This token is written by us, not the server, so it must be
+            # authenticated as ours: an unsigned OFFLINE line was accepted
+            # verbatim, and `echo OFFLINE:99999999999:x > trial_token` granted
+            # three thousand years of trial. The MAC binds it to this machine,
+            # and the hard cap means even a valid-looking MAC cannot outlive
+            # the grace window measured from first run.
+            if not _offline_token_ok(raw):
+                log.warning("offline grace token failed authentication — ignoring it")
+                TRIAL_TOKEN_PATH.unlink(missing_ok=True)
+                return None
+            expiry = min(expiry, _first_seen() + _OFFLINE_GRACE_DAYS * 86400)
             if now > expiry:
                 # Grace is over. Deliberately NOT deleted: deleting it made
                 # ensure_trial_start() re-register, fail while still offline, and
@@ -209,7 +230,7 @@ def _read_trial_token() -> dict | None:
                 # itself indefinitely. The throttled upgrade attempt below still
                 # recovers the moment the server becomes reachable.
                 return {"state": "expired", "offline": True}
-            days_left = max(0, int((expiry - now) / 86400) + 1)
+            days_left = max(0, -(-(expiry - now) // 86400))
             return {"state": "trial", "days_left": days_left, "offline": True}
         except Exception:
             TRIAL_TOKEN_PATH.unlink(missing_ok=True)
@@ -242,6 +263,91 @@ def _call_server(path: str, body: dict, timeout: int = 8) -> dict:
         return {"ok": False, "offline": True}
 
 
+def _offline_secret() -> bytes:
+    """Key for authenticating tokens this machine wrote itself.
+
+    Derived from the machine fingerprint, so a token copied from another
+    machine (or hand-written) does not authenticate. This is not a defence
+    against someone editing license.py — nothing local can be — it only
+    stops the trivial file-write bypass.
+    """
+    return hashlib.sha256(("echo-bloom-offline/" + get_fingerprint()).encode()).digest()
+
+
+def _offline_mac(expiry: int, fp: str) -> str:
+    return hmac.new(_offline_secret(),
+                    f"{expiry}:{fp}".encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def _offline_token(expiry: int, fp: str) -> str:
+    return f"OFFLINE:{expiry}:{fp}:{_offline_mac(expiry, fp)}"
+
+
+def _offline_token_ok(raw: str) -> bool:
+    parts = raw.split(":")
+    if len(parts) < 4:
+        return False          # pre-MAC or hand-written token
+    try:
+        expiry = int(parts[1])
+    except ValueError:
+        return False
+    fp = parts[2]
+    return hmac.compare_digest(parts[3], _offline_mac(expiry, fp))
+
+
+def _stamp_paths(name: str) -> list[Path]:
+    """Every location a write-once stamp is mirrored to.
+
+    One deletable file was not enough: removing `first_run` minted a brand new
+    three-day grace, repeatably. Readers take min() across all copies present,
+    so an attacker has to find and delete every one.
+    """
+    base = Path.home()
+    return [
+        base / ".config/kin_app" / name,
+        base / ".local/share/echo_bloom" / f".{name}",
+        base / f".echo_bloom_{name}",
+    ]
+
+
+def _read_stamp(name: str) -> int | None:
+    vals = []
+    for p in _stamp_paths(name):
+        try:
+            if p.exists():
+                v = int(p.read_text().strip())
+                if v > 0:
+                    vals.append(v)
+        except Exception:
+            pass
+    return min(vals) if vals else None
+
+
+def _write_stamp(name: str, value: int):
+    for p in _stamp_paths(name):
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(str(value))
+        except Exception:
+            pass
+
+
+def _now() -> int:
+    """Wall clock, but never earlier than the latest time we have already seen.
+
+    Absolute expiries plus a settable clock meant `timedatectl set-time` reset
+    any trial. The high-water mark makes rolling the clock back a no-op (and
+    reads as expired rather than as extra days).
+    """
+    now  = int(time.time())
+    seen = _read_stamp("last_seen") or 0
+    if now < seen:
+        return seen
+    if now - seen > 3600:          # avoid a write on every single call
+        _write_stamp("last_seen", now)
+    return now
+
+
 def _first_seen() -> int:
     """Unix time of the first run of this install, written once and never reset.
 
@@ -249,19 +355,11 @@ def _first_seen() -> int:
     happens to be written, so deleting or rewriting the trial token cannot
     extend the grace period.
     """
-    try:
-        if _FIRST_SEEN_PATH.exists():
-            val = int(_FIRST_SEEN_PATH.read_text().strip())
-            if val > 0:
-                return val
-    except Exception:
-        pass
-    now = int(time.time())
-    try:
-        _FIRST_SEEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _FIRST_SEEN_PATH.write_text(str(now))
-    except Exception:
-        pass
+    val = _read_stamp("first_run")
+    if val:
+        return val
+    now = _now()
+    _write_stamp("first_run", now)
     return now
 
 
@@ -294,18 +392,52 @@ def ensure_trial_start():
         # re-registration failed and wrote a fresh one), staying offline renewed
         # the trial forever.
         expiry = _first_seen() + _OFFLINE_GRACE_DAYS * 86400
-        TRIAL_TOKEN_PATH.write_text(f"OFFLINE:{expiry}:{fp}")
+        TRIAL_TOKEN_PATH.write_text(_offline_token(expiry, fp))
         return
 
-    if result.get("ok") and result.get("token"):
-        TRIAL_TOKEN_PATH.write_text(result["token"])
-    else:
-        reason = result.get("reason", "rejected")
-        TRIAL_TOKEN_PATH.write_text(f"DENIED:{reason}")
+    _store_server_result(result)
 
 
 _UPGRADE_RETRY_SECS   = 600
 _last_upgrade_attempt = 0.0
+
+
+def _store_server_result(result: dict) -> None:
+    """Persist a /register-trial response, trusting only what it should.
+
+    Two holes closed here. The token used to be written verbatim, so a fake
+    server (ECHO_BLOOM_LICENSE_SERVER points anywhere) could hand back an
+    `OFFLINE:...` line — or anything else — and it would be honoured. Only a
+    real EBT- token signed by the embedded public key is stored now.
+
+    And any parseable JSON error body used to become a sticky `DENIED:` that
+    was never retried: FastAPI's {"detail": ...} or a Cloudflare 429 challenge
+    left a brand new customer permanently told they were "not eligible."
+    A denial is only recorded when the server says so in a signed token or
+    states a genuine reason; everything else is treated as transport failure
+    and retried on the next launch.
+    """
+    TRIAL_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    token = result.get("token")
+    if result.get("ok") and token:
+        if not str(token).startswith("EBT-"):
+            log.warning("license server returned a non-EBT token — ignoring it")
+            return
+        if _CRYPTO_OK and not _verify_signed_token(str(token), "EBT-")["valid"]:
+            log.warning("license server returned an EBT token that failed signature check")
+            return
+        TRIAL_TOKEN_PATH.write_text(str(token))
+        return
+
+    reason = str(result.get("reason", "") or "")
+    genuine = bool(result.get("denied")) or any(
+        w in reason.lower() for w in ("blacklist", "not eligible", "revoked", "banned")
+    )
+    if genuine:
+        TRIAL_TOKEN_PATH.write_text(f"DENIED:{reason or 'blacklisted'}")
+    else:
+        log.warning("trial registration did not succeed (%s) — will retry next launch",
+                    reason or "no reason given")
 
 
 def _try_upgrade_offline_token():
@@ -327,11 +459,7 @@ def _try_upgrade_offline_token():
     if result.get("offline"):
         return  # Still can't reach server — keep grace token
     TRIAL_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if result.get("ok") and result.get("token"):
-        TRIAL_TOKEN_PATH.write_text(result["token"])
-    else:
-        reason = result.get("reason", "rejected")
-        TRIAL_TOKEN_PATH.write_text(f"DENIED:{reason}")
+    _store_server_result(result)
 
 
 # ── Saved key ─────────────────────────────────────────────────────────────────

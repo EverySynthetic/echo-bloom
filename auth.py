@@ -86,9 +86,18 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict):
+    """Atomic + 0600. This file holds the password hash: a truncating write
+    made is_configured() False, which reverts the app to first-run setup —
+    claimable by whoever reaches it first if a tunnel is up."""
     import json
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+    tmp = CONFIG_FILE.with_suffix(CONFIG_FILE.suffix + ".tmp")
+    tmp.write_text(json.dumps(cfg, indent=2))
+    try:
+        os.chmod(tmp, 0o600)
+    except Exception:
+        pass          # best effort; Windows has no equivalent
+    os.replace(tmp, CONFIG_FILE)
 
 
 def is_configured() -> bool:
@@ -96,9 +105,16 @@ def is_configured() -> bool:
     return bool(cfg.get("password_hash"))
 
 
+def _bcrypt_safe(password: str) -> bytes:
+    """bcrypt raises above 72 bytes, so a password-manager passphrase on first
+    run was a 500 with no password set and no message. Truncate consistently
+    in both hash and verify."""
+    return password.encode()[:72]
+
+
 def set_password(password: str):
     cfg = load_config()
-    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+    hashed = bcrypt.hashpw(_bcrypt_safe(password), bcrypt.gensalt(rounds=12)).decode()
     cfg["password_hash"] = hashed
     save_config(cfg)
 
@@ -109,7 +125,7 @@ def verify_password(password: str) -> bool:
     if not hashed:
         return False
     try:
-        return bcrypt.checkpw(password.encode(), hashed.encode())
+        return bcrypt.checkpw(_bcrypt_safe(password), hashed.encode())
     except Exception:
         return False
 
@@ -165,10 +181,20 @@ def clear_setup_token():
 
 def is_rate_limited(ip: str) -> bool:
     now = time.time()
-    attempts = _login_attempts[ip]
-    # Drop old attempts outside the window
-    _login_attempts[ip] = [t for t in attempts if now - t < WINDOW_SECS]
-    return len(_login_attempts[ip]) >= MAX_ATTEMPTS
+    attempts = [t for t in _login_attempts.get(ip, []) if now - t < WINDOW_SECS]
+    if attempts:
+        _login_attempts[ip] = attempts
+    else:
+        # Do not leave an entry behind for every IP ever seen — this dict used
+        # to grow forever (and reading it created keys).
+        _login_attempts.pop(ip, None)
+    # Sweep other stale IPs occasionally so a burst of distinct addresses
+    # cannot pin memory.
+    if len(_login_attempts) > 512:
+        for k in [k for k, v in _login_attempts.items()
+                  if not any(now - t < WINDOW_SECS for t in v)]:
+            _login_attempts.pop(k, None)
+    return len(attempts) >= MAX_ATTEMPTS
 
 
 def record_attempt(ip: str):

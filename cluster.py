@@ -326,16 +326,13 @@ async def stream_chat(kin_name, message, history=None):
         yield f"Unknown Kin: {kin_name}"
         return
 
-    # Try to load memory context from installed scripts, then Desktop fallback
+    # Load memory context from the installed scripts dir only. ~/Desktop used
+    # to be a fallback — that meant any kin_memory.py a user left on their
+    # Desktop was imported and executed inside the server on first chat.
     system_ctx = ""
-    _scripts = Path.home() / ".local/share/echo_bloom/scripts"
-    # Highest priority first in this list. Inserted in reverse, because each
-    # insert(0, ...) pushes the previous one down — listing them in priority
-    # order and inserting forwards silently gave Desktop precedence.
-    _search = [str(_scripts), os.path.expanduser("~/Desktop")]
-    for search_path in reversed(_search):
-        if search_path not in sys.path:
-            sys.path.insert(0, search_path)
+    _scripts = str(Path.home() / ".local/share/echo_bloom/scripts")
+    if _scripts not in sys.path:
+        sys.path.insert(0, _scripts)
     try:
         from kin_memory import get_context
     except Exception as e:
@@ -394,6 +391,14 @@ async def stream_chat(kin_name, message, history=None):
                         continue
                     try:
                         data = json.loads(line)
+                        # Ollama reports failures (model not pulled, OOM) as an
+                        # error line that parses fine — swallowing it rendered
+                        # an empty assistant bubble with no explanation.
+                        if data.get("error"):
+                            log.warning("ollama error for %s: %s",
+                                        kin_name, data["error"])
+                            yield f"\n[{data['error']}]"
+                            return
                         chunk = data.get("message", {}).get("content", "")
                         if chunk:
                             reply_parts.append(chunk)

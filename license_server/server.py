@@ -83,15 +83,29 @@ def _init_db():
                 key_type     TEXT NOT NULL,
                 issued       INTEGER NOT NULL,
                 key          TEXT NOT NULL,
-                source       TEXT
+                source       TEXT,
+                delivered    INTEGER DEFAULT 0
             );
         """)
+        # Additive migration for databases created before `delivered` existed.
+        try:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(issued_keys)")]
+            if "delivered" not in cols:
+                conn.execute("ALTER TABLE issued_keys ADD COLUMN delivered INTEGER DEFAULT 0")
+        except Exception as e:
+            print(f"[license-server] could not migrate issued_keys: {e}")
 
 
 @contextmanager
 def _db():
-    conn = sqlite3.connect(str(DB_PATH))
+    # WAL + a real timeout: concurrent trial registrations surfaced
+    # "database is locked" as a 500, which the client read as expired.
+    conn = sqlite3.connect(str(DB_PATH), timeout=30)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        pass
     try:
         yield conn
         conn.commit()
@@ -152,7 +166,7 @@ def generate_license_key(email: str, key_type: str = "permanent", days: int = 0)
 def _send_key_email(email: str, key: str):
     if not SMTP_USER or not SMTP_PASS:
         print(f"[license-server] No SMTP configured — key for {email}: {key}")
-        return
+        return False
     plain = f"""Your Echo Bloom license key:
 
 {key}
@@ -202,8 +216,12 @@ No subscription. No cloud dependency. Your Kin, your machine.
             s.login(SMTP_USER, SMTP_PASS)
             s.send_message(msg)
         print(f"[license-server] Key emailed to {email}")
+        return True
     except Exception as e:
+        # Returned, not swallowed: the caller records delivery state so a paid
+        # customer whose email bounced is recoverable from /admin/keys.
         print(f"[license-server] Email FAILED for {email}: {e}")
+        return False
 
 
 # ── Stripe ─────────────────────────────────────────────────────────────────────
@@ -216,12 +234,21 @@ def _verify_stripe_sig(payload: bytes, header: str, secret: str):
     expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected.encode(), v1.encode()):
         raise ValueError("Stripe signature mismatch")
+    # Without a tolerance check a captured webhook replays forever.
+    try:
+        if abs(int(time.time()) - int(ts)) > 300:
+            raise ValueError("Stripe signature timestamp outside tolerance")
+    except ValueError:
+        raise
+    except Exception:
+        raise ValueError("Stripe signature timestamp unreadable")
 
 
 # ── Auth helper ────────────────────────────────────────────────────────────────
 
 def _require_admin(token: str):
-    if not ADMIN_TOKEN or token != ADMIN_TOKEN:
+    # compare_digest, not != : the admin token mints permanent keys.
+    if not ADMIN_TOKEN or not hmac.compare_digest(token or "", ADMIN_TOKEN):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
@@ -305,11 +332,16 @@ async def stripe_webhook(request: Request):
     payload    = await request.body()
     sig_header = request.headers.get("stripe-signature", "")
 
-    if STRIPE_SECRET:
-        try:
-            _verify_stripe_sig(payload, sig_header, STRIPE_SECRET)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
+    # Unconditional. This used to be `if STRIPE_SECRET:` — one unset env var
+    # and anyone could POST a fake checkout event and be emailed a permanent
+    # key. Fails closed instead.
+    if not STRIPE_SECRET:
+        print("[license-server] STRIPE_WEBHOOK_SECRET is not set — refusing webhook")
+        raise HTTPException(status_code=503, detail="webhook not configured")
+    try:
+        _verify_stripe_sig(payload, sig_header, STRIPE_SECRET)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     try:
         event = json.loads(payload)
@@ -317,7 +349,11 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail="invalid json")
 
     etype = event.get("type", "")
-    if etype not in ("checkout.session.completed", "payment_intent.succeeded"):
+    # Only checkout.session.completed. Handling payment_intent.succeeded too
+    # meant one Checkout purchase issued TWO keys and sent two emails when both
+    # events were subscribed — and on its own a PaymentIntent carries no
+    # top-level email, so it silently issued nothing.
+    if etype != "checkout.session.completed":
         return {"ok": True, "skipped": etype}
 
     session = event.get("data", {}).get("object", {})
@@ -329,17 +365,32 @@ async def stripe_webhook(request: Request):
     ).strip()
 
     if not email:
-        print(f"[license-server] Stripe event {etype} missing email")
-        return {"ok": True, "skipped": "no email"}
+        # 500, not 200: a paid event with no email is a real problem. Stripe
+        # retries and it shows up in the dashboard instead of vanishing into
+        # a stdout line while the customer waits for a key.
+        print(f"[license-server] PAID EVENT WITH NO EMAIL: {etype} {json.dumps(session)[:500]}")
+        raise HTTPException(status_code=500, detail="paid event carried no email address")
 
     key = generate_license_key(email, "permanent")
+    delivered = 0
     with _db() as conn:
         conn.execute(
             "INSERT INTO issued_keys (email, key_type, issued, key, source) VALUES (?,?,?,?,?)",
             (email, "permanent", int(time.time()), key, "stripe"),
         )
-    _send_key_email(email, key)
-    print(f"[license-server] Key issued via Stripe for {email}")
+    # The key is already stored above, so a failed email is recoverable via
+    # /admin/keys and /admin/resend rather than needing hand-edited SQLite.
+    if _send_key_email(email, key):
+        delivered = 1
+    else:
+        print(f"[license-server] KEY NOT DELIVERED to {email} — recover with "
+              f"POST /admin/resend {{'email': '{email}'}}")
+    try:
+        with _db() as conn:
+            conn.execute("UPDATE issued_keys SET delivered=? WHERE key=?", (delivered, key))
+    except Exception as e:
+        print(f"[license-server] could not record delivery state: {e}")
+    print(f"[license-server] Key issued via Stripe for {email} (delivered={delivered})")
     return {"ok": True}
 
 
@@ -424,10 +475,38 @@ async def admin_keys(x_admin_token: str = Header(default=""), limit: int = 100):
     _require_admin(x_admin_token)
     with _db() as conn:
         rows = conn.execute(
-            "SELECT id, email, key_type, issued, source FROM issued_keys ORDER BY issued DESC LIMIT ?",
+            "SELECT id, email, key_type, issued, source, key, delivered "
+            "FROM issued_keys ORDER BY issued DESC LIMIT ?",
             (limit,),
         ).fetchall()
     return {"keys": [dict(r) for r in rows]}
+
+
+@app.post("/admin/resend")
+async def admin_resend(request: Request, x_admin_token: str = Header(default="")):
+    """Re-send the most recent key for an email address.
+
+    Exists because a paid customer whose delivery failed was previously
+    unrecoverable without hand-editing SQLite over SSH.
+    """
+    _require_admin(x_admin_token)
+    body  = await request.json()
+    email = (body.get("email") or "").strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="email required")
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT key FROM issued_keys WHERE email = ? ORDER BY issued DESC LIMIT 1",
+            (email,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="no key on file for that address")
+    key = row["key"]
+    if _send_key_email(email, key):
+        with _db() as conn:
+            conn.execute("UPDATE issued_keys SET delivered=1 WHERE key=?", (key,))
+        return {"ok": True, "resent": email}
+    return {"ok": False, "error": "send failed — check SMTP settings", "key": key}
 
 
 if __name__ == "__main__":

@@ -294,9 +294,17 @@ def require_auth_only(request: Request):
 
 
 def get_client_ip(request: Request) -> str:
+    # Proxies APPEND the real client to X-Forwarded-For, so the FIRST entry is
+    # whatever the client claims — keying the rate limiter on it let an
+    # attacker rotate fake IPs and brute-force without ever tripping it.
+    # CF-Connecting-IP is set authoritatively at Cloudflare's edge; otherwise
+    # take the last XFF hop (proxy-appended); otherwise the socket peer.
+    cf = request.headers.get("CF-Connecting-IP")
+    if cf:
+        return cf.strip()
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        return forwarded.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
 
 
@@ -540,12 +548,20 @@ async def api_thoughts(name: str, limit: int = 10, _=Depends(require_auth)):
     if not db:
         return {"thoughts": []}
     try:
-        conn = sqlite3.connect(db, timeout=5)
-        rows = conn.execute(
-            "SELECT id, mode, timestamp, thought FROM thoughts ORDER BY id DESC LIMIT ?",
-            (min(limit, 50),)
-        ).fetchall()
-        conn.close()
+        # Read-only URI so a wrong path can't create an empty DB, and off the
+        # event loop — wander processes write these files concurrently and a
+        # locked DB here stalled every request in the app for up to 5s.
+        def _query():
+            conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+            try:
+                return conn.execute(
+                    "SELECT id, mode, timestamp, thought FROM thoughts "
+                    "ORDER BY id DESC LIMIT ?",
+                    (min(limit, 50),)
+                ).fetchall()
+            finally:
+                conn.close()
+        rows = await asyncio.to_thread(_query)
         return {"thoughts": [
             {"id": r[0], "mode": r[1], "ts": r[2], "text": (r[3] or "")[:500]}
             for r in rows
@@ -712,12 +728,18 @@ async def api_transcribe(request: Request, _=Depends(require_auth)):
         f.write(audio)
         tmp = f.name
     try:
-        model   = _get_whisper()
-        segs, _ = model.transcribe(tmp, language="en")
-        text    = " ".join(s.text.strip() for s in segs).strip()
+        # First call downloads the model (~150MB) and transcription is
+        # CPU-bound for seconds — both froze every other request in the app
+        # when run inline on the event loop.
+        def _transcribe():
+            model   = _get_whisper()
+            segs, _ = model.transcribe(tmp, language="en")
+            return " ".join(s.text.strip() for s in segs).strip()
+        text = await asyncio.to_thread(_transcribe)
         return {"ok": True, "text": text}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    except Exception:
+        log.exception("transcription failed")
+        return {"ok": False, "error": "Transcription failed — see the app log."}
     finally:
         _os.unlink(tmp)
 
@@ -982,7 +1004,21 @@ async def api_license_activate(request: Request, _=Depends(require_auth_only)):
     if not key:
         return {"ok": False, "error": "No key provided."}
     if not lic._CRYPTO_OK:
-        return {"ok": False, "error": "cryptography package not installed — re-run the installer."}
+        # Save it and verify later. Refusing here punished the person who paid:
+        # their only remedy was a reinstall, while the crypto-missing state was
+        # simultaneously being exploited to fake a key. The key is verified on
+        # every status computation once the package is present, so storing an
+        # unverified one grants nothing.
+        if not key.startswith("EB1-"):
+            return {"ok": False, "error": "That does not look like an Echo Bloom key (EB1-…)."}
+        if not lic.save_key(key):
+            return {"ok": False, "error": f"Could not write license file to {lic.LICENSE_PATH} — check permissions."}
+        lic.invalidate_status_cache()
+        log.warning("license key saved but not verified — cryptography is missing")
+        return {"ok": True, "message":
+                "Key saved. The 'cryptography' package is missing, so it can't be "
+                "checked yet — run: pip install cryptography  (then restart Echo Bloom) "
+                "and your license will activate."}
     result = lic.verify_key(key)
     if not result["valid"]:
         return {"ok": False, "error": result.get("reason", "Invalid key.")}
@@ -1036,7 +1072,9 @@ async def api_pull_model(request: Request, _=Depends(require_auth)):
                             yield f"data: {line.decode()}\n\n".encode()
             yield b'data: {"status":"done"}\n\n'
         except Exception as e:
-            yield f'data: {{"error":"{e}"}}\n\n'.encode()
+            # str(e) can contain quotes/backslashes — hand-interpolating it
+            # produced unparseable JSON and a progress bar stuck forever.
+            yield f"data: {json.dumps({'error': str(e)})}\n\n".encode()
 
     return StreamingResponse(
         pull_stream(),
