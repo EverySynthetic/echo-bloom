@@ -272,7 +272,7 @@ echo Starting Echo Bloom on http://localhost:8090 ...
 $PYTHON -m uvicorn main:app --host 0.0.0.0 --port 8090
 pause
 "@
-[System.IO.File]::WriteAllText($LAUNCHER, $bat, [System.Text.Encoding]::UTF8)
+[System.IO.File]::WriteAllText($LAUNCHER, $bat, (New-Object System.Text.UTF8Encoding($false)))
 Write-Step "Launcher: $LAUNCHER" 'Green'
 
 # ── Browser opener (what the icon runs — shows a progress window while waiting) ─
@@ -339,7 +339,7 @@ $launch = [System.Windows.Forms.MessageBox]::Show(
 )
 
 if ($launch -eq 'Yes') {
-    Start-Process -FilePath $LAUNCHER
+    Start-Process -FilePath $LAUNCHER -WindowStyle Minimized
     Write-Host "  Waiting for Echo Bloom to start..." -ForegroundColor DarkGray
     $ready = $false
     for ($i = 0; $i -lt 30; $i++) {
