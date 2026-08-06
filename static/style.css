@@ -2138,3 +2138,63 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
 .vault-offline-details { margin-top: 18px; font-size: 12px; color: var(--dim); text-align: left; }
 .vault-offline-details summary { cursor: pointer; color: var(--dim); }
 .vault-offline-details summary:hover { color: var(--fg); }
+
+/* ── Install page: hero first, then buttons, then Don's note ────────────────── */
+.install-hero {
+  padding-bottom: 36px;
+  margin-bottom: 36px;
+  border-bottom: 1px solid var(--border);
+}
+.install-hero-name {
+  font-size: 30px;
+  letter-spacing: 0.16em;
+  color: var(--green);
+  font-weight: 500;
+}
+.install-hero-tag {
+  font-size: 15px;
+  color: var(--text);
+  margin-top: 12px;
+  letter-spacing: 0.02em;
+}
+.install-hero-body {
+  font-size: 13px;
+  line-height: 1.9;
+  color: var(--text-dim);
+  margin-top: 18px;
+  max-width: 660px;
+}
+.install-hero-body strong { color: var(--green); font-weight: 500; }
+
+/* The note reads as an aside now that it sits below the install action. */
+.install-about { margin-top: 48px; }
+
+/* A download link styled as the primary action — an <a download> beats a
+   command a Windows user has to paste into a terminal they never open. */
+a.install-btn {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+.install-btn-primary {
+  background: var(--green);
+  color: var(--bg);
+  font-weight: 600;
+}
+.install-btn-primary:hover { filter: brightness(1.12); }
+.install-card-note-tight { margin-top: 12px; }
+.install-card-dim { color: var(--text-dim); opacity: 0.75; }
+
+.install-alt {
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.install-alt summary {
+  cursor: pointer;
+  letter-spacing: 0.08em;
+  padding: 4px 0;
+}
+.install-alt summary:hover { color: var(--text); }
+.install-btn-alt { margin-top: 10px; }

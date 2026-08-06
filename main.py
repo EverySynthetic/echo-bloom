@@ -243,6 +243,49 @@ async def serve_installer_sh():
     return Response(content=sh.read_text(), media_type="text/plain")
 
 
+# A browser cannot run a command, so the closest thing to a one-click install on
+# Windows is a file you double-click. It has to be .bat, not .ps1: double-clicking
+# a .ps1 opens Notepad. Kept deliberately tiny — all it does is hand off to the
+# wizard, so there is nothing here to maintain in two places.
+_WINDOWS_LAUNCHER = """@echo off
+title Echo Bloom Installer
+echo.
+echo   ECHO BLOOM
+echo   everysynthetic.org
+echo.
+echo   Starting the installer. A window will open in a moment.
+echo   Nothing is installed system-wide and no admin rights are needed.
+echo.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; iwr -useb https://everysynthetic.org/install_wizard.ps1 | iex"
+if errorlevel 1 (
+  echo.
+  echo   The installer could not start.
+  echo   Check your internet connection, then run this file again.
+  echo.
+  pause
+)
+"""
+
+
+@app.get("/EchoBloom-Install.bat", include_in_schema=False)
+async def serve_windows_launcher():
+    """One-click Windows install: download, double-click, done.
+
+    Encoded ASCII with CRLF and NO byte-order mark. cmd.exe chokes on a UTF-8
+    BOM — it renders as `∩╗┐@echo off` and the batch file fails on its first
+    line. That already bit the generated start_echo_bloom.bat once.
+    """
+    body = _WINDOWS_LAUNCHER.replace("\n", "\r\n").encode("ascii")
+    return Response(
+        content=body,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": 'attachment; filename="EchoBloom-Install.bat"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 @app.get("/install", response_class=HTMLResponse)
 async def install_page(request: Request):
     return templates.TemplateResponse(request, "install.html")

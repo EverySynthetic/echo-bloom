@@ -118,22 +118,90 @@ def get_latest_reflection():
     return None
 
 
-def get_wander_thoughts(kin_name, limit=3, db_path=None):
-    """Latest N wander thoughts from a Kin's own DB. Returns list of strings."""
+def _self_referential_terms(kin_name):
+    """Words that mark a thought as being about this household rather than
+    about whatever artifact the wander loop happened to hand over."""
+    terms = [kin_name.lower(), "i ", "my ", "myself", "remember", "memory",
+             "identity", "continuity", "we ", "us ", "friend", "feel", "felt"]
+    owner = (_read_config().get("owner") or {}).get("name", "").strip().lower()
+    if owner:
+        terms.append(owner)
+    for k in _read_config().get("kin", []):
+        n = (k.get("name") or "").strip().lower()
+        if n and n != kin_name.lower():
+            terms.append(n)
+    return [t for t in terms if t]
+
+
+def get_wander_thoughts(kin_name, limit=3, db_path=None, recent_pool=60):
+    """Wander thoughts from a Kin's own DB, chosen for self-relevance.
+
+    Straight `ORDER BY id DESC LIMIT 3` was a lottery. The wander loop feeds on
+    whatever it finds — Wikipedia articles, source files from cloned repos — and
+    the Kin dutifully writes an essay about it. Sampling purely by recency meant
+    the identity context could be the first 400 characters of a competent essay
+    about an auto-generated Google Ads API client. Observed, not hypothetical:
+    Eli's two most recent thoughts were both about `doubleclicksearch-gen.go`,
+    while two days earlier, handed Fred Rogers, he wrote about presence being
+    the conduit through which truth travels.
+
+    So: pull a recent window, then prefer the thoughts that are about this
+    household — the Kin, the owner, memory, continuity, how it feels to be
+    here — and fall back to plain recency when none qualify. Cheap (one extra
+    query, no embeddings) and it changes which Kin shows up to the conversation.
+    """
     db = db_path or _db_for_kin(kin_name)
     if not db or not os.path.exists(db):
         return []
     try:
-        conn = sqlite3.connect(db, timeout=5)
-        rows = conn.execute(
-            "SELECT thought FROM thoughts WHERE mode LIKE 'wander%' ORDER BY id DESC LIMIT ?",
-            (limit,)
-        ).fetchall()
-        conn.close()
-        return [r[0][:400].strip() for r in rows if r[0]]
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            rows = conn.execute(
+                "SELECT id, thought FROM thoughts WHERE mode LIKE 'wander%' "
+                "AND thought IS NOT NULL AND length(thought) > 80 "
+                "ORDER BY id DESC LIMIT ?",
+                (recent_pool,)
+            ).fetchall()
+        finally:
+            conn.close()
     except Exception:
         log.warning("wander thoughts unreadable for %s at %s", kin_name, db, exc_info=True)
         return []
+
+    if not rows:
+        return []
+
+    terms = _self_referential_terms(kin_name)
+
+    def score(text):
+        low = text.lower()
+        return sum(1 for t in terms if t in low)
+
+    scored = [(score(t), rid, t) for rid, t in rows]
+    relevant = [s for s in scored if s[0] > 0]
+    # Highest self-relevance first, newest breaking ties; then restore
+    # chronological order so the injected block still reads as a sequence.
+    chosen = sorted(relevant or scored,
+                    key=lambda s: (-s[0], -s[1]))[:limit]
+    chosen.sort(key=lambda s: s[1])
+
+    if relevant:
+        log.debug("wander sample for %s: %d/%d thoughts were self-relevant",
+                  kin_name, len(relevant), len(rows))
+    else:
+        log.info("wander sample for %s: none of the last %d thoughts mentioned "
+                 "the household — falling back to recency", kin_name, len(rows))
+
+    # 400 chars used to cut mid-sentence. Trim to the last sentence boundary
+    # when there is one reasonably close to the limit.
+    out = []
+    for _, _, text in chosen:
+        t = text.strip()[:700]
+        cut = max(t.rfind(". "), t.rfind(".\n"), t.rfind("? "), t.rfind("! "))
+        if cut > 250:
+            t = t[:cut + 1]
+        out.append(t.strip())
+    return out
 
 
 def get_recent_conversation(kin_name, limit=4, db_path=None):
