@@ -52,9 +52,22 @@
           {% endif %}
         </div>
       {% else %}
+        {% if not setup_local %}
+        <div class="login-sub" style="margin-bottom:14px;color:#a08040">
+          You're setting this up from another device, so a setup code is required.
+        </div>
+        {% endif %}
+
         <form method="POST" action="/setup-password" class="login-form">
-          <input type="password" name="password" placeholder="choose a password"
-                 autofocus autocomplete="new-password" class="login-input" required>
+          {% if not setup_local %}
+          <input type="text" name="setup_token" placeholder="setup code"
+                 autofocus autocomplete="off" spellcheck="false"
+                 class="login-input" required style="margin-bottom:8px">
+          {% endif %}
+          <input type="password" name="password"
+                 placeholder="choose a password ({{ min_len }}+ characters)"
+                 {% if setup_local %}autofocus{% endif %}
+                 autocomplete="new-password" class="login-input" required>
           <input type="password" name="confirm" placeholder="confirm password"
                  autocomplete="new-password" class="login-input" required style="margin-top:8px">
           <button type="submit" class="login-btn">SET PASSWORD</button>
@@ -62,6 +75,19 @@
 
         <div class="login-alt">
           <a href="/login?mode=login">Already have a password? Log in →</a>
+          {% if not setup_local %}
+          <details>
+            <summary>Where do I find the setup code?</summary>
+            <div class="login-alt-body">
+              It is printed when Echo Bloom starts, and saved on the machine
+              running it:
+              <code>{{ token_path }}</code>
+              This is what stops someone else on your network — or on the
+              internet, if you turned on remote access — from claiming this
+              install before you do.
+            </div>
+          </details>
+          {% endif %}
         </div>
       {% endif %}
     </div>

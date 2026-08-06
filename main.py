@@ -286,14 +286,41 @@ def get_client_ip(request: Request) -> str:
         return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
+
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+_PROXY_HEADERS = (
+    "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto",
+    "cf-connecting-ip", "x-real-ip", "forwarded",
+)
+
+
+def is_local_request(request: Request) -> bool:
+    """True only for a browser running on this same machine.
+
+    The peer address on its own is NOT enough. cloudflared, Caddy, nginx and
+    every other reverse proxy connect to 127.0.0.1, so a request from the open
+    internet arrives with a loopback peer address too. Any forwarding header
+    means it came through a proxy, so treat it as remote.
+    """
+    peer = request.client.host if request.client else ""
+    if peer not in _LOOPBACK:
+        return False
+    return not any(h in request.headers for h in _PROXY_HEADERS)
+
 # ── Setup check ────────────────────────────────────────────────────────────────
 
 @app.on_event("startup")
 async def check_setup():
     if not auth.is_configured():
+        tok = auth.ensure_setup_token()
         print("\n" + "="*60)
         print("  First run: no password set.")
-        print("  Run: python setup.py")
+        print("  Open http://localhost:8090 on THIS machine to set one.")
+        if tok:
+            print("")
+            print("  Setting up from another device? Setup code:")
+            print("      " + tok)
+            print("  (also saved at " + str(auth.SETUP_TOKEN_FILE) + ")")
         print("="*60 + "\n")
     elif auth.load_config().get("setup_complete") is None:
         # Existing install without the flag — mark done so tour doesn't fire
@@ -309,6 +336,8 @@ async def check_setup():
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, error: str = "", mode: str = ""):
     configured = auth.is_configured()
+    if not configured:
+        auth.ensure_setup_token()
     return templates.TemplateResponse(request, "login.html", {
         "error":       error,
         "configured":  configured,
@@ -316,32 +345,75 @@ async def login_page(request: Request, error: str = "", mode: str = ""):
         # ask for the login form instead (and vice versa via a plain /login).
         "show_login":  configured or mode == "login",
         "config_path": str(auth.CONFIG_FILE),
+        "setup_local": is_local_request(request),
+        "token_path":  str(auth.SETUP_TOKEN_FILE),
+        "min_len":     auth.MIN_PASSWORD_LEN,
     })
 
 
 @app.post("/setup-password")
-async def setup_password(request: Request, password: str = Form(...), confirm: str = Form(...)):
+async def setup_password(
+    request: Request,
+    password: str = Form(...),
+    confirm: str = Form(...),
+    setup_token: str = Form(""),
+):
     if auth.is_configured():
         # Tell them why instead of bouncing silently to a form that looks identical.
         return RedirectResponse(
             "/login?error=A+password+is+already+set+on+this+machine.+Enter+it+below.",
             status_code=303,
         )
-    if len(password) < 4:
+
+    ip    = get_client_ip(request)
+    local = is_local_request(request)
+
+    def _render(err: str, status: int = 200):
         return templates.TemplateResponse(request, "login.html", {
-            "error": "Password must be at least 4 characters.", "configured": False,
-            "show_login": False, "config_path": str(auth.CONFIG_FILE),
-        })
+            "error":       err,
+            "configured":  False,
+            "show_login":  False,
+            "config_path": str(auth.CONFIG_FILE),
+            "setup_local": local,
+            "token_path":  str(auth.SETUP_TOKEN_FILE),
+            "min_len":     auth.MIN_PASSWORD_LEN,
+        }, status_code=status)
+
+    # Claiming this install from anywhere other than the machine itself needs
+    # the setup code. Without this an app that is reachable before a password
+    # exists — over the LAN, or the tunnel install.sh starts at step 6 — can be
+    # taken over by whoever loads it first.
+    if not local:
+        if auth.is_rate_limited(ip):
+            return _render("Too many attempts. Wait 5 minutes.", 429)
+        auth.record_attempt(ip)
+        auth.ensure_setup_token()
+        if not auth.verify_setup_token(setup_token):
+            return _render(
+                "That setup code isn't right. Read it from the machine running Echo Bloom.",
+                403,
+            )
+
+    if len(password) < auth.MIN_PASSWORD_LEN:
+        return _render("Password must be at least %d characters." % auth.MIN_PASSWORD_LEN)
     if password != confirm:
-        return templates.TemplateResponse(request, "login.html", {
-            "error": "Passwords don't match.", "configured": False,
-            "show_login": False, "config_path": str(auth.CONFIG_FILE),
-        })
+        return _render("Passwords don't match.")
+
     auth.set_password(password)
     auth.mark_setup_complete()
-    token  = auth.create_session()
-    resp   = RedirectResponse("/welcome", status_code=303)
-    resp.set_cookie("kin_session", token, httponly=True, samesite="lax", max_age=auth.SESSION_TTL)
+    auth.clear_setup_token()
+
+    token    = auth.create_session()
+    resp     = RedirectResponse("/welcome", status_code=303)
+    is_https = request.headers.get("x-forwarded-proto") == "https" \
+               or request.url.scheme == "https"
+    resp.set_cookie(
+        "kin_session", token,
+        httponly=True,
+        samesite="strict",
+        secure=is_https,
+        max_age=auth.SESSION_TTL,
+    )
     return resp
 
 
