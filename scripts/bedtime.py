@@ -110,6 +110,38 @@ def pause_wanders():
         log(f"Roundtable paused (pid {pid})")
 
 
+def shutdown_remote_nodes():
+    """Power down other configured machines over SSH.
+
+    Opt-in: a node is only touched when it has an `ssh_user`, because we cannot
+    guess a login and must never try. Failures are logged, never fatal — the
+    local machine still goes to sleep.
+    """
+    nodes = [n for n in cfg.load().get("nodes", [])
+             if n.get("ssh_user")
+             and str(n.get("ip", "")).lower() not in ("localhost", "127.0.0.1", "")]
+    if not nodes:
+        return
+    for node in nodes:
+        target = f"{node['ssh_user']}@{node['ip']}"
+        log(f"Shutting down {node.get('name', node['ip'])}...")
+        try:
+            r = subprocess.run(
+                ["ssh", "-o", "ConnectTimeout=10",
+                 "-o", "BatchMode=yes",         # never hang on a password prompt
+                 target, "systemctl poweroff"],
+                timeout=25, capture_output=True, text=True,
+            )
+            if r.returncode == 0:
+                log(f"  {node.get('name', node['ip'])}: poweroff sent")
+            else:
+                log(f"  {node.get('name', node['ip'])}: "
+                    f"{r.stderr.strip() or 'non-zero exit'}")
+        except Exception as e:
+            log(f"  {node.get('name', node['ip'])}: {e}")
+    time.sleep(20)      # let them get there before we drop the network
+
+
 def resume_wanders():
     """SIGCONT the roundtable. Every path that pauses must reach this."""
     pid = _roundtable_pid()
@@ -367,6 +399,10 @@ def main():
     arm_rtcwake()
     log("Shutting down. Goodnight.")
     time.sleep(3)
+    # Remote nodes first. morning.py wakes these with Wake-on-LAN every
+    # morning, but nothing ever put them back to sleep — so anyone who
+    # configured a second machine had it woken daily and left running forever.
+    shutdown_remote_nodes()
     subprocess.run(["systemctl", "poweroff"])
 
 

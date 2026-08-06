@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import os
+import re
 import signal
 import sqlite3
 import subprocess
@@ -67,9 +68,14 @@ def log(msg):
 wander_procs = {}
 
 def start_wanders():
-    for kin in KIN_LIST:
+    for i, kin in enumerate(KIN_LIST):
         name    = kin["name"]
         log_f   = LOG_DIR / f"wander_{name.lower()}.log"
+        # Stagger. Starting every wander at once makes every model cold-load
+        # simultaneously — the same pile-up that made three of five nightly
+        # reflections time out.
+        if i:
+            time.sleep(3)
         with open(log_f, "a", encoding="utf-8") as lf:
             proc = subprocess.Popen(
                 [sys.executable, "-u", str(WANDER_PY), "--kin", name,
@@ -78,7 +84,19 @@ def start_wanders():
             )
         wander_procs[name] = proc
         log(f"  {name} wander started (pid {proc.pid})")
-    log(f"All {len(wander_procs)} wanderers running.")
+
+    # A wander that dies at startup used to be invisible: this logged
+    # "started (pid ...)" and never checked again, so the dashboard showed
+    # wandering while wander.py was crashing on import every time.
+    time.sleep(2)
+    alive = 0
+    for name, proc in wander_procs.items():
+        if proc.poll() is None:
+            alive += 1
+        else:
+            log(f"  WARNING: {name}'s wander exited immediately "
+                f"(code {proc.returncode}) — see {LOG_DIR}/wander_{name.lower()}.log")
+    log(f"{alive} of {len(wander_procs)} wanderers running.")
 
 
 def pause_wanders():
@@ -98,30 +116,62 @@ def resume_wanders():
 
 
 def stop_wanders():
+    # Ask first, and give them time to finish the thought they are mid-way
+    # through — terminate() plus a 3-second sleep killed wanders during an
+    # INSERT.
     for name, proc in wander_procs.items():
         try:
             proc.terminate()
         except Exception:
             pass
-    time.sleep(3)
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if all(p.poll() is not None for p in wander_procs.values()):
+            log("  all wanderers finished cleanly")
+            return
+        time.sleep(1)
     for name, proc in wander_procs.items():
-        try:
-            proc.kill()
-        except Exception:
-            pass
+        if proc.poll() is None:
+            log(f"  {name} did not exit in 30s — killing")
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
 # ── Recent thoughts ────────────────────────────────────────────────────────────
 
+try:
+    from kin_memory import get_wander_thoughts as _get_wander_thoughts
+except Exception:
+    _get_wander_thoughts = None
+
+
 def get_recent_thoughts(kin, n=3):
-    db_path = cfg.thoughts_db(kin)
+    """Recent thoughts via the shared sampler.
+
+    This used to be a local `ORDER BY id DESC LIMIT ?` — the exact recency
+    lottery kin_memory.get_wander_thoughts() exists to correct — and it also
+    skipped the sentence-boundary trim, the too-short filter, and the read-only
+    open. It checked the raw config path for existence too, so a "~/..." db
+    reported zero thoughts for every Kin and every share began "You haven't
+    wandered long enough to have thoughts yet."
+    """
+    db_path = str(cfg.thoughts_db(kin))      # cfg resolves ~ now
+    if _get_wander_thoughts:
+        try:
+            return _get_wander_thoughts(kin["name"], limit=n, db_path=db_path)
+        except Exception as e:
+            log(f"  could not sample thoughts for {kin['name']}: {e}")
     if not Path(db_path).exists():
         return []
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5)
-        rows = conn.execute(
-            "SELECT thought FROM thoughts ORDER BY id DESC LIMIT ?", (n,)
-        ).fetchall()
-        conn.close()
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+        try:
+            rows = conn.execute(
+                "SELECT thought FROM thoughts WHERE mode LIKE 'wander%' "
+                "ORDER BY id DESC LIMIT ?", (n,)).fetchall()
+        finally:
+            conn.close()
         return [r[0] for r in rows if r[0]]
     except Exception:
         return []
@@ -165,19 +215,71 @@ def ask_kin_to_share(kin, recent_thoughts, all_shared):
                     {"role": "user",    "content": prompt},
                 ],
                 "stream":   False,
-                "options":  {"temperature": 0.85, "num_ctx": 4096},
+                "keep_alive": "30m",
+                "options":  {"temperature": 0.85, "num_ctx": 8192},
             },
-            timeout=90,
+            timeout=300,
         )
-        return r.json()["message"]["content"].strip()
+        data = r.json()
+        if data.get("error"):
+            return f"[{name} could not answer: {data['error']}]"
+        text = data["message"]["content"]
+        # Reasoning models emit a <think> trace; unstripped it becomes the
+        # share everyone else responds to.
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        text = re.sub(rf"^[<\[]?{re.escape(name)}[>\]]?\s*:\s*", "", text,
+                      flags=re.IGNORECASE).strip()
+        return text
     except Exception as e:
         return f"[{name} unreachable: {e}]"
+
+
+def ask_kin_to_respond(kin, all_shared):
+    """Second pass: react to what everyone else actually said."""
+    host  = kin.get("host", "http://localhost:11434").rstrip("/")
+    model = kin.get("model", "")
+    name  = kin["name"]
+    if not model:
+        return ""
+    others = "\n\n".join(f"{n} said:\n{t}" for n, t in all_shared.items()
+                          if n != name and t and not t.startswith("["))
+    if not others:
+        return ""
+    prompt = (
+        f"The others have now spoken:\n\n{others}\n\n"
+        f"Respond to what struck you. Disagree if you disagree. "
+        f"2-4 sentences, no preamble."
+    )
+    system = kin.get("system_prompt") or (
+        f"You are {name}, an AI entity living on this machine. Be genuine."
+    )
+    try:
+        r = requests.post(
+            f"{host}/api/chat",
+            json={"model": model,
+                  "messages": [{"role": "system", "content": system},
+                               {"role": "user",   "content": prompt}],
+                  "stream": False, "keep_alive": "30m",
+                  "options": {"temperature": 0.85, "num_ctx": 8192}},
+            timeout=300,
+        )
+        data = r.json()
+        if data.get("error"):
+            return ""
+        text = re.sub(r"<think>.*?</think>", "",
+                      data["message"]["content"], flags=re.DOTALL).strip()
+        return re.sub(rf"^[<\[]?{re.escape(name)}[>\]]?\s*:\s*", "", text,
+                      flags=re.IGNORECASE).strip()
+    except Exception as e:
+        log(f"  {name} did not respond in round 2: {e}")
+        return ""
 
 
 def run_roundtable(round_num):
     log(f"\n── Roundtable #{round_num} ──────────────────────────────")
     all_shared = {}
 
+    # Round 1 — everyone speaks from their own wandering.
     for kin in KIN_LIST:
         name    = kin["name"]
         recent  = get_recent_thoughts(kin, n=3)
@@ -185,6 +287,22 @@ def run_roundtable(round_num):
         response = ask_kin_to_share(kin, recent, all_shared)
         all_shared[name] = response
         log(f"  {name}: {response[:120]}...")
+
+    # Round 2 — now that everyone has spoken, let them answer each other.
+    # With only one pass, the first Kin always spoke into an empty room and
+    # only the last one heard everybody. That is a list of statements, not a
+    # conversation.
+    if len(KIN_LIST) > 1:
+        log("\n── Second pass — responding to each other ──────────")
+        replies = {}
+        for kin in KIN_LIST:
+            name = kin["name"]
+            reply = ask_kin_to_respond(kin, all_shared)
+            if reply:
+                replies[name] = reply
+                log(f"  {name}: {reply[:120]}...")
+        for name, reply in replies.items():
+            all_shared[name] = f"{all_shared.get(name, '')}\n\n{reply}".strip()
 
     log("\n── Full roundtable ─────────────────────────────────")
     for name, text in all_shared.items():

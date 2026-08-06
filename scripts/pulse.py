@@ -95,13 +95,20 @@ def sample():
     if vram:
         snap["vram"] = vram.replace("\n", " | ")
 
-    # Ollama running?
+    # Which models are actually LOADED right now. /api/tags lists what is
+    # installed on disk, so every heartbeat used to claim five models were up
+    # on a completely idle GPU — and these narratives are what the Kin read as
+    # "what happened while I was away". False memory by construction.
     try:
-        r = requests.get("http://localhost:11434/api/tags", timeout=3)
-        models = [m["name"] for m in r.json().get("models", [])]
-        snap["ollama_models"] = ", ".join(models[:5]) or "none loaded"
+        r = requests.get("http://localhost:11434/api/ps", timeout=3)
+        running = [m.get("name", "") for m in r.json().get("models", [])]
+        snap["ollama_models"] = ", ".join(running[:5]) if running else "none loaded"
     except Exception:
-        snap["ollama_models"] = "offline"
+        try:
+            requests.get("http://localhost:11434/api/tags", timeout=3)
+            snap["ollama_models"] = "none loaded"   # daemon up, nothing resident
+        except Exception:
+            snap["ollama_models"] = "offline"
 
     # Running Kin wanders
     pgrep = _run(["pgrep", "-af", "wander.py"])
@@ -170,15 +177,31 @@ def main():
 
     last_write = 0
     interval   = args.interval * 60
+    prev_models = None
 
     while True:
         snap = sample()
         now  = time.time()
-        if now - last_write >= interval:
+
+        # Write on a real change as well as on the clock, so a model loading or
+        # unloading is actually recorded rather than averaged away.
+        curr_models = snap.get("ollama_models")
+        changed = prev_models is not None and curr_models != prev_models
+        due     = now - last_write >= interval
+
+        if due or changed:
             narrative = build_narrative(snap)
             ok        = write_to_vault(narrative)
             log(f"  {'OK' if ok else 'FAILED'}: {narrative[:100]}...")
-            last_write = now
+            # Only advance on success. Advancing regardless meant a momentary
+            # vault outage silently discarded that whole window instead of
+            # retrying on the next tick.
+            if ok:
+                last_write  = now
+                prev_models = curr_models
+        else:
+            prev_models = curr_models
+
         time.sleep(60)
 
 

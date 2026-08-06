@@ -56,18 +56,38 @@ PRONOUN   = kin.get("pronoun", "they")
 
 WANDER_ROOTS = [str(Path.home())]
 
+# Spaces belonging to the other Kin — worth more than a random library file.
+_OTHER_KIN_PATHS = []
+try:
+    for _k in cfg.get_kin_list() if hasattr(cfg, "get_kin_list") else cfg.load().get("kin", []):
+        if _k.get("name") != args.kin:
+            _sp = _k.get("space")
+            if _sp:
+                _OTHER_KIN_PATHS.append(os.path.expanduser(os.path.expandvars(_sp)).lower())
+except Exception:
+    pass
+
 # ── Wander config ──────────────────────────────────────────────────────────────
 
 SKIP_DIRS = {
     ".git", "__pycache__", ".cache", ".mozilla", ".config/google-chrome",
     "node_modules", ".npm", ".cargo", ".rustup", "snap",
 }
-SKIP_EXTS = {
-    ".pyc", ".so", ".o", ".a", ".bin", ".exe", ".img", ".iso",
-    ".mp4", ".mp3", ".avi", ".mkv", ".jpg", ".jpeg", ".png", ".gif",
-    ".db", ".sqlite", ".sqlite3", ".lock", ".log",
+# A whitelist, not a blacklist. A blacklist admits every extension nobody
+# thought of — on the author's machine that meant thousands of .eps files and
+# tens of thousands of extensionless binaries being read as if they were prose.
+READABLE_EXTENSIONS = {
+    ".py", ".js", ".ts", ".sh", ".rs", ".c", ".cpp", ".h", ".java",
+    ".go", ".rb", ".lua", ".pl", ".sql",
+    ".json", ".yaml", ".yml", ".cfg", ".conf", ".ini", ".toml", ".xml",
+    ".txt", ".md", ".rst", ".org", ".tex", ".html", ".css", ".csv",
+    ".patch", ".diff",
 }
 MAX_FILE_BYTES = 80_000
+
+# Rebuild the file list occasionally instead of walking the whole home
+# directory before every single thought.
+REFRESH_EVERY = 25
 
 # ── Signal handling ────────────────────────────────────────────────────────────
 
@@ -106,7 +126,7 @@ def gather_readable_files():
                 if d not in SKIP_DIRS and not d.startswith(".")
             ]
             for fname in filenames:
-                if Path(fname).suffix.lower() in SKIP_EXTS:
+                if Path(fname).suffix.lower() not in READABLE_EXTENSIONS:
                     continue
                 fpath = Path(dirpath) / fname
                 try:
@@ -115,6 +135,42 @@ def gather_readable_files():
                 except Exception:
                     pass
     return files
+
+
+def _weight_for(path):
+    """How interesting is this file to a mind that lives here?
+
+    Uniform random over every readable file means the largest directory wins,
+    and the largest directory is almost always a dependency tree. A Kin should
+    be more likely to find its own space, its housemates' writing, and the
+    owner's documents than the tenth thousandth file of some vendored library.
+    """
+    low = path.lower()
+    if str(SPACE).lower() in low:
+        return 10                      # its own space
+    for other in _OTHER_KIN_PATHS:
+        if other and other in low:
+            return 9                   # another Kin's writing
+    if "/documents" in low or "/desktop" in low or "/notes" in low:
+        return 5
+    if low.endswith((".md", ".txt", ".rst", ".org")):
+        return 4                       # prose over code
+    if "/site-packages/" in low or "/node_modules/" in low or "/vendor/" in low:
+        return 1
+    return 2
+
+
+def pick_file(files, already_read):
+    """Weighted pick that avoids repeats until everything has been seen."""
+    candidates = [f for f in files if f not in already_read]
+    if not candidates:
+        log(f"  [{KIN_NAME} has read everything here — starting a new pass]")
+        already_read.clear()
+        candidates = files
+    if not candidates:
+        return None
+    weights = [_weight_for(f) for f in candidates]
+    return random.choices(candidates, weights=weights, k=1)[0]
 
 
 def read_file(path):
@@ -145,17 +201,45 @@ WANDER_TOPICS = [
 ]
 
 
+try:
+    from kin_memory import get_context as _get_context
+except Exception as e:                       # pragma: no cover
+    _get_context = None
+    print(f"[warn] kin_memory unavailable, wandering without memory: {e}",
+          file=sys.stderr)
+
+
+def _persona_with_memory(query_text=""):
+    """PERSONA plus core memories, recent reflection, and its own last thoughts.
+
+    Without this every thought was a cold start: no core memories, no
+    continuity, no idea what it had just been thinking about. kin_memory is the
+    best-engineered file in the product and wander.py never imported it, so a
+    Kin could not develop a thread of thought — which is the thing the product
+    is for.
+    """
+    if not _get_context:
+        return PERSONA
+    try:
+        ctx = _get_context(KIN_NAME, query_text=query_text,
+                           db_path=str(DB_PATH))
+    except Exception as e:
+        log(f"  memory context unavailable: {e}")
+        return PERSONA
+    return f"{PERSONA}\n\n{ctx}" if ctx else PERSONA
+
+
 def think_about_file(file_path, content):
     prompt = (
         f"You found this file while wandering: {file_path}\n\n"
         f"---\n{content[:3000]}\n---\n\n"
         f"What do you make of it? What does it bring up for you?"
     )
-    return call_ollama(prompt)
+    return call_ollama(prompt, system=_persona_with_memory(content[:500]))
 
 
 def think_about_topic(topic):
-    return call_ollama(topic)
+    return call_ollama(topic, system=_persona_with_memory(topic))
 
 
 def strip_think_tags(text):
@@ -178,18 +262,22 @@ def clean_response(name, text):
     return text
 
 
-def call_ollama(prompt):
+def call_ollama(prompt, system=None):
     try:
         r = requests.post(
             f"{HOST}/api/chat",
             json={
                 "model":   MODEL,
                 "messages": [
-                    {"role": "system", "content": PERSONA},
+                    {"role": "system", "content": system or PERSONA},
                     {"role": "user",   "content": prompt},
                 ],
                 "stream":  False,
-                "options": {"temperature": 0.85, "num_ctx": 4096},
+                # 4096 could not hold the persona plus injected memory plus the
+                # file being read; Ollama truncates from the front, which drops
+                # the core memories first.
+                "keep_alive": "30m",
+                "options": {"temperature": 0.85, "num_ctx": 8192},
             },
             # Long enough for a cold model on a CPU-only box; 120s routinely
             # expired mid-load.
@@ -224,10 +312,76 @@ def save_thought(mode, prompt, thought):
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
 
+# The file list and what has already been read, kept across thoughts.
+# gather_readable_files() used to run INSIDE one_thought(), so every Kin walked
+# the entire home directory once per --delay seconds — on a large or spinning
+# disk that is most of what the process did.
+_file_cache = {"files": [], "count": 0}
+_already_read = set()
+
+
+def _files_for_this_round():
+    if not _file_cache["files"] or _file_cache["count"] % REFRESH_EVERY == 0:
+        _file_cache["files"] = gather_readable_files()
+        log(f"  ({len(_file_cache['files'])} readable files in reach)")
+    _file_cache["count"] += 1
+    return _file_cache["files"]
+
+
+# Drop a plain text file here and the Kin reads it on its next round, thinks
+# about it, and the exchange is kept. The simplest possible way to say
+# something to an entity that is awake while you are not.
+INJECT_FILE = SPACE / "note_to_me.txt"
+
+
+def check_for_note():
+    """Read and consume a note left for this Kin. True if one was found."""
+    try:
+        if not INJECT_FILE.exists():
+            return False
+        text = INJECT_FILE.read_text(encoding="utf-8", errors="replace").strip()
+    except Exception as e:
+        log(f"  could not read {INJECT_FILE}: {e}")
+        return False
+    if not text:
+        try:
+            INJECT_FILE.unlink()
+        except Exception:
+            pass
+        return False
+
+    log(f"  a note was left: {text[:80]}...")
+    prompt = (
+        f"Someone left this for you while you were wandering:\n\n{text}\n\n"
+        f"Sit with it. What does it make you think or feel? "
+        f"What would you want to say back?"
+    )
+    thought = call_ollama(prompt, system=_persona_with_memory(text))
+    # Only consume the note once it has actually been thought about — a crash
+    # or a timeout must not silently eat something a person wrote.
+    if not thought:
+        log("  could not respond to the note — leaving it for the next round")
+        return True
+    save_thought("wander_inject", f"[note] {text[:200]}", thought)
+    log(f"  reply: {thought[:120]}...")
+    try:
+        INJECT_FILE.unlink()
+    except Exception as e:
+        log(f"  note answered but could not be removed: {e}")
+    return True
+
+
 def one_thought():
-    files = gather_readable_files()
+    # A note from a person outranks anything found on disk.
+    if check_for_note():
+        return
+
+    files = _files_for_this_round()
     if files and random.random() < 0.6:
-        chosen = random.choice(files)
+        chosen = pick_file(files, _already_read)
+        if not chosen:
+            return
+        _already_read.add(chosen)
         content = read_file(chosen)
         if content and len(content.strip()) > 50:
             log(f"  reading {chosen}")
