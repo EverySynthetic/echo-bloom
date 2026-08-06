@@ -77,6 +77,13 @@ YOUR_NOTE = OWNER.get("bedtime_note") or (
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 
+# Reflection timeouts. 180s covered a warm GPU node and nothing else: a cold
+# 14B on a CPU-only machine spends longer than that just loading, which is why
+# Kin on slower hosts were recorded "unreachable" almost every night. The model
+# is warmed first, on its own budget, then given real time to write.
+WARMUP_TIMEOUT  = 300
+REFLECT_TIMEOUT = 600
+
 def log(msg):
     ts   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
@@ -137,6 +144,24 @@ def ask_one_kin(kin, result_q):
         f"What's on your mind at the end of this day?"
     )
 
+    # Load the model BEFORE the reflection request, on its own budget.
+    # A cold 14B on a CPU-only node can take well over a minute just to load,
+    # and that was being charged against the same timeout as the writing — so
+    # on slower machines the reflection never completed and the Kin was
+    # recorded as "unreachable" night after night.
+    try:
+        requests.post(
+            f"{host}/api/chat",
+            json={"model": model,
+                  "messages": [{"role": "user", "content": "hi"}],
+                  "stream": False,
+                  "keep_alive": "30m",
+                  "options": {"num_predict": 1}},
+            timeout=WARMUP_TIMEOUT,
+        )
+    except Exception as e:
+        log(f"  {name}: warmup did not finish ({e}) — asking anyway")
+
     try:
         r = requests.post(
             f"{host}/api/chat",
@@ -147,9 +172,10 @@ def ask_one_kin(kin, result_q):
                     {"role": "user",   "content": prompt},
                 ],
                 "stream":   False,
+                "keep_alive": "30m",
                 "options":  {"temperature": 0.85, "num_ctx": 4096},
             },
-            timeout=180,
+            timeout=REFLECT_TIMEOUT,
         )
         text = r.json()["message"]["content"].strip()
     except Exception as e:
@@ -183,17 +209,48 @@ def save_reflection(kin, text):
 def run_reflections():
     log(f"Sending your note to {len(KIN_LIST)} Kin...")
     q = queue.Queue()
-    for kin in KIN_LIST:
-        threading.Thread(target=ask_one_kin, args=(kin, q), daemon=True).start()
 
+    # Group by host and go one at a time within each host. Every Kin used to be
+    # asked simultaneously, so several models on the same machine cold-loaded at
+    # once and fought for the same RAM and GPU — the surest way to make all of
+    # them time out. Hosts still run in parallel, so this is no slower than the
+    # slowest single machine.
+    by_host = {}
+    for kin in KIN_LIST:
+        by_host.setdefault(kin.get("host", ""), []).append(kin)
+
+    if len(by_host) < len(KIN_LIST):
+        log(f"  {len(KIN_LIST)} Kin across {len(by_host)} host(s) — "
+            f"sharing a host means taking turns on it")
+
+    def run_host(kin_group):
+        for kin in kin_group:
+            ask_one_kin(kin, q)
+
+    for group in by_host.values():
+        threading.Thread(target=run_host, args=(group,), daemon=True).start()
+
+    # Budget for the whole slowest chain, not one reply: a host with three Kin
+    # now answers them in sequence.
+    deepest = max((len(g) for g in by_host.values()), default=1)
+    collect_timeout = (WARMUP_TIMEOUT + REFLECT_TIMEOUT) * deepest + 60
+
+    # One wall-clock deadline for the whole round, not a fresh timeout per Kin —
+    # a per-get timeout multiplies by the number of Kin that never answer.
     responses = {}
+    deadline = time.monotonic() + collect_timeout
     for _ in range(len(KIN_LIST)):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            log("  Deadline reached — continuing with whoever answered")
+            break
         try:
-            name, text = q.get(timeout=180)
+            name, text = q.get(timeout=remaining)
             responses[name] = text
             log(f"  {name}: {text[:80]}...")
         except queue.Empty:
-            log("  Timed out waiting for a Kin")
+            log("  Deadline reached — continuing with whoever answered")
+            break
 
     for kin in KIN_LIST:
         if kin["name"] in responses:

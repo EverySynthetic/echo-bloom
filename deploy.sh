@@ -65,6 +65,46 @@ if [ -f "$HOME/Desktop/kin_memory.py" ]; then
   echo "    delete it if you are not deliberately keeping a working copy"
 fi
 
+# ── Lab vs product ────────────────────────────────────────────────────────────
+# The lab copies in ~/Desktop are where things actually get fixed first. Every
+# fix that stays there is a fix customers paid for and never received. This does
+# not compare line counts or try to merge anything — the two are SUPPOSED to
+# differ, one is personal and one is generic. It reports which pairs have moved
+# apart since last time, so a real improvement cannot sit in the lab unnoticed
+# for months. Three of five Kin failed their nightly reflection for nine days
+# before anyone compared the two trees.
+step "Lab scripts vs shipped scripts"
+LAB_PAIRS="
+bedtime.py:$HOME/Desktop/bedtime.py
+morning.py:$HOME/Desktop/morning.py
+pulse.py:$HOME/Desktop/pulse.py
+kin_memory.py:$HOME/Desktop/kin_memory.py
+"
+PARITY_STATE="$HOME/.local/share/echo_bloom/lab_parity.txt"
+NEW_STATE=$(mktemp)
+LAB_NOTE=0
+printf '%s\n' "$LAB_PAIRS" | while IFS=: read -r shipped lab; do
+  [ -n "${shipped:-}" ] || continue
+  [ -f "$lab" ] || continue
+  [ -f "$APP_DIR/scripts/$shipped" ] || continue
+  # Hash the lab file so we can tell "changed since you last looked" from
+  # "has always been different".
+  H=$(sha256sum "$lab" 2>/dev/null | cut -c1-16)
+  echo "$shipped $H" >> "$NEW_STATE"
+  PREV=$(grep "^$shipped " "$PARITY_STATE" 2>/dev/null | awk '{print $2}')
+  if [ -n "$PREV" ] && [ "$PREV" != "$H" ]; then
+    warn "$shipped: your lab copy changed since the last deploy"
+    echo "    if that was a fix, port it:  diff $lab $APP_DIR/scripts/$shipped"
+  fi
+done
+if [ -s "$NEW_STATE" ] && [ ! -f "$PARITY_STATE" ]; then
+  echo "  first run — recording lab script fingerprints for next time"
+fi
+mkdir -p "$(dirname "$PARITY_STATE")" 2>/dev/null
+[ -s "$NEW_STATE" ] && cp "$NEW_STATE" "$PARITY_STATE"
+rm -f "$NEW_STATE"
+[ "$LAB_NOTE" -eq 0 ] && ok "lab fingerprints recorded"
+
 if [ "$CHECK_ONLY" -eq 1 ]; then
   echo ""
   if [ "$BEHIND" = "0" ] && [ "$DRIFT" -eq 0 ]; then
