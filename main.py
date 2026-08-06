@@ -1165,8 +1165,9 @@ async def api_vault_semantic(q: str, limit: int = 10, _=Depends(require_auth)):
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 "http://localhost:11434/api/embeddings",
-                json={"model": "nomic-embed-text", "prompt": q},
-                timeout=aiohttp.ClientTimeout(total=20),
+                json={"model": "nomic-embed-text", "prompt": q,
+                      "keep_alive": "999h"},
+                timeout=aiohttp.ClientTimeout(total=30),
             ) as r:
                 embedding = (await r.json()).get("embedding", [])
             if not embedding:
@@ -1397,8 +1398,9 @@ async def api_ingest(request: Request, _=Depends(require_auth)):
             try:
                 async with session.post(
                     "http://localhost:11434/api/embeddings",
-                    json={"model": "nomic-embed-text", "prompt": chunk},
-                    timeout=aiohttp.ClientTimeout(total=20),
+                    json={"model": "nomic-embed-text", "prompt": chunk,
+                          "keep_alive": "999h"},
+                    timeout=aiohttp.ClientTimeout(total=30),
                 ) as r:
                     emb = (await r.json()).get("embedding", [])
                 if not emb:

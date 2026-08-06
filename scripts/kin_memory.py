@@ -174,10 +174,15 @@ def get_vault_memories(kin_name, query_text, limit=5):
     if not query_text:
         return []
     try:
+        # keep_alive: a cold load of the embed model takes ~11s when the GPUs
+        # are busy with generation — one second past the old timeout=10, which
+        # made semantic recall fail every single time. Warm, it answers in
+        # under a second. Pin it resident and give the cold path room.
         r = requests.post(
             _embed_url(),
-            json={"model": _embed_model(), "prompt": query_text},
-            timeout=10,
+            json={"model": _embed_model(), "prompt": query_text,
+                  "keep_alive": "999h"},
+            timeout=30,
         )
         r.raise_for_status()
         vector = r.json()["embedding"]
