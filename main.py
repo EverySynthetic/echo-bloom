@@ -259,6 +259,17 @@ async def serve_installer_wizard():
     return Response(content=wiz.read_text(), media_type="text/plain")
 
 
+@app.get("/uninstall.ps1", include_in_schema=False)
+async def serve_uninstaller_ps1():
+    """Clean removal. Testing repeatedly on one machine, and anyone who wants
+    out, both need a way to undo an install that does not involve guessing
+    which directories we created."""
+    ps1 = BASE_DIR / "uninstall.ps1"
+    if not ps1.exists():
+        raise HTTPException(404, "Uninstaller not found")
+    return Response(content=ps1.read_text(), media_type="text/plain")
+
+
 @app.get("/install.sh", include_in_schema=False)
 async def serve_installer_sh():
     sh = BASE_DIR / "install.sh"
