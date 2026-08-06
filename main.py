@@ -163,7 +163,16 @@ async def _fetch_page_text(url: str, max_chars: int = 3000) -> str:
 
 # ── Piper voice model discovery ────────────────────────────────────────────────
 
-def _find_piper_binary() -> str | None:
+def _piper_command() -> list[str] | None:
+    """How to run piper on this machine, as an argv prefix.
+
+    Returns a list because there may not be a binary at all: `pip install
+    piper-tts` provides a console script that is frequently NOT on PATH
+    (Windows puts it in Scripts/, Linux in ~/.local/bin), but the module is
+    always runnable with `python -m piper`. Falling back to that is the
+    difference between working TTS and "Piper not found" on a machine where
+    piper is, in fact, installed.
+    """
     # On Garuda/Arch, /usr/bin/piper is a GTK app — the TTS binary lives elsewhere.
     candidates = [
         Path("/usr/lib/piper-tts/bin/piper"),
@@ -171,11 +180,26 @@ def _find_piper_binary() -> str | None:
         Path("/usr/local/bin/piper"),
         Path("/usr/bin/piper"),
     ]
-    for p in candidates:
-        if p.is_file():
-            return str(p)
+    for c in candidates:
+        if c.is_file():
+            return [str(c)]
     import shutil
-    return shutil.which("piper")
+    found = shutil.which("piper")
+    if found:
+        return [found]
+    # Last resort: the pip package, invoked as a module.
+    try:
+        import importlib.util
+        if importlib.util.find_spec("piper") is not None:
+            return [sys.executable, "-m", "piper"]
+    except Exception:
+        pass
+    return None
+
+
+def _find_piper_binary() -> str | None:
+    cmd = _piper_command()
+    return cmd[0] if cmd else None
 
 
 def _find_piper_voice() -> str | None:
@@ -903,19 +927,27 @@ async def api_tts(request: Request, _=Depends(require_auth)):
     if not text:
         raise HTTPException(400, "No text.")
 
+    # Engine before voice. The other order told someone with no piper at all to
+    # go download a voice file, which would not have helped them.
+    piper_cmd = _piper_command()
+    if not piper_cmd:
+        raise HTTPException(503,
+            "Piper, the voice engine, isn't installed on this machine. "
+            "Install it with:  pip install piper-tts  then restart Echo Bloom.")
+
     voice = _voice_for_kin(kin_name) if kin_name else _find_piper_voice()
     if not voice:
-        raise HTTPException(503, "No Piper voice model found. Download one to ~/piper/ or ~/piper-voices/.")
-
-    piper_bin = _find_piper_binary()
-    if not piper_bin:
-        raise HTTPException(503, "Piper TTS binary not found. Install piper-tts.")
+        raise HTTPException(503,
+            "No voice is installed yet. Pick one from the voice dropdown next "
+            "to the speaker button and it will download, or run: "
+            "python -m piper.download_voices en_US-lessac-medium "
+            f"--data-dir {Path.home() / 'piper'}")
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         out = f.name
     try:
         proc = await asyncio.create_subprocess_exec(
-            piper_bin, "--model", voice, "--output_file", out,
+            *piper_cmd, "--model", voice, "--output_file", out,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,

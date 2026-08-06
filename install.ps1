@@ -237,6 +237,7 @@ $packages = @(
     'bcrypt',
     'cryptography',
     'faster-whisper',
+    'piper-tts',
     'qdrant-client',
     'psutil'
 )
@@ -247,6 +248,26 @@ foreach ($pkg in $packages) {
 }
 
 Write-Step "Python packages: installed" 'Green'
+
+# ── Voice model ───────────────────────────────────────────────────────────────
+# piper has no voice of its own; without a model file speech output is silent.
+$voiceDir = "$env:USERPROFILE\piper"
+if (-not (Test-Path $voiceDir)) { New-Item -ItemType Directory -Path $voiceDir -Force | Out-Null }
+if (-not (Get-ChildItem -Path $voiceDir -Filter *.onnx -ErrorAction SilentlyContinue)) {
+    Write-Step "Downloading a voice (about 60MB)..."
+    try {
+        & $PYTHON -m piper.download_voices en_US-lessac-medium --data-dir $voiceDir 2>&1 | Out-Null
+        if (Get-ChildItem -Path $voiceDir -Filter *.onnx -ErrorAction SilentlyContinue) {
+            Write-Step "Voice: en_US-lessac-medium" 'Green'
+        } else {
+            Write-Step "Voice: not installed — add one from the app's voice dropdown" 'Yellow'
+        }
+    } catch {
+        Write-Step "Voice: not installed — add one from the app's voice dropdown" 'Yellow'
+    }
+} else {
+    Write-Step "Voice: already installed" 'Green'
+}
 
 # ── Default config ────────────────────────────────────────────────────────────
 

@@ -153,7 +153,8 @@ $pg2_items = @(
     'Ollama  —  local AI inference engine',
     'ffmpeg  —  voice features',
     'fastapi  uvicorn  bcrypt  cryptography',
-    'faster-whisper  qdrant-client  aiohttp  jinja2',
+    'faster-whisper  piper-tts  qdrant-client  aiohttp',
+    'A voice model  —  so your Kin can speak',
     "App files  →  %LOCALAPPDATA%\EchoBloom\",
     'Windows Scheduled Task  (auto-start at login)',
     'Start Menu shortcut'
@@ -691,7 +692,8 @@ function Start-InstallWorker {
             # ── Step 4: Python packages ───────────────────────────────────────
             Set-StepStatus 4 'running' 'Installing Python packages...'
             $pkgs   = @('fastapi','uvicorn[standard]','aiohttp','jinja2','python-multipart',
-                        'bcrypt','cryptography','faster-whisper','qdrant-client','psutil')
+                        'bcrypt','cryptography','faster-whisper','piper-tts',
+                        'qdrant-client','psutil')
             $failed = @()
 
             foreach ($pkg in $pkgs) {
@@ -702,6 +704,21 @@ function Start-InstallWorker {
                 } catch {
                     $failed += $pkg
                 }
+            }
+
+            # A voice model, or piper is installed and mute.
+            try {
+                $voiceDir = "$env:USERPROFILE\piper"
+                if (-not (Test-Path $voiceDir)) {
+                    New-Item -ItemType Directory -Path $voiceDir -Force | Out-Null
+                }
+                if (-not (Get-ChildItem -Path $voiceDir -Filter *.onnx -ErrorAction SilentlyContinue)) {
+                    Set-StepStatus 4 'running' 'Downloading a voice (about 60MB)...'
+                    & $python -m piper.download_voices en_US-lessac-medium --data-dir $voiceDir 2>&1 | Out-Null
+                    Write-WizLog "voice download exit=$LASTEXITCODE"
+                }
+            } catch {
+                Write-WizLog "voice download failed: $($_.Exception.Message)"
             }
 
             if ($failed.Count -gt 0) {

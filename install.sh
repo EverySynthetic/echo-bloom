@@ -575,6 +575,8 @@ cryptography>=41.0.0
 requests>=2.31.0
 psutil>=5.9.0
 qrcode>=7.4.2
+faster-whisper>=1.0.0
+piper-tts>=1.2.0
 REQEOF
     fi
 
@@ -922,6 +924,29 @@ DESKEOF
     fi
 }
 
+# ── Download a voice so the Kin can actually speak ───────────────────────────
+# piper is a text-to-speech engine with no voice of its own; without a model
+# file it produces nothing. Nothing used to fetch one, so speech was installed
+# but mute, and the app could only say "no voice found".
+install_voice() {
+    local voice_dir="$HOME/piper"
+    mkdir -p "$voice_dir"
+    if compgen -G "$voice_dir/*.onnx" > /dev/null 2>&1; then
+        ok "Voice already installed."
+        return 0
+    fi
+    info "Downloading a voice (about 60MB)..."
+    if python3 -m piper.download_voices en_US-lessac-medium \
+            --data-dir "$voice_dir" >/dev/null 2>&1; then
+        ok "Voice installed: en_US-lessac-medium"
+    else
+        warn "Could not download a voice — speech output will be unavailable."
+        echo "  Add one later from the voice dropdown in the app, or run:"
+        echo "    python3 -m piper.download_voices en_US-lessac-medium --data-dir $voice_dir"
+    fi
+    return 0
+}
+
 # ── Save first model to kin_config if none exists ─────────────────────────────
 seed_config() {
     local model=$1
@@ -1253,6 +1278,7 @@ echo
 echo -e "${BOLD}[ 3 / 6 ]  Installing app${NC}"
 cd "$APP_DIR"
 install_deps
+install_voice
 deploy_scripts
 
 # Step 4 — Meet your Kin (deps are installed, so requests is available)
