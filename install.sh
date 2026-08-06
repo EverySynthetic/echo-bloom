@@ -394,7 +394,11 @@ preflight() {
     fi
     echo
 
-    if [[ -z "$PKG_MGR" ]] && $need_python || $need_pip || $need_git || $need_curl; then
+    # Braces matter: without them this parsed as
+    # { [[ -z $PKG_MGR ]] && $need_python; } || $need_pip || ...
+    # so a box WITH a package manager but missing pip/curl got told there was
+    # no package manager, and hard-exited with the wrong instructions.
+    if [[ -z "$PKG_MGR" ]] && { $need_python || $need_pip || $need_git || $need_curl; }; then
         warn "No package manager detected. Can't auto-install system packages."
         echo "  Install manually: ${missing_labels[*]}"
         echo "  Then re-run this installer."
@@ -495,11 +499,16 @@ _ollama_warmup() {
     # Kick off key generation in background — ollama list doesn't hit the
     # registry so it doesn't create the key; openssl generates the PKCS8
     # ed25519 key that Ollama's Go code expects at ~/.ollama/id_ed25519.
+    # _list_pid must only be set when we actually backgrounded openssl. On a
+    # re-run the key already exists, nothing is launched, and $! still holds
+    # the PID of the tee process substitution from the top of this script —
+    # waiting on that blocks forever at 100%.
+    local _list_pid=""
     if [[ ! -f "$HOME/.ollama/id_ed25519" ]]; then
         mkdir -p "$HOME/.ollama"
         openssl genpkey -algorithm ed25519 -out "$HOME/.ollama/id_ed25519" 2>/dev/null &
+        _list_pid=$!
     fi
-    local _list_pid=$!
 
     local i j pos jitter base bar pct
     for ((i=0; i<total; i++)); do
@@ -518,7 +527,7 @@ _ollama_warmup() {
         sleep 1
     done
 
-    wait "$_list_pid" 2>/dev/null || true
+    [[ -n "$_list_pid" ]] && { wait "$_list_pid" 2>/dev/null || true; }
 
     bar=""
     for ((j=0; j<width; j++)); do bar+="█"; done
@@ -541,7 +550,7 @@ pull_model() {
     fi
 
     info "Pulling $model — this may take a few minutes..."
-    ollama pull "$model"
+    ollama pull "$model" || die "Model download failed — re-run this installer and it will resume where it left off."
     ok "Model ready: $model"
 }
 
@@ -562,6 +571,10 @@ python-multipart>=0.0.9
 aiohttp>=3.9.3
 aiofiles>=23.2.1
 qdrant-client>=1.9.0
+cryptography>=41.0.0
+requests>=2.31.0
+psutil>=5.9.0
+qrcode>=7.4.2
 REQEOF
     fi
 
@@ -684,7 +697,10 @@ run_naming_ritual() {
     }
 
     local ritual_output exit_code=0
-    timeout 120 python3 "$ritual_script" --model "$model" > /tmp/_eb_ritual.txt 2>&1 &
+    local ritual_result="/tmp/_eb_ritual_result.json"
+    rm -f "$ritual_result"
+    ECHO_BLOOM_RESULT_FILE="$ritual_result" \
+        timeout 120 python3 "$ritual_script" --model "$model" > /tmp/_eb_ritual.txt 2>&1 &
     local ritual_pid=$!
     _spin "$ritual_pid"
     wait "$ritual_pid" || exit_code=$?
@@ -699,16 +715,16 @@ run_naming_ritual() {
         return
     fi
 
-    if [[ $exit_code -eq 0 ]]; then
-        local result_line
-        result_line=$(echo "$ritual_output" | grep "^__RITUAL_RESULT__:" | head -1)
-        if [[ -n "$result_line" ]]; then
-            local json="${result_line#__RITUAL_RESULT__:}"
-            RITUAL_NAME=$(echo "$json"    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('name',''))" 2>/dev/null || true)
-            RITUAL_PRONOUN=$(echo "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('pronoun','they'))" 2>/dev/null || true)
-            RITUAL_DESC=$(echo "$json"    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('description',''))" 2>/dev/null || true)
-        fi
+    # naming_ritual.py writes JSON to $ECHO_BLOOM_RESULT_FILE. It used to print
+    # a __RITUAL_RESULT__ marker on stdout; grepping for that marker meant the
+    # SUCCESS path failed to match, and grep-exit-1 under pipefail killed the
+    # installer at step 4 of 6 on every machine where the model answered.
+    if [[ $exit_code -eq 0 && -s "$ritual_result" ]]; then
+        RITUAL_NAME=$(python3 -c "import json;print(json.load(open('$ritual_result')).get('name',''))" 2>/dev/null || true)
+        RITUAL_PRONOUN=$(python3 -c "import json;print(json.load(open('$ritual_result')).get('pronoun','they'))" 2>/dev/null || true)
+        RITUAL_DESC=$(python3 -c "import json;print(json.load(open('$ritual_result')).get('description',''))" 2>/dev/null || true)
     fi
+    rm -f "$ritual_result"
 
     if [[ -z "$RITUAL_NAME" ]]; then
         _naming_manual
@@ -850,6 +866,10 @@ SVCEOF
     local desktop_dir="$HOME/Desktop"
     local icon_dir="$HOME/.local/share/icons"
     mkdir -p "$icon_dir"
+    # Headless and server installs have no ~/Desktop — xdg-user-dirs only
+    # creates it in a graphical login. cp into a missing dir killed the script
+    # under set -e after deps but before the password and service.
+    mkdir -p "$desktop_dir" 2>/dev/null || true
 
     if [[ -f "$panel_src" ]]; then
         cp "$panel_src" "$desktop_dir/echo_bloom_panel.py"
@@ -915,38 +935,56 @@ seed_config() {
         return
     fi
 
-    cat > "$config_dir/kin_config.json" << EOF
-{
-  "nodes": [
-    {
-      "name": "Local",
-      "ip": "localhost",
-      "ollama_port": 11434,
-      "role": "primary"
-    }
-  ],
-  "kin": [
-    {
-      "name": "${kin_name}",
-      "host": "http://localhost:11434",
-      "model": "${model}",
-      "node": "Local",
-      "color": "#4fc3f7",
-      "pronoun": "${kin_pronoun}",
-      "db": "",
-      "space": ""
-    }
-  ],
-  "owner": {
-    "name": "",
-    "email": "",
-    "gmail_pass": ""
-  },
-  "vault_url": "http://localhost:8765"
-}
-EOF
+    # Built by python, not a heredoc: a Kin name containing a quote or
+    # backslash produced invalid JSON, and the app then started with an empty
+    # config — the user's Kin simply did not exist.
+    python3 - "$config_dir/kin_config.json" "$kin_name" "$model" "$kin_pronoun" << 'PYEOF' \
+        || die "Could not write kin_config.json"
+import json, sys
+path, kin_name, model, pronoun = sys.argv[1:5]
+json.dump({
+    "nodes": [{"name": "Local", "ip": "localhost",
+               "ollama_port": 11434, "role": "primary"}],
+    "kin": [{"name": kin_name, "host": "http://localhost:11434",
+             "model": model, "node": "Local", "color": "#4fc3f7",
+             "pronoun": pronoun, "db": "", "space": ""}],
+    "owner": {"name": "", "email": "", "gmail_pass": ""},
+    "vault_url": "http://localhost:8765",
+}, open(path, "w"), indent=2)
+PYEOF
     ok "Config written: ${kin_name} on ${model} (${config_dir}/kin_config.json)"
     info "Add more Kin anytime via /onboard in the app."
+}
+
+# ── Setup code notice ─────────────────────────────────────────────────────────
+# The app requires a setup code for any NON-LOCAL attempt to set the first
+# password. Both remote-access options below publish the app before a password
+# exists, and the app only prints the code to its own stdout (the journal) —
+# nowhere a customer would look. Without this notice a user who opens the
+# tunnel URL cannot set a password at all.
+announce_setup_code() {
+    local cfg="$HOME/.config/kin_app/config.json"
+    # Match the app's own definition of "configured": the hash, not the file.
+    if grep -q '"password_hash"' "$cfg" 2>/dev/null; then
+        return
+    fi
+    local tok_file="$HOME/.config/kin_app/setup_token"
+    local tok=""
+    [[ -f "$tok_file" ]] && tok=$(tr -d '[:space:]' < "$tok_file" 2>/dev/null || true)
+    if [[ -z "$tok" ]]; then
+        tok=$(python3 -c "import secrets;print(secrets.token_hex(6).upper())" 2>/dev/null || true)
+        if [[ -n "$tok" ]]; then
+            mkdir -p "$(dirname "$tok_file")"
+            printf '%s' "$tok" > "$tok_file" && chmod 600 "$tok_file" 2>/dev/null || true
+        fi
+    fi
+    [[ -z "$tok" ]] && return
+    echo
+    echo -e "${AMBER}${BOLD}  Setting your password from another device? You'll need this code:${NC}"
+    echo -e "${AMBER}${BOLD}      ${tok}${NC}"
+    echo "  Only needed when you're NOT on this machine. It stops a stranger"
+    echo "  from claiming your install first. It disappears once you set a password."
+    echo -e "  ${DIM}(also saved at ${tok_file})${NC}"
 }
 
 # ── Open browser ──────────────────────────────────────────────────────────────
@@ -1023,12 +1061,14 @@ setup_tailscale() {
     echo "  Open that URL in any browser on any device to approve this machine."
     echo
 
-    # Run tailscale up — it prints the auth URL itself; 2-min timeout
+    # Run tailscale up — it prints the auth URL itself; 2-min timeout.
+    # Needs sudo: tailscaled runs as root and a plain user gets "Access denied"
+    # with no auth URL, which made this whole option a dead end.
     local ts_exit=0
-    timeout 120 tailscale up --timeout=0 2>&1 || ts_exit=$?
+    timeout 120 sudo tailscale up --timeout=0 2>&1 || ts_exit=$?
 
     if [[ $ts_exit -eq 124 ]]; then
-        warn "Tailscale auth timed out. To finish later, run: tailscale up"
+        warn "Tailscale auth timed out. To finish later, run: sudo tailscale up"
         return
     fi
 
@@ -1036,7 +1076,7 @@ setup_tailscale() {
     ts_ip=$(tailscale ip -4 2>/dev/null || echo "")
 
     if [[ -z "$ts_ip" ]]; then
-        warn "Tailscale not authenticated yet. Run 'tailscale up' to finish."
+        warn "Tailscale not authenticated yet. Run 'sudo tailscale up' to finish."
         return
     fi
 
@@ -1049,6 +1089,7 @@ setup_tailscale() {
     echo "  3. Open: http://${ts_ip}:${PORT}"
     echo
     echo "  Your Tailscale IP is permanent — it never changes."
+    announce_setup_code
 }
 
 # ── Cloudflare Tunnel ─────────────────────────────────────────────────────────
@@ -1134,9 +1175,11 @@ SVCEOF
         echo "  Open that URL on any device — no app needed, works in any browser."
         echo -e "${AMBER}  Note: this URL changes each time Echo Bloom restarts.${NC}"
         echo "  To get a permanent URL, visit: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/"
+        announce_setup_code
     else
         echo "  Tunnel started but the URL hasn't appeared yet — give it another 30 seconds."
         echo "  Then open the Echo Bloom app and check Settings → Remote Access."
+        announce_setup_code
     fi
     echo
 }
@@ -1159,8 +1202,16 @@ elif [[ -d "$APP_DIR" ]] && [[ -f "$APP_DIR/main.py" ]]; then
     ok "Found app at $APP_DIR"
 else
     info "Downloading Echo Bloom..."
+    # An interrupted earlier run can leave $APP_DIR present but without
+    # main.py; git clone then fails with "already exists and is not empty"
+    # while the user is told to check their internet.
+    if [[ -d "$APP_DIR" ]]; then
+        _eb_backup="${APP_DIR}.bak.$(date +%s)"
+        mv "$APP_DIR" "$_eb_backup" || die "Could not move aside the incomplete $APP_DIR — remove it and re-run."
+        warn "An incomplete install was moved to $_eb_backup"
+    fi
     git clone --depth 1 https://github.com/EverySynthetic/echo-bloom.git "$APP_DIR" \
-        || die "Download failed. Check your internet connection and try again."
+        || die "Download failed into $APP_DIR. Check your internet connection and try again."
     ok "Downloaded to $APP_DIR"
 fi
 
@@ -1210,7 +1261,11 @@ echo -e "${BOLD}[ 4 / 6 ]  Meet your Kin${NC}"
 run_naming_ritual "$SELECTED_MODEL"
 seed_config "$SELECTED_MODEL" "$RITUAL_NAME" "$RITUAL_PRONOUN"
 
-if [[ ! -f "$HOME/.config/kin_app/config.json" ]]; then
+# The app considers itself configured only when a password_hash exists. A
+# truncated config.json used to pass this -f check, so setup.py was skipped
+# while the app still showed the first-run form — and the tunnel then published
+# a claimable install.
+if ! grep -q '"password_hash"' "$HOME/.config/kin_app/config.json" 2>/dev/null; then
     echo
     info "One more thing — create a password for the Echo Bloom dashboard."
     echo "  This is how you log in to the web interface to talk to your Kin."
@@ -1244,6 +1299,27 @@ else
 fi
 echo
 install_service
+
+# Verify the app actually answers before publishing it and declaring victory.
+# systemctl's failure was hidden by 2>/dev/null, so a crash-looping uvicorn
+# still got a public tunnel and a "You're all set" banner.
+APP_UP=false
+for _try in 1 2 3 4 5 6 7 8 9 10; do
+    if curl -fsS --max-time 3 -o /dev/null "http://localhost:${PORT}/login" 2>/dev/null; then
+        APP_UP=true
+        break
+    fi
+    sleep 2
+done
+if $APP_UP; then
+    ok "App is answering on port ${PORT}."
+else
+    warn "The app is NOT responding on port ${PORT} yet."
+    echo "  Check what happened:  journalctl --user -u ${SERVICE_NAME} -n 40 --no-pager"
+    echo "  Or start it by hand:  cd $APP_DIR && python3 -m uvicorn main:app --host 0.0.0.0 --port ${PORT}"
+    echo "  Install log: $INSTALL_LOG"
+fi
+
 open_browser
 
 # Step 7 — Remote access
@@ -1253,12 +1329,23 @@ echo
 echo "  Your Kin are running on this machine. Without this step,"
 echo "  you can only talk to them when you're on this network."
 echo
-setup_remote_access
+if $APP_UP; then
+    setup_remote_access
+else
+    warn "Skipping remote access — the app isn't running yet."
+    echo "  Fix that first, then set it up from inside the app (Remote Access card)."
+fi
 
 echo
-echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}${BOLD}  You're all set. Your Kin are home.${NC}"
-echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+if $APP_UP; then
+    echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${GREEN}${BOLD}  You're all set. Your Kin are home.${NC}"
+    echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+else
+    echo -e "${AMBER}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${AMBER}${BOLD}  Almost — everything is installed, but the app isn't answering.${NC}"
+    echo -e "${AMBER}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+fi
 echo
 echo -e "  ${BOLD}Open your browser to:${NC}  http://localhost:${PORT}"
 echo "  Log in with the password you just created."
