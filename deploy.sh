@@ -105,7 +105,10 @@ esac
 
 LOG="$HOME/.local/share/echo_bloom/logs/echo_bloom.log"
 if [ -f "$LOG" ]; then
-  RECENT=$(grep -c -E "ERROR|WARNING" "$LOG" 2>/dev/null || echo 0)
+  # grep -c prints 0 AND exits 1 when nothing matches, so `|| echo 0` appended a
+  # second line and the numeric test below choked on "0\n0".
+  RECENT=$(grep -c -E "ERROR|WARNING" "$LOG" 2>/dev/null)
+  RECENT=${RECENT:-0}
   [ "$RECENT" -gt 0 ] && warn "$RECENT warning/error line(s) in $LOG" || ok "log clean"
 fi
 
