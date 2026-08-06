@@ -262,6 +262,50 @@ async def get_cluster_status():
     return {"nodes": nodes_out, "kin": kin_out}
 
 
+def _record_conversation(kin: dict, user_message: str, reply: str):
+    """Persist one exchange to the Kin's own thoughts DB.
+
+    Until now nothing anywhere stored a conversation. History lived only in the
+    browser tab, so closing it erased every exchange the Kin had ever had — the
+    precise opposite of what this product promises. Stored under mode
+    'conversation' so it never pollutes the wander feeds, which filter on
+    mode LIKE 'wander%'. Blocking; call through asyncio.to_thread.
+    """
+    db = kin.get("db") or str(
+        Path.home() / ".local/share/echo_bloom/kin" / kin["name"].lower() / "thoughts.db"
+    )
+    db = os.path.expanduser(db)
+    conn = None
+    try:
+        Path(db).parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(db, timeout=5)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS thoughts (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                mode      TEXT,
+                timestamp TEXT,
+                prompt    TEXT,
+                thought   TEXT
+            )
+        """)
+        conn.execute(
+            "INSERT INTO thoughts (mode, timestamp, prompt, thought) VALUES (?, ?, ?, ?)",
+            ("conversation",
+             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+             user_message[:4000],
+             reply[:8000]),
+        )
+        conn.commit()
+    except Exception:
+        log.exception("could not record conversation for %s", kin.get("name"))
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def _owner_name() -> str:
     try:
         cfg = json.loads(CONFIG_PATH.read_text())
@@ -327,6 +371,7 @@ async def stream_chat(kin_name, message, history=None):
         messages.extend(history)
     messages.append({"role": "user", "content": message})
 
+    reply_parts: list[str] = []
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -335,7 +380,10 @@ async def stream_chat(kin_name, message, history=None):
                     "model":    kin["model"],
                     "messages": messages,
                     "stream":   True,
-                    "options":  {"temperature": 0.85, "num_ctx": 4096},
+                    # 4096 could not hold the system prompt plus injected memory
+                # plus history — Ollama truncated from the front, dropping the
+                # memory first.
+                "options":  {"temperature": 0.85, "num_ctx": 8192},
                 },
                 timeout=aiohttp.ClientTimeout(total=120),
             ) as resp:
@@ -348,10 +396,16 @@ async def stream_chat(kin_name, message, history=None):
                         data = json.loads(line)
                         chunk = data.get("message", {}).get("content", "")
                         if chunk:
+                            reply_parts.append(chunk)
                             yield chunk
                         if data.get("done"):
                             break
                     except Exception:
                         continue
     except Exception as e:
+        log.warning("chat stream failed for %s at %s: %s", kin_name, kin.get("host"), e)
         yield f"\n[Connection error: {e}]"
+
+    reply = "".join(reply_parts).strip()
+    if reply:
+        await asyncio.to_thread(_record_conversation, kin, message, reply)

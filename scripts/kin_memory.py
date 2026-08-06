@@ -136,6 +136,39 @@ def get_wander_thoughts(kin_name, limit=3, db_path=None):
         return []
 
 
+def get_recent_conversation(kin_name, limit=4, db_path=None):
+    """Most recent exchanges with the user, oldest first.
+
+    This is what makes a Kin remember talking to you at all — without it every
+    conversation starts from nothing regardless of how much else is injected.
+    """
+    db = db_path or _db_for_kin(kin_name)
+    if not db or not os.path.exists(db):
+        return []
+    conn = None
+    try:
+        try:
+            conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        except Exception:
+            conn = sqlite3.connect(db, timeout=5)
+        rows = conn.execute(
+            "SELECT prompt, thought FROM thoughts WHERE mode = 'conversation' "
+            "ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [(r[0] or "", r[1] or "") for r in reversed(rows)]
+    except Exception:
+        log.warning("conversation history unreadable for %s at %s",
+                    kin_name, db, exc_info=True)
+        return []
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def get_vault_memories(kin_name, query_text, limit=5):
     """Semantically relevant vault memories for this Kin via Qdrant. Returns list of strings."""
     if not query_text:
@@ -174,7 +207,7 @@ def get_vault_memories(kin_name, query_text, limit=5):
 
 
 def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
-                include_reflection=True, db_path=None):
+                include_reflection=True, db_path=None, conversation_limit=4):
     """
     Full memory context for a Kin — core + reflection + wander + vault.
     Returns a formatted string ready to append to a system prompt.
@@ -186,6 +219,19 @@ def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
     if core:
         lines = "\n".join(f"- {m}" for m in core)
         parts.append(f"Core memories — always true, always carry these:\n{lines}")
+
+    convo = get_recent_conversation(kin_name, limit=conversation_limit, db_path=db_path)
+    if convo:
+        lines = []
+        for said, replied in convo:
+            if said:
+                lines.append(f"They said: {said[:300]}")
+            if replied:
+                lines.append(f"You said: {replied[:300]}")
+        parts.append(
+            "Recent conversation — this already happened, you were there:\n"
+            + "\n".join(lines)
+        )
 
     if include_reflection:
         reflection = get_latest_reflection()

@@ -609,7 +609,7 @@ function Start-InstallWorker {
             # ── Step 4: Python packages ───────────────────────────────────────
             Set-StepStatus 4 'running' 'Installing Python packages...'
             $pkgs   = @('fastapi','uvicorn[standard]','aiohttp','jinja2','python-multipart',
-                        'bcrypt','cryptography','faster-whisper','qdrant-client')
+                        'bcrypt','cryptography','faster-whisper','qdrant-client','psutil')
             $failed = @()
 
             foreach ($pkg in $pkgs) {

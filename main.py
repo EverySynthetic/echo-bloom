@@ -107,6 +107,10 @@ def get_hw_caps() -> dict:
     return _hw_caps_cache
 
 
+# Roughly half of an 8k context, leaving room for the system prompt, the
+# injected memory and the reply itself.
+_HISTORY_CHAR_BUDGET = 6000
+
 # ── Web fetch whitelist ────────────────────────────────────────────────────────
 
 _FETCH_WHITELIST = [
@@ -576,13 +580,25 @@ async def api_chat(
                 log.warning("auto-fetch failed for %s", url, exc_info=True)
                 web_context += f"\n\n[Could not fetch {url} — answer without it.]"
 
-    # Sanitize history
+    # Sanitize history, newest first, against a character budget.
+    #
+    # This used to take the last 10 turns at up to 2000 chars each — roughly
+    # 5k tokens against a 4096 num_ctx, before the system prompt. Ollama then
+    # silently truncated from the front, which is exactly where the injected
+    # core memories and vault context live. Budgeting here keeps the memory
+    # the product is built on from being the first thing thrown away.
     clean_history = []
-    for turn in history[-10:]:
+    budget = _HISTORY_CHAR_BUDGET
+    for turn in reversed(history[-30:]):
         role    = str(turn.get("role", ""))
         content = str(turn.get("content", ""))[:2000]
-        if role in ("user", "assistant") and content:
-            clean_history.append({"role": role, "content": content})
+        if role not in ("user", "assistant") or not content:
+            continue
+        if len(content) > budget:
+            break
+        budget -= len(content)
+        clean_history.append({"role": role, "content": content})
+    clean_history.reverse()
 
     full_message = message + web_context if web_context else message
 
@@ -831,6 +847,63 @@ _SCRIPTS_DIR = Path.home() / ".local/share/echo_bloom/scripts"
 _LOGS_DIR    = Path.home() / ".local/share/echo_bloom/logs"
 
 
+def _find_pids(pattern: str) -> list[int]:
+    """PIDs whose command line contains pattern.
+
+    pgrep does not exist on Windows, which is why the roundtable controls used
+    to look broken there. psutil is preferred and cross-platform; pgrep stays as
+    the fallback so nothing regresses if psutil is absent.
+    """
+    try:
+        import psutil
+    except Exception:
+        psutil = None
+
+    if psutil is not None:
+        pids = []
+        for proc in psutil.process_iter(["pid", "cmdline"]):
+            try:
+                cmdline = " ".join(proc.info.get("cmdline") or [])
+            except Exception:
+                continue
+            if pattern in cmdline and proc.info["pid"] != os.getpid():
+                pids.append(proc.info["pid"])
+        return pids
+
+    try:
+        r = subprocess.run(["pgrep", "-f", pattern],
+                           capture_output=True, text=True, timeout=5)
+        return [int(x) for x in r.stdout.strip().split() if x]
+    except FileNotFoundError:
+        log.debug("no psutil and no pgrep on %s — cannot inspect processes",
+                  sys.platform)
+    except Exception:
+        log.exception("process lookup failed for %r", pattern)
+    return []
+
+
+def _terminate_pids(pids: list[int]) -> list[int]:
+    """Ask each process to stop. os.kill with SIGTERM is not meaningful on
+    Windows, so psutil's terminate() is used when available."""
+    stopped = []
+    try:
+        import psutil
+    except Exception:
+        psutil = None
+
+    for pid in pids:
+        try:
+            if psutil is not None:
+                psutil.Process(pid).terminate()
+            else:
+                import signal
+                os.kill(pid, signal.SIGTERM)
+            stopped.append(pid)
+        except Exception:
+            log.warning("could not terminate pid %s", pid, exc_info=True)
+    return stopped
+
+
 def _script(name: str) -> Path:
     installed = _SCRIPTS_DIR / name
     if installed.exists():
@@ -848,18 +921,7 @@ async def api_roundtable_status(_=Depends(require_auth)):
     # pgrep does not exist — the lookup raised and the UI reported the feature
     # as not installed on a machine where the scripts were sitting right there.
     configured = _script("roundtable.py").exists()
-    pids: list[int] = []
-    try:
-        result = subprocess.run(
-            ["pgrep", "-f", "roundtable.py"],
-            capture_output=True, text=True, timeout=5,
-        )
-        pids = [int(p) for p in result.stdout.strip().split() if p]
-    except FileNotFoundError:
-        log.debug("pgrep unavailable on %s — cannot report roundtable process state",
-                  sys.platform)
-    except Exception:
-        log.exception("roundtable status check failed")
+    pids = _find_pids("roundtable.py")
     return {"running": bool(pids), "pid": pids[0] if pids else None,
             "configured": configured}
 
@@ -882,18 +944,14 @@ async def api_roundtable_start(_=Depends(require_auth)):
 
 @app.post("/api/roundtable/stop")
 async def api_roundtable_stop(_=Depends(require_auth)):
-    import signal
-    try:
-        result = subprocess.run(
-            ["pgrep", "-f", "roundtable.py"],
-            capture_output=True, text=True
-        )
-        pids = [int(p) for p in result.stdout.strip().split() if p]
-        for pid in pids:
-            os.kill(pid, signal.SIGTERM)
-        return {"stopped": True, "pids": pids}
-    except Exception as e:
-        return {"stopped": False, "error": str(e)}
+    pids = _find_pids("roundtable.py")
+    if not pids:
+        return {"stopped": True, "pids": [], "note": "nothing was running"}
+    stopped = _terminate_pids(pids)
+    if not stopped:
+        return {"stopped": False, "pids": pids,
+                "error": "Found the process but could not stop it."}
+    return {"stopped": True, "pids": stopped}
 
 
 @app.get("/about", response_class=HTMLResponse)
@@ -1300,8 +1358,9 @@ async def api_ingest(request: Request, _=Depends(require_auth)):
         source = "manual ingest"
 
     # Store full document in vault
-    vault    = _vault_url()
-    vault_id = None
+    vault       = _vault_url()
+    vault_id    = None
+    vault_error = None
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -1317,8 +1376,12 @@ async def api_ingest(request: Request, _=Depends(require_auth)):
             ) as r:
                 rdata = await r.json()
                 vault_id = rdata.get("id")
-    except Exception:
-        pass  # vault offline — still embed
+    except Exception as e:
+        # Still worth embedding, but returning vault_id: None with no reason
+        # made an offline vault indistinguishable from a successful store.
+        vault_error = f"vault store failed: {e}"
+        log.warning("ingest: vault store failed against %s — continuing with embedding",
+                    vault, exc_info=True)
 
     # Chunk and embed into Qdrant
     chunks   = _chunk_text(content)
@@ -1369,7 +1432,7 @@ async def api_ingest(request: Request, _=Depends(require_auth)):
         "chunks":   len(chunks),
         "embedded": embedded,
         "vault_id": vault_id,
-        "errors":   errors[:3],
+        "errors":   ([vault_error] + errors)[:3] if vault_error else errors[:3],
     }
 
 
@@ -1631,7 +1694,7 @@ async def api_remote_start_tunnel(_=Depends(require_auth)):
     if not _shutil.which("cloudflared"):
         return {"ok": False, "error": "cloudflared not installed — re-run the installer and choose Cloudflare tunnel."}
 
-    subprocess.run(["pkill", "-f", "cloudflared tunnel"], capture_output=True)
+    _terminate_pids(_find_pids("cloudflared tunnel"))
     await asyncio.sleep(1)
 
     log_path = "/tmp/cloudflared_tunnel.log"

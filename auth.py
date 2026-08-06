@@ -6,6 +6,7 @@ server-side session store with expiry. Rate-limited login.
 """
 
 import os
+import json
 import time
 import secrets
 import hashlib
@@ -28,9 +29,41 @@ SETUP_TOKEN_FILE = CONFIG_FILE.parent / "setup_token"
 # a public tunnel, so a 4-character password was not defensible.
 MIN_PASSWORD_LEN = 8
 
-# In-memory session store: token → expiry timestamp
+# Session store: token → expiry timestamp. Kept in memory and mirrored to disk
+# so a restart does not sign everybody out — the service auto-restarts on
+# failure and at login, so that was happening a lot.
 _sessions: dict[str, float] = {}
-SESSION_TTL = 60 * 60 * 24 * 7  # 7 days
+SESSION_TTL   = 60 * 60 * 24 * 7  # 7 days
+SESSIONS_FILE = CONFIG_FILE.parent / "sessions.json"
+
+
+def _load_sessions():
+    global _sessions
+    try:
+        if not SESSIONS_FILE.exists():
+            return
+        raw = json.loads(SESSIONS_FILE.read_text())
+        now = time.time()
+        _sessions = {k: float(v) for k, v in raw.items() if float(v) > now}
+    except Exception:
+        log.warning("could not read stored sessions — everyone will be signed out",
+                    exc_info=True)
+        _sessions = {}
+
+
+def _persist_sessions():
+    try:
+        SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = SESSIONS_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(_sessions))
+        os.replace(tmp, SESSIONS_FILE)
+        try:
+            os.chmod(SESSIONS_FILE, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        log.warning("could not persist sessions — a restart will sign users out",
+                    exc_info=True)
 
 # Rate limiting: ip → list of attempt timestamps
 _login_attempts: dict[str, list[float]] = defaultdict(list)
@@ -144,7 +177,12 @@ def record_attempt(ip: str):
 
 def create_session() -> str:
     token = secrets.token_hex(32)
-    _sessions[token] = time.time() + SESSION_TTL
+    now = time.time()
+    # Drop anything already expired while we are writing anyway.
+    for k in [k for k, v in _sessions.items() if v <= now]:
+        _sessions.pop(k, None)
+    _sessions[token] = now + SESSION_TTL
+    _persist_sessions()
     return token
 
 
@@ -161,11 +199,15 @@ def validate_session(token: str) -> bool:
 
 
 def revoke_session(token: str):
-    _sessions.pop(token, None)
+    if _sessions.pop(token, None) is not None:
+        _persist_sessions()
 
 
 def get_session_from_request(request) -> str | None:
     return request.cookies.get("kin_session")
+
+
+_load_sessions()
 
 
 def is_first_run() -> bool:

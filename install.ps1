@@ -40,6 +40,7 @@ The following will be checked and installed if missing:
     cryptography     license verification
     faster-whisper   speech-to-text
     qdrant-client    memory search
+    psutil           process control (start/stop background work)
 
   Echo Bloom app files
     Installed to:  $INSTALL_DIR
@@ -217,7 +218,8 @@ $packages = @(
     'bcrypt',
     'cryptography',
     'faster-whisper',
-    'qdrant-client'
+    'qdrant-client',
+    'psutil'
 )
 
 foreach ($pkg in $packages) {
