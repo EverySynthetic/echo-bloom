@@ -54,7 +54,23 @@ def thoughts_db(kin_dict):
 
 
 def vault_url():
-    return load().get("vault_url", "http://localhost:8765")
+    return load().get("vault_url") or "http://localhost:8765"
+
+
+def qdrant_url():
+    return load().get("qdrant_url") or "http://localhost:6333"
+
+
+def embed_url():
+    return load().get("embed_url") or "http://localhost:11434/api/embeddings"
+
+
+def embed_model():
+    return load().get("embed_model") or "nomic-embed-text"
+
+
+def qdrant_collection():
+    return load().get("qdrant_collection") or "kin_memories"
 
 
 def ensure_thoughts_db(db_path):

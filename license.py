@@ -32,6 +32,7 @@ TRIAL_SERVER      = os.environ.get("ECHO_BLOOM_LICENSE_SERVER",
 LICENSE_PATH      = Path.home() / ".config/kin_app/license"
 TRIAL_TOKEN_PATH  = Path.home() / ".config/kin_app/trial_token"
 FINGERPRINT_PATH  = Path.home() / ".config/kin_app/machine_id"
+_FIRST_SEEN_PATH  = Path.home() / ".config/kin_app/first_run"
 TRIAL_DAYS        = 14
 
 # Grace period: if server unreachable on first run, allow this many days locally
@@ -195,10 +196,12 @@ def _read_trial_token() -> dict | None:
             expiry = int(parts[1])
             now    = int(time.time())
             if now > expiry:
-                # Grace period over and we were offline; delete so ensure_trial_start
-                # can reach the server now that it's presumably reachable.
-                TRIAL_TOKEN_PATH.unlink(missing_ok=True)
-                return None
+                # Grace is over. Deliberately NOT deleted: deleting it made
+                # ensure_trial_start() re-register, fail while still offline, and
+                # write a brand new grace token — which is how the trial renewed
+                # itself indefinitely. The throttled upgrade attempt below still
+                # recovers the moment the server becomes reachable.
+                return {"state": "expired", "offline": True}
             days_left = max(0, int((expiry - now) / 86400) + 1)
             return {"state": "trial", "days_left": days_left, "offline": True}
         except Exception:
@@ -231,6 +234,29 @@ def _call_server(path: str, body: dict, timeout: int = 8) -> dict:
         return {"ok": False, "offline": True}
 
 
+def _first_seen() -> int:
+    """Unix time of the first run of this install, written once and never reset.
+
+    Offline grace is measured from here rather than from whenever a token
+    happens to be written, so deleting or rewriting the trial token cannot
+    extend the grace period.
+    """
+    try:
+        if _FIRST_SEEN_PATH.exists():
+            val = int(_FIRST_SEEN_PATH.read_text().strip())
+            if val > 0:
+                return val
+    except Exception:
+        pass
+    now = int(time.time())
+    try:
+        _FIRST_SEEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _FIRST_SEEN_PATH.write_text(str(now))
+    except Exception:
+        pass
+    return now
+
+
 def ensure_trial_start():
     """
     Register this machine's trial with the server on first run.
@@ -254,8 +280,12 @@ def ensure_trial_start():
     TRIAL_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     if result.get("offline"):
-        # Server unreachable — grant offline grace period
-        expiry = int(time.time()) + _OFFLINE_GRACE_DAYS * 86400
+        # Server unreachable — grant offline grace, measured from first run.
+        # This used to be time.time() + 3 days, recomputed every time the token
+        # was rewritten. Because an expired offline token was deleted (and then
+        # re-registration failed and wrote a fresh one), staying offline renewed
+        # the trial forever.
+        expiry = _first_seen() + _OFFLINE_GRACE_DAYS * 86400
         TRIAL_TOKEN_PATH.write_text(f"OFFLINE:{expiry}:{fp}")
         return
 
@@ -266,11 +296,24 @@ def ensure_trial_start():
         TRIAL_TOKEN_PATH.write_text(f"DENIED:{reason}")
 
 
+_UPGRADE_RETRY_SECS   = 600
+_last_upgrade_attempt = 0.0
+
+
 def _try_upgrade_offline_token():
     """
     While in offline grace, attempt to register with server.
     Upgrades to a proper server token on success; marks denied if blacklisted.
+
+    Throttled: this is reached from get_status(), which auth touches constantly.
+    Unthrottled it meant an outbound call with an 8s timeout per request.
     """
+    global _last_upgrade_attempt
+    now = time.time()
+    if now - _last_upgrade_attempt < _UPGRADE_RETRY_SECS:
+        return
+    _last_upgrade_attempt = now
+
     fp     = get_fingerprint()
     result = _call_server("/register-trial", {"fingerprint": fp, "v": 1})
     if result.get("offline"):
@@ -302,7 +345,34 @@ def save_key(key: str) -> bool:
 
 # ── Status ────────────────────────────────────────────────────────────────────
 
-def get_status() -> dict:
+_STATUS_TTL_SECS = 60
+_status_cache: dict = {"at": 0.0, "value": None}
+
+
+def invalidate_status_cache():
+    """Drop the cached status — call after saving a key so it applies at once."""
+    _status_cache["at"]    = 0.0
+    _status_cache["value"] = None
+
+
+def get_status(force: bool = False) -> dict:
+    """Cached wrapper around _compute_status().
+
+    require_auth() calls this on every authenticated request. Uncached that was a
+    file read plus an Ed25519 verify each time, and while in offline grace an
+    outbound HTTP call with an 8s timeout each time.
+    """
+    now    = time.time()
+    cached = _status_cache.get("value")
+    if not force and cached is not None and (now - _status_cache["at"]) < _STATUS_TTL_SECS:
+        return cached
+    value = _compute_status()
+    _status_cache["at"]    = now
+    _status_cache["value"] = value
+    return value
+
+
+def _compute_status() -> dict:
     """
     Returns one of:
       {"state": "licensed",  "type": "permanent", "email": "...", "days_left": None}

@@ -4,11 +4,14 @@ cluster.py — Live status of all nodes and Kin.
 
 import os
 import json
+import logging
 import sqlite3
 import asyncio
 import aiohttp
 from datetime import datetime
 from pathlib import Path
+
+log = logging.getLogger("echo_bloom.cluster")
 
 CONFIG_PATH = Path.home() / ".config/kin_app/kin_config.json"
 
@@ -52,8 +55,6 @@ def reload_config():
     global NODES, KIN, KIN_BY_NAME
     NODES, KIN = _load()
     KIN_BY_NAME = {k["name"]: k for k in KIN}
-
-KIN_BY_NAME = {k["name"]: k for k in KIN}
 
 
 async def _ping_ollama(session, ip, port, timeout=4):
@@ -139,6 +140,49 @@ def _latest_thought(db_path):
         return None
 
 
+def _kin_db_stats(db_path):
+    """(thought_count, last_timestamp, latest_wander_thought) from one connection.
+
+    Opened read-only: the wander process writes these DBs concurrently, and a
+    plain connect() silently creates an empty database when the path is wrong.
+    Blocking — always call this through asyncio.to_thread().
+    """
+    if not db_path or not os.path.exists(db_path):
+        return (0, None, None)
+    conn = None
+    try:
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=3)
+        except Exception:
+            conn = sqlite3.connect(db_path, timeout=3)
+
+        count = conn.execute("SELECT COUNT(*) FROM thoughts").fetchone()[0]
+
+        row     = conn.execute(
+            "SELECT timestamp FROM thoughts ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        last_ts = row[0] if row else None
+
+        row    = conn.execute(
+            "SELECT thought FROM thoughts WHERE mode LIKE 'wander%' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        latest = None
+        if row and row[0]:
+            text   = row[0].strip()
+            latest = text[:200] + ("…" if len(text) > 200 else "")
+
+        return (count, last_ts, latest)
+    except Exception as e:
+        log.debug("thoughts db unreadable (%s): %s", db_path, e)
+        return (0, None, None)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def _time_ago(ts_str):
     if not ts_str:
         return "unknown"
@@ -176,39 +220,39 @@ async def get_cluster_status():
                 node_tasks.append(_ping_service(session, f"http://{node['ip']}/"))
         node_results = await asyncio.gather(*node_tasks, return_exceptions=True)
 
-    nodes_out = []
-    for node, result in zip(NODES, node_results):
-        up = result is True
-        nodes_out.append({**node, "up": up})
+        nodes_out = [{**node, "up": result is True}
+                     for node, result in zip(NODES, node_results)]
 
-    # For every node that's up, fetch its pulled-model list in parallel
-    up_nodes = [n for n in nodes_out if n.get("up") and n.get("ollama_port")]
-    async with aiohttp.ClientSession() as session:
+        # For every node that's up, fetch its pulled-model list in parallel.
+        # Same session as the pings — this used to open a second one.
+        up_nodes    = [n for n in nodes_out if n.get("up") and n.get("ollama_port")]
         tag_results = await asyncio.gather(
             *[_get_pulled_models(session, f"http://{n['ip']}:{n['ollama_port']}")
               for n in up_nodes],
             return_exceptions=True,
         )
+
     pulled_by_node = {}
     for node, tags in zip(up_nodes, tag_results):
         pulled_by_node[node["name"]] = tags if isinstance(tags, set) else set()
 
+    # SQLite is blocking. Reading it inline here stalled the whole event loop —
+    # three separate connections per Kin, on every dashboard poll.
+    stats = await asyncio.gather(
+        *[asyncio.to_thread(_kin_db_stats, k.get("db")) for k in KIN]
+    )
+
     kin_out = []
-    for kin in KIN:
-        count     = _thought_count(kin["db"])
-        last_ts   = _last_thought_time(kin["db"])
-        last_ago  = _time_ago(last_ts)
-        latest    = _latest_thought(kin["db"])
-        node_up   = next((n["up"] for n in nodes_out if n["name"] == kin["node"]), False)
-        pulled    = pulled_by_node.get(kin["node"], set())
-        model_ready = node_up and _model_in_set(kin["model"], pulled)
+    for kin, (count, last_ts, latest) in zip(KIN, stats):
+        node_up = next((n["up"] for n in nodes_out if n["name"] == kin.get("node")), False)
+        pulled  = pulled_by_node.get(kin.get("node"), set())
         kin_out.append({
             **kin,
-            "thought_count": count,
-            "last_active":   last_ago,
+            "thought_count":  count,
+            "last_active":    _time_ago(last_ts),
             "latest_thought": latest,
-            "node_up":       node_up,
-            "model_ready":   model_ready,
+            "node_up":        node_up,
+            "model_ready":    node_up and _model_in_set(kin.get("model", ""), pulled),
         })
 
     return {"nodes": nodes_out, "kin": kin_out}
@@ -237,15 +281,30 @@ async def stream_chat(kin_name, message, history=None):
     # Try to load memory context from installed scripts, then Desktop fallback
     system_ctx = ""
     _scripts = Path.home() / ".local/share/echo_bloom/scripts"
-    for search_path in [str(_scripts), os.path.expanduser("~/Desktop")]:
+    # Highest priority first in this list. Inserted in reverse, because each
+    # insert(0, ...) pushes the previous one down — listing them in priority
+    # order and inserting forwards silently gave Desktop precedence.
+    _search = [str(_scripts), os.path.expanduser("~/Desktop")]
+    for search_path in reversed(_search):
         if search_path not in sys.path:
             sys.path.insert(0, search_path)
     try:
         from kin_memory import get_context
-        system_ctx = get_context(kin_name, message, wander_limit=2, vault_limit=3,
-                                 db_path=kin.get("db"))
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("kin_memory unavailable — chatting without memory context: %s", e)
+        get_context = None
+
+    if get_context is not None:
+        try:
+            # get_context does blocking HTTP (vault, embeddings, Qdrant) whose
+            # timeouts total ~28s. Called inline it froze every other request in
+            # the app for the duration. Off the event loop it goes.
+            system_ctx = await asyncio.to_thread(
+                get_context, kin_name, message,
+                wander_limit=2, vault_limit=3, db_path=kin.get("db"),
+            )
+        except Exception as e:
+            log.warning("memory context failed for %s: %s", kin_name, e)
 
     owner = _owner_name()
     caller = f"{owner} is" if owner else "Someone is"

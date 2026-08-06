@@ -909,6 +909,7 @@ async def api_license_activate(request: Request, _=Depends(require_auth_only)):
         return {"ok": False, "error": result.get("reason", "Invalid key.")}
     if not lic.save_key(key):
         return {"ok": False, "error": f"Could not write license file to {lic.LICENSE_PATH} — check permissions."}
+    lic.invalidate_status_cache()   # so the new key applies on the next request
     ktype = result.get("type", "permanent")
     if ktype == "permanent":
         msg = f"Licensed forever. Welcome home{', ' + result['email'] if result.get('email') else ''}."
@@ -967,7 +968,7 @@ async def api_pull_model(request: Request, _=Depends(require_auth)):
 
 # ── Vault browser ──────────────────────────────────────────────────────────────
 
-_DEFAULT_QDRANT = "http://192.168.1.115:6333"
+_DEFAULT_QDRANT = "http://localhost:6333"
 _DEFAULT_VAULT  = "http://localhost:8765"
 
 

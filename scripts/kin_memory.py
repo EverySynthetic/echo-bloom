@@ -20,9 +20,12 @@ import sqlite3
 import requests
 from pathlib import Path
 
-# Defaults — overridden by ~/.config/kin_app/kin_config.json when present
-QDRANT_URL  = "http://192.168.1.115:6333"
-VAULT_URL   = "http://192.168.1.115:8765"
+# Defaults — overridden by ~/.config/kin_app/kin_config.json when present.
+# These MUST stay local. They used to point at the author's own machines, so
+# every chat message on a customer install made blocking calls to an IP that
+# does not exist on their network.
+QDRANT_URL  = "http://localhost:6333"
+VAULT_URL   = "http://localhost:8765"
 EMBED_URL   = "http://localhost:11434/api/embeddings"
 EMBED_MODEL = "nomic-embed-text"
 COLLECTION  = "kin_memories"
@@ -46,8 +49,28 @@ def _read_config():
         return {}
 
 
+def _cfg(key, default):
+    return _read_config().get(key) or default
+
+
 def _vault_url():
-    return _read_config().get("vault_url") or VAULT_URL
+    return _cfg("vault_url", VAULT_URL)
+
+
+def _qdrant_url():
+    return _cfg("qdrant_url", QDRANT_URL)
+
+
+def _embed_url():
+    return _cfg("embed_url", EMBED_URL)
+
+
+def _embed_model():
+    return _cfg("embed_model", EMBED_MODEL)
+
+
+def _collection():
+    return _cfg("qdrant_collection", COLLECTION)
 
 
 def _db_for_kin(kin_name):
@@ -111,15 +134,15 @@ def get_vault_memories(kin_name, query_text, limit=5):
         return []
     try:
         r = requests.post(
-            EMBED_URL,
-            json={"model": EMBED_MODEL, "prompt": query_text},
+            _embed_url(),
+            json={"model": _embed_model(), "prompt": query_text},
             timeout=10,
         )
         r.raise_for_status()
         vector = r.json()["embedding"]
 
         r2 = requests.post(
-            f"{QDRANT_URL}/collections/{COLLECTION}/points/search",
+            f"{_qdrant_url()}/collections/{_collection()}/points/search",
             json={
                 "vector":       vector,
                 "limit":        limit,
