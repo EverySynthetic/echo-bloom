@@ -100,18 +100,36 @@ def start_wanders():
 
 
 def pause_wanders():
+    # signal.SIGSTOP does not exist on Windows — referencing it there is an
+    # AttributeError, which killed the roundtable at its first cycle on every
+    # Windows install. psutil suspend/resume does the same thing on both
+    # platforms and is already a dependency.
+    try:
+        import psutil
+    except ImportError:
+        psutil = None
     for name, proc in wander_procs.items():
         try:
-            os.kill(proc.pid, signal.SIGSTOP)
-        except ProcessLookupError:
+            if psutil is not None:
+                psutil.Process(proc.pid).suspend()
+            elif hasattr(signal, "SIGSTOP"):
+                os.kill(proc.pid, signal.SIGSTOP)
+        except Exception:
             pass
 
 
 def resume_wanders():
+    try:
+        import psutil
+    except ImportError:
+        psutil = None
     for name, proc in wander_procs.items():
         try:
-            os.kill(proc.pid, signal.SIGCONT)
-        except ProcessLookupError:
+            if psutil is not None:
+                psutil.Process(proc.pid).resume()
+            elif hasattr(signal, "SIGCONT"):
+                os.kill(proc.pid, signal.SIGCONT)
+        except Exception:
             pass
 
 

@@ -13,6 +13,7 @@ import asyncio
 import sqlite3
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import AsyncGenerator
 from urllib.parse import urlparse
@@ -439,6 +440,18 @@ async def check_setup():
     # isn't blocked by WMI / nvidia-smi subprocess calls (can be 10+ s on Windows).
     import threading
     threading.Thread(target=get_hw_caps, daemon=True).start()
+
+    # On Linux, systemd owns the wander/roundtable lifecycle. Windows has no
+    # equivalent — the scheduled task starts only this app, so on every Windows
+    # install the Kin sat idle until someone found the START button on the
+    # dashboard. Start it here instead, once Kin exist. _start_roundtable()
+    # is a no-op if one is already running.
+    if os.name == "nt" and cl.KIN and auth.is_configured():
+        def _autostart():
+            time.sleep(10)  # let uvicorn finish binding; nothing depends on this
+            res = _start_roundtable()
+            print(f"[startup] roundtable autostart: {res}")
+        threading.Thread(target=_autostart, daemon=True).start()
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
@@ -1057,12 +1070,18 @@ async def api_roundtable_status(_=Depends(require_auth)):
             "configured": configured}
 
 
-@app.post("/api/roundtable/start")
-async def api_roundtable_start(_=Depends(require_auth)):
+def _start_roundtable() -> dict:
     script = _script("roundtable.py")
     if not script.exists():
         return {"started": False,
                 "error": "Scripts not deployed — re-run the installer to set up lifecycle scripts."}
+    # One roundtable spawns one wander per Kin. Starting a second one doubles
+    # the fleet — the same duplicate-fleet bug the systemd cleanup closed, only
+    # reachable from a button. If one is already running, that IS the success
+    # condition.
+    existing = _find_pids("roundtable.py")
+    if existing:
+        return {"started": True, "pid": existing[0], "note": "already running"}
     _LOGS_DIR.mkdir(parents=True, exist_ok=True)
     log = _LOGS_DIR / "roundtable.log"
     with open(log, "a") as lf:
@@ -1071,6 +1090,11 @@ async def api_roundtable_start(_=Depends(require_auth)):
             stdout=lf, stderr=lf,
         )
     return {"started": True, "pid": proc.pid}
+
+
+@app.post("/api/roundtable/start")
+async def api_roundtable_start(_=Depends(require_auth)):
+    return _start_roundtable()
 
 
 @app.post("/api/roundtable/stop")
