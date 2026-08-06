@@ -16,9 +16,16 @@ Sources (in injection order):
 
 import os
 import json
+import logging
 import sqlite3
 import requests
 from pathlib import Path
+
+try:
+    import logging_setup
+    log = logging_setup.get("kin_memory")
+except Exception:                     # deployed to scripts/ without the app
+    log = logging.getLogger("echo_bloom.kin_memory")
 
 # Defaults — overridden by ~/.config/kin_app/kin_config.json when present.
 # These MUST stay local. They used to point at the author's own machines, so
@@ -106,8 +113,8 @@ def get_latest_reflection():
         entries = r.json()
         if entries:
             return entries[0].get("content", "").strip()
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("vault reflection unavailable from %s: %s", _vault_url(), e)
     return None
 
 
@@ -125,6 +132,7 @@ def get_wander_thoughts(kin_name, limit=3, db_path=None):
         conn.close()
         return [r[0][:400].strip() for r in rows if r[0]]
     except Exception:
+        log.warning("wander thoughts unreadable for %s at %s", kin_name, db, exc_info=True)
         return []
 
 
@@ -157,7 +165,11 @@ def get_vault_memories(kin_name, query_text, limit=5):
             for hit in results
             if hit.get("payload", {}).get("content")
         ]
-    except Exception:
+    except Exception as e:
+        # This is the path that silently returned nothing while the embed call
+        # timed out — the Kin then answered with no memory and no explanation.
+        log.warning("semantic recall failed for %s (embed=%s qdrant=%s): %s",
+                    kin_name, _embed_url(), _qdrant_url(), e)
         return []
 
 

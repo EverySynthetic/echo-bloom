@@ -24,6 +24,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 
+import logging_setup
+logging_setup.setup()
+log = logging_setup.get("main")
+
 import auth
 import cluster as cl
 import license as lic
@@ -86,6 +90,11 @@ def get_hw_caps() -> dict:
                 ram_gb = int(r.stdout.strip()) / (1024 ** 3)
         except Exception:
             pass
+
+    if vram_mb == 0:
+        log.warning("VRAM detection failed on every method — vision will show as unavailable")
+    if ram_gb == 0.0:
+        log.warning("RAM detection failed on every method — speech will show as unavailable")
 
     _hw_caps_cache = {
         "vram_mb":   vram_mb,
@@ -537,8 +546,10 @@ async def api_thoughts(name: str, limit: int = 10, _=Depends(require_auth)):
             {"id": r[0], "mode": r[1], "ts": r[2], "text": (r[3] or "")[:500]}
             for r in rows
         ]}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        log.exception("thoughts query failed for %s", name)
+        raise HTTPException(status_code=500,
+                            detail="Could not read this Kin's thoughts database.")
 
 
 @app.post("/api/chat/{name}")
@@ -562,7 +573,8 @@ async def api_chat(
                 text = await _fetch_page_text(url)
                 web_context += f"\n\n[Web content from {url}]:\n{text}"
             except Exception:
-                pass
+                log.warning("auto-fetch failed for %s", url, exc_info=True)
+                web_context += f"\n\n[Could not fetch {url} — answer without it.]"
 
     # Sanitize history
     clean_history = []
@@ -831,16 +843,25 @@ def _script(name: str) -> Path:
 
 @app.get("/api/roundtable/status")
 async def api_roundtable_status(_=Depends(require_auth)):
+    # Whether the script is installed and whether it is currently running are
+    # independent facts. They used to share one try block, so on Windows — where
+    # pgrep does not exist — the lookup raised and the UI reported the feature
+    # as not installed on a machine where the scripts were sitting right there.
+    configured = _script("roundtable.py").exists()
+    pids: list[int] = []
     try:
         result = subprocess.run(
             ["pgrep", "-f", "roundtable.py"],
-            capture_output=True, text=True
+            capture_output=True, text=True, timeout=5,
         )
         pids = [int(p) for p in result.stdout.strip().split() if p]
-        return {"running": bool(pids), "pid": pids[0] if pids else None,
-                "configured": _script("roundtable.py").exists()}
+    except FileNotFoundError:
+        log.debug("pgrep unavailable on %s — cannot report roundtable process state",
+                  sys.platform)
     except Exception:
-        return {"running": False, "pid": None, "configured": False}
+        log.exception("roundtable status check failed")
+    return {"running": bool(pids), "pid": pids[0] if pids else None,
+            "configured": configured}
 
 
 @app.post("/api/roundtable/start")
@@ -973,18 +994,28 @@ _DEFAULT_VAULT  = "http://localhost:8765"
 
 
 def _qdrant_url() -> str:
+    if not _KIN_CONFIG_PATH.exists():
+        return _DEFAULT_QDRANT
     try:
         cfg = json.loads(_KIN_CONFIG_PATH.read_text())
         return cfg.get("qdrant_url") or _DEFAULT_QDRANT
     except Exception:
+        # Silently repointing at localhost looks exactly like "semantic search
+        # stopped working" with no cause.
+        log.exception("kin_config.json unreadable — falling back to Qdrant at %s",
+                      _DEFAULT_QDRANT)
         return _DEFAULT_QDRANT
 
 
 def _vault_url() -> str:
+    if not _KIN_CONFIG_PATH.exists():
+        return _DEFAULT_VAULT
     try:
-        cfg = json.loads(Path.home().joinpath(".config/kin_app/kin_config.json").read_text())
+        cfg = json.loads(_KIN_CONFIG_PATH.read_text())
         return cfg.get("vault_url") or _DEFAULT_VAULT
     except Exception:
+        log.exception("kin_config.json unreadable — falling back to vault at %s",
+                      _DEFAULT_VAULT)
         return _DEFAULT_VAULT
 
 
@@ -1048,7 +1079,8 @@ async def api_vault_count(
                 total = (await r.json()).get("count", 0)
         return {"total": total}
     except Exception:
-        return {"total": 0}
+        log.warning("vault count failed against %s", vault, exc_info=True)
+        return {"total": 0, "error": "vault_offline"}
 
 
 @app.get("/api/vault/meta")
@@ -1123,15 +1155,38 @@ _KIN_CONFIG_PATH = Path.home() / ".config/kin_app/kin_config.json"
 
 
 def _load_kin_cfg():
+    if not _KIN_CONFIG_PATH.exists():
+        return {}
     try:
         return json.loads(_KIN_CONFIG_PATH.read_text())
     except Exception:
+        log.exception("kin_config.json unreadable — running with empty config. "
+                      "Core memories and voices will appear missing.")
         return {}
 
 
+def _atomic_write_json(path: Path, data: dict):
+    """Write via temp file + os.replace so an interrupted write cannot leave a
+    truncated kin_config.json behind — that file is the entire install."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    os.replace(tmp, path)
+
+
+def _backup_unparseable_config(path: Path):
+    """Preserve a corrupt config before anything overwrites it."""
+    backup = path.with_suffix(".json.corrupt")
+    try:
+        backup.write_text(path.read_text())
+    except Exception:
+        log.exception("could not back up unparseable config at %s", path)
+        return None
+    return backup
+
+
 def _save_kin_cfg(cfg: dict):
-    _KIN_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _KIN_CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+    _atomic_write_json(_KIN_CONFIG_PATH, cfg)
     cl.reload_config()
 
 
@@ -1625,7 +1680,11 @@ async def api_onboard_autosave(request: Request, _=Depends(require_auth)):
         try:
             existing = json.loads(config_path.read_text())
         except Exception:
-            pass
+            backup = _backup_unparseable_config(config_path)
+            log.error("kin_config.json exists but will not parse — backed up to %s "
+                      "and continuing with wizard values. Existing kin/nodes NOT "
+                      "recovered.", backup)
+            existing = {}
 
     kin_list = body.get("kin", existing.get("kin", []))
     for k in kin_list:
@@ -1992,7 +2051,11 @@ async def api_onboard_save(request: Request, _=Depends(require_auth)):
         try:
             existing = json.loads(config_path.read_text())
         except Exception:
-            pass
+            backup = _backup_unparseable_config(config_path)
+            log.error("kin_config.json exists but will not parse — backed up to %s "
+                      "and continuing with wizard values. Existing kin/nodes NOT "
+                      "recovered.", backup)
+            existing = {}
 
     # Index existing kin by name so we can preserve db/space paths across saves
     existing_kin_by_name = {k["name"]: k for k in existing.get("kin", [])}

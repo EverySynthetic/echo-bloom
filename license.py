@@ -35,6 +35,13 @@ FINGERPRINT_PATH  = Path.home() / ".config/kin_app/machine_id"
 _FIRST_SEEN_PATH  = Path.home() / ".config/kin_app/first_run"
 TRIAL_DAYS        = 14
 
+try:
+    import logging_setup
+    log = logging_setup.get("license")
+except Exception:
+    import logging
+    log = logging.getLogger("echo_bloom.license")
+
 # Grace period: if server unreachable on first run, allow this many days locally
 # before requiring a server check. Prevents blocking people with spotty internet.
 _OFFLINE_GRACE_DAYS = 3
@@ -230,7 +237,8 @@ def _call_server(path: str, body: dict, timeout: int = 8) -> dict:
             return json.loads(e.read().decode())
         except Exception:
             return {"ok": False, "reason": str(e), "offline": False}
-    except Exception:
+    except Exception as e:
+        log.warning("license server unreachable (%s): %s", path, e)
         return {"ok": False, "offline": True}
 
 

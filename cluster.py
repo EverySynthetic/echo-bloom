@@ -11,7 +11,11 @@ import aiohttp
 from datetime import datetime
 from pathlib import Path
 
-log = logging.getLogger("echo_bloom.cluster")
+try:
+    import logging_setup
+    log = logging_setup.get("cluster")
+except Exception:                     # importable standalone from scripts/
+    log = logging.getLogger("echo_bloom.cluster")
 
 CONFIG_PATH = Path.home() / ".config/kin_app/kin_config.json"
 

@@ -14,6 +14,13 @@ from collections import defaultdict
 
 import bcrypt
 
+try:
+    import logging_setup
+    log = logging_setup.get("auth")
+except Exception:
+    import logging
+    log = logging.getLogger("echo_bloom.auth")
+
 CONFIG_FILE = Path.home() / ".config" / "kin_app" / "config.json"
 SETUP_TOKEN_FILE = CONFIG_FILE.parent / "setup_token"
 
@@ -38,6 +45,10 @@ def load_config() -> dict:
     try:
         return json.loads(CONFIG_FILE.read_text())
     except Exception:
+        # Returning {} here means is_configured() goes False and the app offers
+        # to set a new password — so a corrupt file must be loud.
+        log.exception("config.json unreadable at %s — the app will behave as if "
+                      "no password is set", CONFIG_FILE)
         return {}
 
 
