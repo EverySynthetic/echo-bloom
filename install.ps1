@@ -8,6 +8,13 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 
+# Older Win10 builds negotiate TLS 1.0 by default, which fails against
+# github.com and python.org.
+try {
+    [Net.ServicePointManager]::SecurityProtocol = `
+        [Net.ServicePointManager]::SecurityProtocol -bor 3072
+} catch {}
+
 $INSTALL_DIR  = "$env:LOCALAPPDATA\EchoBloom"
 $APP_DIR      = "$INSTALL_DIR\app"
 $CONFIG_DIR   = "$env:USERPROFILE\.config\kin_app"
@@ -238,7 +245,12 @@ if (-not (Test-Path $configFile)) {
         kin       = @()
         owner     = @{}
         vault_url = 'http://localhost:8765'
-    } | ConvertTo-Json -Depth 5 | Set-Content -Path $configFile -Encoding UTF8
+    # -Encoding UTF8 writes a BOM on PowerShell 5.1, and Python reads this
+    # file with plain read_text() → JSONDecodeError → "kin_config.json
+    # unreadable" on first boot. Same family as the .bat BOM bug.
+    } | ConvertTo-Json -Depth 5 | ForEach-Object {
+        [System.IO.File]::WriteAllText($configFile, $_, (New-Object System.Text.UTF8Encoding($false)))
+    }
     Write-Step "Config: created" 'Green'
 } else {
     Write-Step "Config: exists, leaving it alone" 'DarkGray'
@@ -294,8 +306,9 @@ try {
     $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
                    -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0 `
                    -RestartInterval (New-TimeSpan -Minutes 2) -RestartCount 5
+    # Limited, not Highest: Highest requires an elevated shell to register.
     $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME `
-                   -LogonType Interactive -RunLevel Highest
+                   -LogonType Interactive -RunLevel Limited
     Unregister-ScheduledTask -TaskName 'EchoBloom' -Confirm:$false -ErrorAction SilentlyContinue
     Register-ScheduledTask -TaskName 'EchoBloom' -Action $action -Trigger $trigger `
                            -Settings $settings -Principal $principal | Out-Null

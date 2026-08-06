@@ -204,7 +204,7 @@ $script:stepLabels = @()
 $yStep = 64
 foreach ($name in $script:STEP_NAMES) {
     $sl = New-Object System.Windows.Forms.Label
-    $sl.Text      = [char]0x25CB + " $name"   # ○
+    $sl.Text      = "$([char]0x25CB) $name"   # ○ (PS 5.1: char + string is numeric addition)
     $sl.Location  = New-Object System.Drawing.Point(40, $yStep)
     $sl.Size      = New-Object System.Drawing.Size(460, 20)
     $sl.ForeColor = $C_DIM
@@ -345,10 +345,10 @@ $script:uiTimer.Add_Tick({
         $lbl  = $script:stepLabels[$i]
         $name = $script:STEP_NAMES[$i]
         switch ($sync.StepState[$i]) {
-            'pending' { $lbl.Text = [char]0x25CB + " $name";    $lbl.ForeColor = $C_DIM   }
-            'running' { $lbl.Text = [char]0x25BA + " $name..."; $lbl.ForeColor = $C_FG    }
-            'done'    { $lbl.Text = [char]0x2713 + " $name";    $lbl.ForeColor = $C_GREEN }
-            'warn'    { $lbl.Text = [char]0x2717 + " $name";    $lbl.ForeColor = $C_AMBER }
+            'pending' { $lbl.Text = "$([char]0x25CB) $name";    $lbl.ForeColor = $C_DIM   }
+            'running' { $lbl.Text = "$([char]0x25BA) $name..."; $lbl.ForeColor = $C_FG    }
+            'done'    { $lbl.Text = "$([char]0x2713) $name";    $lbl.ForeColor = $C_GREEN }
+            'warn'    { $lbl.Text = "$([char]0x2717) $name";    $lbl.ForeColor = $C_AMBER }
         }
     }
 
@@ -373,11 +373,36 @@ $script:uiTimer.Add_Tick({
     }
     elseif ($sync.Done) {
         $script:uiTimer.Stop()
-        $script:pg3_status.ForeColor = $C_GREEN
-        $script:pg3_status.Text      = 'Installation complete.'
-        $script:pg3_cancel.Visible   = $false
-        $script:pg3_done.Visible     = $true
-        $script:advanceTimer.Start()
+        # A step that ended 'warn' still set Done, and the auto-advance then
+        # destroyed the amber warnings 1.5s later while page 4 asserted
+        # everything was installed and running. Report what actually happened.
+        $warned = @($sync.StepState | Where-Object { $_ -eq 'warn' }).Count
+        if ($warned -gt 0) {
+            $script:pg3_status.ForeColor = $C_AMBER
+            $script:pg3_status.Text      = "Finished with $warned step(s) that did not complete."
+            $script:pg3_detail.Text      = "Echo Bloom may still work, but check the marked steps.`nFull log:`n$($sync.LogFile)"
+            $script:pg3_detail.Visible   = $true
+            $script:pg3_cancel.Visible   = $false
+            $script:pg3_done.Visible     = $true
+            # Deliberately no auto-advance: the user needs to read this.
+        }
+        else {
+            $script:pg3_status.ForeColor = $C_GREEN
+            $script:pg3_status.Text      = 'Installation complete.'
+            $script:pg3_cancel.Visible   = $false
+            $script:pg3_done.Visible     = $true
+            $script:advanceTimer.Start()
+        }
+    }
+    elseif ($script:psHandle -and $script:psHandle.IsCompleted) {
+        # The pipeline ended without setting Done or Failed — an engine-level
+        # runspace death. Previously the timer spun on "Preparing..." forever.
+        $script:uiTimer.Stop()
+        $script:pg3_status.ForeColor = $C_AMBER
+        $script:pg3_status.Text      = 'The installer stopped unexpectedly.'
+        $script:pg3_detail.Text      = "No further detail was reported. Full log:`n$($sync.LogFile)"
+        $script:pg3_detail.Visible   = $true
+        $script:pg3_cancel.Text      = 'CLOSE'
     }
 })
 
@@ -422,6 +447,19 @@ function Start-InstallWorker {
     New-Item -ItemType Directory -Force -Path (Split-Path $script:LOG_FILE) -ErrorAction SilentlyContinue | Out-Null
 
     $worker = {
+
+        # Inside the runspace, not inherited from the host. Without this,
+        # PS 5.1's Invoke-WebRequest runs in per-buffer progress mode — brutally
+        # slow on the ~700MB Ollama fallback download and it floods the
+        # runspace's progress stream.
+        $ProgressPreference = 'SilentlyContinue'
+        # Older Win10 builds default to TLS 1.0 and every github.com /
+        # python.org download fails with "Could not create SSL/TLS secure
+        # channel."
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = `
+                [Net.ServicePointManager]::SecurityProtocol -bor 3072
+        } catch {}
 
         function Write-WizLog {
             param([string]$M)
@@ -590,7 +628,28 @@ function Start-InstallWorker {
                 Expand-Archive -Path $zipTmp -DestinationPath $extTmp -Force
 
                 $srcDir = Join-Path $extTmp 'echo-bloom-main'
-                if (Test-Path $appDir) { Remove-Item $appDir -Recurse -Force }
+                if (Test-Path $appDir) {
+                    # A running uvicorn from an earlier attempt holds $appDir as
+                    # its working directory, so Remove-Item fails with "being
+                    # used by another process" and re-running the installer to
+                    # fix a first attempt went FATAL here. Stop it first.
+                    try {
+                        Stop-ScheduledTask -TaskName 'EchoBloom' -ErrorAction SilentlyContinue
+                    } catch {}
+                    try {
+                        Get-CimInstance Win32_Process -Filter "Name like '%python%'" -ErrorAction SilentlyContinue |
+                            Where-Object { $_.CommandLine -and $_.CommandLine -like '*main:app*' } |
+                            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+                    } catch {}
+                    Start-Sleep -Seconds 2
+                    try {
+                        Remove-Item $appDir -Recurse -Force
+                    } catch {
+                        # Still locked — keep going with a renamed copy rather
+                        # than failing the whole install.
+                        Move-Item $appDir "$appDir.old.$(Get-Random)" -Force
+                    }
+                }
                 Move-Item $srcDir $appDir
 
                 $sync.AppDir = $appDir
@@ -659,10 +718,17 @@ function Start-InstallWorker {
                                 -ExecutionTimeLimit 0 `
                                 -RestartInterval (New-TimeSpan -Minutes 2) `
                                 -RestartCount 5
+                # RunLevel Limited, not Highest. Registering a Highest task
+                # from a non-elevated shell fails with Access Denied — and the
+                # website's command is deliberately non-elevated ("no admin
+                # required"). That failure also skipped shortcut creation in
+                # the same try block, so the app never started by ANY path:
+                # page 4 spun, the browser opened a dead port, no Start Menu
+                # entry. uvicorn needs no elevation.
                 $principal = New-ScheduledTaskPrincipal `
                                 -UserId $env:USERNAME `
                                 -LogonType Interactive `
-                                -RunLevel Highest
+                                -RunLevel Limited
 
                 Unregister-ScheduledTask -TaskName 'EchoBloom' -Confirm:$false -ErrorAction SilentlyContinue
                 Register-ScheduledTask `
