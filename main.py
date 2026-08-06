@@ -307,24 +307,35 @@ async def check_setup():
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request, error: str = ""):
+async def login_page(request: Request, error: str = "", mode: str = ""):
+    configured = auth.is_configured()
     return templates.TemplateResponse(request, "login.html", {
-        "error":      error,
-        "configured": auth.is_configured(),
+        "error":       error,
+        "configured":  configured,
+        # mode=login lets someone who landed on the setup form by accident
+        # ask for the login form instead (and vice versa via a plain /login).
+        "show_login":  configured or mode == "login",
+        "config_path": str(auth.CONFIG_FILE),
     })
 
 
 @app.post("/setup-password")
 async def setup_password(request: Request, password: str = Form(...), confirm: str = Form(...)):
     if auth.is_configured():
-        return RedirectResponse("/login", status_code=303)
+        # Tell them why instead of bouncing silently to a form that looks identical.
+        return RedirectResponse(
+            "/login?error=A+password+is+already+set+on+this+machine.+Enter+it+below.",
+            status_code=303,
+        )
     if len(password) < 4:
         return templates.TemplateResponse(request, "login.html", {
             "error": "Password must be at least 4 characters.", "configured": False,
+            "show_login": False, "config_path": str(auth.CONFIG_FILE),
         })
     if password != confirm:
         return templates.TemplateResponse(request, "login.html", {
             "error": "Passwords don't match.", "configured": False,
+            "show_login": False, "config_path": str(auth.CONFIG_FILE),
         })
     auth.set_password(password)
     auth.mark_setup_complete()
@@ -345,7 +356,10 @@ async def login(
     if auth.is_rate_limited(ip):
         return templates.TemplateResponse(
             request, "login.html",
-            {"error": "Too many attempts. Wait 5 minutes."},
+            {"error": "Too many attempts. Wait 5 minutes.",
+             "configured": auth.is_configured(),
+             "show_login": True,
+             "config_path": str(auth.CONFIG_FILE)},
             status_code=429,
         )
 
@@ -354,7 +368,10 @@ async def login(
     if not auth.verify_password(password):
         return templates.TemplateResponse(
             request, "login.html",
-            {"error": "Wrong password."},
+            {"error": "Wrong password.",
+             "configured": auth.is_configured(),
+             "show_login": True,
+             "config_path": str(auth.CONFIG_FILE)},
             status_code=401,
         )
 

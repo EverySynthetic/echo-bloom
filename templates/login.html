@@ -13,26 +13,56 @@
     <div class="login-card">
       <div class="login-logo">ECHO BLOOM</div>
       <div class="login-sub">Local AI Infrastructure</div>
-      {% if not configured %}
+
+      {% if not show_login %}
       <div class="login-sub" style="margin-bottom:16px;color:#606060">First run — set a password to get started.</div>
       {% endif %}
+
       {% if error %}
         <div class="login-error">{{ error }}</div>
       {% endif %}
-      {% if configured %}
-      <form method="POST" action="/login" class="login-form">
-        <input type="password" name="password" placeholder="password"
-               autofocus autocomplete="current-password" class="login-input" required>
-        <button type="submit" class="login-btn">ENTER</button>
-      </form>
+
+      {% if show_login %}
+        {% if not configured %}
+        <div class="login-sub" style="margin-bottom:16px;color:#a08040">
+          No password has been set on this machine yet.
+        </div>
+        {% endif %}
+
+        <form method="POST" action="/login" class="login-form">
+          <input type="password" name="password" placeholder="password"
+                 autofocus autocomplete="current-password" class="login-input" required>
+          <button type="submit" class="login-btn">ENTER</button>
+        </form>
+
+        <div class="login-alt">
+          {% if not configured %}
+            <a href="/login">← set a password instead</a>
+          {% else %}
+            <details>
+              <summary>Forgot password?</summary>
+              <div class="login-alt-body">
+                Echo Bloom runs entirely on your machine — there is no email reset.
+                To start over, delete this file on the machine running Echo Bloom,
+                then reload this page:
+                <code>{{ config_path }}</code>
+                You will be asked to set a new password on the next load.
+              </div>
+            </details>
+          {% endif %}
+        </div>
       {% else %}
-      <form method="POST" action="/setup-password" class="login-form">
-        <input type="password" name="password" placeholder="choose a password"
-               autofocus autocomplete="new-password" class="login-input" required>
-        <input type="password" name="confirm" placeholder="confirm password"
-               autocomplete="new-password" class="login-input" required style="margin-top:8px">
-        <button type="submit" class="login-btn">SET PASSWORD</button>
-      </form>
+        <form method="POST" action="/setup-password" class="login-form">
+          <input type="password" name="password" placeholder="choose a password"
+                 autofocus autocomplete="new-password" class="login-input" required>
+          <input type="password" name="confirm" placeholder="confirm password"
+                 autocomplete="new-password" class="login-input" required style="margin-top:8px">
+          <button type="submit" class="login-btn">SET PASSWORD</button>
+        </form>
+
+        <div class="login-alt">
+          <a href="/login?mode=login">Already have a password? Log in →</a>
+        </div>
       {% endif %}
     </div>
   </div>

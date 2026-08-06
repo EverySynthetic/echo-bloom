@@ -2042,3 +2042,84 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   padding-top: 16px;
 }
 .install-footer-link { color: var(--text-dim); }
+
+/* ── Mobile (≤700px) ──────────────────────────────────────────────── */
+
+@media (max-width: 700px) {
+  .main { padding: 12px; }
+
+  /* Nav: tighten gap so logo + links wrap gracefully */
+  .nav { gap: 12px; padding: 8px 12px; }
+
+  /* Chat: collapse thoughts sidebar below chat, then hide it */
+  .kin-layout {
+    grid-template-columns: 1fr;
+  }
+  .thoughts-panel { display: none; }
+
+  /* Chat toolbar: let tool buttons wrap */
+  .chat-toolbar { flex-wrap: wrap; gap: 6px; }
+
+  /* Kin card grid: force single column below 340px */
+  .kin-grid { grid-template-columns: 1fr; }
+
+  /* Vault: remove fixed min-widths so controls wrap properly */
+  .vault-search-wide { min-width: 0; }
+  .vault-filter      { min-width: 0; width: 100%; }
+  .vault-search-input { min-width: 0; width: 100%; }
+  .vault-controls    { flex-direction: column; align-items: stretch; }
+
+  /* Vault header: stack title and mode toggle */
+  .vault-header      { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .vault-mode-toggle { margin-left: 0; }
+
+  /* Formation (set-password / account): already 1-col at 960px */
+
+  /* Onboard page: full width */
+  .onboard-page { padding: 0; }
+}
+
+/* ── Very small (≤380px) ──────────────────────────────────────────── */
+
+@media (max-width: 380px) {
+  .nav-links { gap: 8px; }
+  .install-cards { grid-template-columns: 1fr; }
+}
+
+/* ── Login alternates: setup <-> login, forgot password ────────────── */
+
+.login-alt {
+  margin-top: 16px;
+  font-size: 12px;
+  text-align: center;
+  line-height: 1.5;
+}
+.login-alt a {
+  color: var(--text-dim, #707070);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--border, #2a2a32);
+}
+.login-alt a:hover { color: var(--accent, #50c878); }
+.login-alt details { text-align: left; }
+.login-alt summary {
+  color: var(--text-dim, #707070);
+  cursor: pointer;
+  text-align: center;
+  list-style: none;
+}
+.login-alt summary::-webkit-details-marker { display: none; }
+.login-alt summary:hover { color: var(--accent, #50c878); }
+.login-alt-body {
+  margin-top: 10px;
+  color: var(--text-dim, #707070);
+}
+.login-alt-body code {
+  display: block;
+  margin: 8px 0;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border, #2a2a32);
+  border-radius: 3px;
+  word-break: break-all;
+  color: var(--text, #c8c8d2);
+}
