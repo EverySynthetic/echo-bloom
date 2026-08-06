@@ -551,7 +551,42 @@ async function handleTTSClick() {
   await ensureSpeech(() => toggleTTS());
 }
 
+function _ttsNote(msg, bad) {
+  // TTS used to fail into console.warn only, so "the voice doesn't work" came
+  // with no reason anywhere the user could see it.
+  let el = document.getElementById('tts-note');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'tts-note';
+    el.className = 'tts-note';
+    const bar = document.querySelector('.chat-toolbar');
+    if (bar && bar.parentNode) bar.parentNode.insertBefore(el, bar.nextSibling);
+    else return;
+  }
+  el.textContent = msg || '';
+  el.classList.toggle('tts-note-bad', !!bad);
+  el.style.display = msg ? 'block' : 'none';
+  if (msg && !bad) setTimeout(() => { if (el.textContent === msg) el.style.display = 'none'; }, 4000);
+}
+
+// Last spoken clip, so a blocked autoplay can be retried with a real click.
+let _pendingAudioUrl = null;
+
+function _playViaElement(blob) {
+  // Fallback for when the AudioContext path is unavailable. Edge and Chrome
+  // suspend an AudioContext aggressively (background tab, long gap between the
+  // click and the reply finishing) and resume() then rejects without a gesture.
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const a   = new Audio(url);
+    a.onended = () => { URL.revokeObjectURL(url); resolve(); };
+    a.onerror = () => { URL.revokeObjectURL(url); reject(new Error('audio element failed')); };
+    a.play().then(() => { _pendingAudioUrl = null; }).catch(reject);
+  });
+}
+
 async function speakText(text) {
+  let blob;
   try {
     const r = await fetch('/api/tts', {
       method: 'POST',
@@ -559,20 +594,50 @@ async function speakText(text) {
       body: JSON.stringify({text, kin_name: KIN_NAME}),
     });
     if (!r.ok) {
-      console.warn('TTS failed:', r.status, await r.text().catch(() => ''));
+      let detail = '';
+      try { detail = (await r.json()).detail || ''; } catch(e) {}
+      const msg = window.ebApiError ? window.ebApiError(r) : '';
+      _ttsNote(detail || msg || `Voice failed (HTTP ${r.status}).`, true);
       return;
     }
-    const arrayBuf = await r.arrayBuffer();
-    // Use AudioContext (unlocked on button click) instead of new Audio() —
-    // Firefox blocks HTMLAudioElement.play() even with prior gesture
+    blob = await r.blob();
+  } catch(err) {
+    _ttsNote('Could not reach the voice service: ' + err.message, true);
+    return;
+  }
+
+  // Preferred path: AudioContext, unlocked on the button click.
+  try {
     if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (_audioCtx.state === 'suspended') await _audioCtx.resume();
-    const decoded = await _audioCtx.decodeAudioData(arrayBuf);
-    const src = _audioCtx.createBufferSource();
-    src.buffer = decoded;
-    src.connect(_audioCtx.destination);
-    src.start(0);
-  } catch(err) { console.warn('TTS error:', err); }
+    if (_audioCtx.state === 'running') {
+      const decoded = await _audioCtx.decodeAudioData(await blob.arrayBuffer());
+      const src = _audioCtx.createBufferSource();
+      src.buffer = decoded;
+      src.connect(_audioCtx.destination);
+      src.start(0);
+      _ttsNote('');
+      return;
+    }
+  } catch(err) {
+    console.warn('AudioContext playback failed, falling back:', err);
+  }
+
+  // Fallback: plain audio element.
+  try {
+    await _playViaElement(blob);
+    _ttsNote('');
+  } catch(err) {
+    // Blocked by autoplay policy. Keep the clip and let one click play it.
+    if (_pendingAudioUrl) URL.revokeObjectURL(_pendingAudioUrl);
+    _pendingAudioUrl = URL.createObjectURL(blob);
+    _ttsNote('Your browser blocked autoplay. Click here to hear it.', true);
+    const el = document.getElementById('tts-note');
+    if (el) el.onclick = () => {
+      if (!_pendingAudioUrl) return;
+      new Audio(_pendingAudioUrl).play().then(() => _ttsNote('')).catch(() => {});
+    };
+  }
 }
 
 // ── Voice select dropdown ─────────────────────────────────────────────────────

@@ -2232,3 +2232,20 @@ a.install-btn {
   color: var(--text-dim);
   margin-bottom: 8px;
 }
+
+/* TTS status line. Voice failures used to be console.warn only — the user got
+   silence and no reason. */
+.tts-note {
+  display: none;
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+  border-left: 2px solid var(--border);
+  background: var(--surface);
+}
+.tts-note-bad {
+  color: var(--amber);
+  border-left-color: var(--amber);
+  cursor: pointer;
+}

@@ -205,7 +205,7 @@ def main():
         print()
         result_file = os.environ.get("ECHO_BLOOM_RESULT_FILE")
         if result_file:
-            with open(result_file, "w") as f:
+            with open(result_file, "w", encoding="utf-8") as f:
                 json.dump(result, f)
         sys.exit(0)
     else:

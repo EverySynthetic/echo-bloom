@@ -51,7 +51,7 @@ def log(msg):
     ts   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
     print(line, flush=True)
-    with open(LOG_FILE, "a") as f:
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
 # ── WoL ────────────────────────────────────────────────────────────────────────
@@ -119,7 +119,7 @@ def start_roundtable():
         log(f"ERROR: roundtable.py not found at {ROUNDTABLE}")
         return False
     log("Starting wander roundtable...")
-    with open(RT_LOG, "a") as lf:
+    with open(RT_LOG, "a", encoding="utf-8") as lf:
         proc = subprocess.Popen(
             [sys.executable, "-u", str(ROUNDTABLE), "--interval", "30"],
             stdout=lf, stderr=lf,

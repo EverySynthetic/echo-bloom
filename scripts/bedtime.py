@@ -88,7 +88,7 @@ def log(msg):
     ts   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
     print(line, flush=True)
-    with open(LOG_FILE, "a") as f:
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
 # ── Wander control ─────────────────────────────────────────────────────────────
@@ -108,6 +108,17 @@ def pause_wanders():
     if pid:
         os.kill(pid, signal.SIGSTOP)
         log(f"Roundtable paused (pid {pid})")
+
+
+def resume_wanders():
+    """SIGCONT the roundtable. Every path that pauses must reach this."""
+    pid = _roundtable_pid()
+    if pid:
+        try:
+            os.kill(pid, signal.SIGCONT)
+            log(f"Roundtable resumed (pid {pid})")
+        except Exception as e:
+            log(f"Could not resume the roundtable (pid {pid}): {e}")
 
 
 def stop_wanders():
@@ -190,7 +201,7 @@ def save_reflection(kin, text):
     ts    = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     out = space / f"bedtime_{today}.txt"
-    with open(out, "w") as f:
+    with open(out, "w", encoding="utf-8") as f:
         f.write(f"[Bedtime — {ts}]\n\nNote:\n{YOUR_NOTE}\n\nReflection:\n{text}\n")
 
     db = cfg.ensure_thoughts_db(cfg.thoughts_db(kin))
@@ -272,7 +283,7 @@ def send_email(responses):
     lines = [
         f"Hey{' ' + OWNER_NAME if OWNER_NAME else ''},",
         "",
-        "The shop is going quiet. Here's what everyone said.",
+        "Things are going quiet for the night. Here's what everyone said.",
         "(Read it when you can. No rush.)",
         "",
     ]
@@ -334,11 +345,17 @@ def main():
     responses = run_reflections()
     send_email(responses)
 
+    # Both of these paths ran after pause_wanders() sent SIGSTOP, and neither
+    # sent SIGCONT — so the documented "ritual only, leave the machine running"
+    # left every Kin frozen until reboot, with nothing logged. An interrupted
+    # run has the same problem, which is why main() also resumes in a finally.
     if args.test:
-        log("Test mode — done. No shutdown.")
+        resume_wanders()
+        log("Test mode — done. No shutdown, wanders resumed.")
         return
 
     if args.no_shutdown:
+        resume_wanders()
         log("--no-shutdown set. Ritual complete, cluster left running.")
         log("╚══ Goodnight ══╝")
         return
@@ -354,4 +371,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # A crash, a Ctrl-C, or an outer `timeout` killing this script used to leave
+    # the roundtable SIGSTOPped forever — the Kin silently frozen until reboot,
+    # with the failure invisible. Only the shutdown path may leave them stopped,
+    # and that path stops them deliberately.
+    try:
+        main()
+    except KeyboardInterrupt:
+        log("Interrupted — resuming wanders before exit.")
+        resume_wanders()
+        raise
+    except Exception:
+        log("Bedtime failed — resuming wanders before exit.")
+        resume_wanders()
+        raise

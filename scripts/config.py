@@ -5,6 +5,7 @@ Reads ~/.config/kin_app/kin_config.json — written by the onboarding wizard.
 """
 
 import json
+import os
 from pathlib import Path
 
 CONFIG_PATH = Path.home() / ".config/kin_app/kin_config.json"
@@ -36,20 +37,31 @@ def get_owner():
     return load().get("owner", {})
 
 
+def _resolve(p):
+    """Expand ~ and $VARS in a configured path.
+
+    Without this a config value of "~/eli_space" produced a literal directory
+    named "~" beside the scripts. kin_memory.py *does* expanduser, so reads and
+    writes landed in two different places and thoughts appeared to vanish.
+    """
+    return Path(os.path.expandvars(os.path.expanduser(str(p))))
+
+
 def kin_space(kin_dict):
     """Return (and create) the Kin's data directory."""
     space = kin_dict.get("space") or str(
         APP_DIR / "kin" / kin_dict["name"].lower()
     )
-    Path(space).mkdir(parents=True, exist_ok=True)
-    return Path(space)
+    space = _resolve(space)
+    space.mkdir(parents=True, exist_ok=True)
+    return space
 
 
 def thoughts_db(kin_dict):
     """Path to this Kin's thoughts SQLite DB."""
     db = kin_dict.get("db")
     if db:
-        return Path(db)
+        return _resolve(db)
     return kin_space(kin_dict) / "thoughts.db"
 
 

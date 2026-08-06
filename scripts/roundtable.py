@@ -59,7 +59,7 @@ def log(msg):
     ts   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
     print(line, flush=True)
-    with open(RT_LOG, "a") as f:
+    with open(RT_LOG, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
 # ── Wander subprocess management ───────────────────────────────────────────────
@@ -70,7 +70,7 @@ def start_wanders():
     for kin in KIN_LIST:
         name    = kin["name"]
         log_f   = LOG_DIR / f"wander_{name.lower()}.log"
-        with open(log_f, "a") as lf:
+        with open(log_f, "a", encoding="utf-8") as lf:
             proc = subprocess.Popen(
                 [sys.executable, "-u", str(WANDER_PY), "--kin", name,
                  "--delay", "25"],

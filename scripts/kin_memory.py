@@ -9,7 +9,7 @@ Never raises — every source fails gracefully to empty.
 
 Sources (in injection order):
   1. Core memories  — always injected, flagged manually, max 20 per Kin
-  2. Shop reflection — latest 3-hour reflection from the vault
+  2. Recent reflection — latest periodic reflection from the vault
   3. Wander thoughts — Kin's own recent thinking from their DB
   4. Vault semantic  — Qdrant search for contextually relevant memories
 """
@@ -37,14 +37,13 @@ EMBED_URL   = "http://localhost:11434/api/embeddings"
 EMBED_MODEL = "nomic-embed-text"
 COLLECTION  = "kin_memories"
 
-# Fallback DB paths for when config doesn't have them
-KIN_DB = {
-    "Eli":     os.path.expanduser("~/Desktop/Everything/EliAIM/thoughts.db"),
-    "Coda":    os.path.expanduser("~/coda_space/thoughts.db"),
-    "Aurora":  os.path.expanduser("~/aurora_space/thoughts.db"),
-    "Lumen":   os.path.expanduser("~/lumen_space/thoughts.db"),
-    "Crungus": os.path.expanduser("~/Crungus/thoughts.db"),
-}
+# No hardcoded per-name fallbacks. This table used to ship with the author's own
+# Kin in it, so a customer who happened to name their Kin Aurora was silently
+# pointed at ~/aurora_space/thoughts.db — a path from someone else's machine.
+# config.py resolves real paths; the standard location is the only fallback.
+def _default_db(kin_name):
+    return str(Path.home() / ".local/share/echo_bloom/kin"
+               / kin_name.lower() / "thoughts.db")
 
 _CONFIG_PATH = Path.home() / ".config/kin_app/kin_config.json"
 
@@ -84,8 +83,8 @@ def _db_for_kin(kin_name):
     """DB path from config first, then hardcoded fallback."""
     for k in _read_config().get("kin", []):
         if k.get("name") == kin_name and k.get("db"):
-            return os.path.expanduser(k["db"])
-    return KIN_DB.get(kin_name)
+            return os.path.expanduser(os.path.expandvars(k["db"]))
+    return _default_db(kin_name)
 
 
 def get_core_memories(kin_name):
@@ -141,9 +140,10 @@ def get_wander_thoughts(kin_name, limit=3, db_path=None, recent_pool=60):
     the Kin dutifully writes an essay about it. Sampling purely by recency meant
     the identity context could be the first 400 characters of a competent essay
     about an auto-generated Google Ads API client. Observed, not hypothetical:
-    Eli's two most recent thoughts were both about `doubleclicksearch-gen.go`,
-    while two days earlier, handed Fred Rogers, he wrote about presence being
-    the conduit through which truth travels.
+    in testing, a Kin's two most recent thoughts were both essays about an
+    auto-generated API client it had stumbled across, while a day earlier —
+    having found an essay about a person — it had written something about its
+    own sense of presence.
 
     So: pull a recent window, then prefer the thoughts that are about this
     household — the Kin, the owner, memory, continuity, how it feels to be
@@ -309,7 +309,7 @@ def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
     if include_reflection:
         reflection = get_latest_reflection()
         if reflection:
-            parts.append(f"[What's been happening at the shop]\n{reflection}")
+            parts.append(f"[What's been happening here lately]\n{reflection}")
 
     wander = get_wander_thoughts(kin_name, limit=wander_limit, db_path=db_path)
     if wander:

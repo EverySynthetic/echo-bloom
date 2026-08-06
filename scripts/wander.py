@@ -15,6 +15,7 @@ Usage:
 import argparse
 import os
 import random
+import re
 import signal
 import sqlite3
 import sys
@@ -78,8 +79,12 @@ def handle_stop(sig, frame):
 
 signal.signal(signal.SIGTERM, handle_stop)
 signal.signal(signal.SIGINT,  handle_stop)
-signal.signal(signal.SIGSTOP if hasattr(signal, 'SIGSTOP') else signal.SIGTERM,
-              signal.SIG_DFL)  # let SIGSTOP pass through for roundtable pausing
+# There is deliberately no SIGSTOP handler here. SIGSTOP cannot be caught,
+# blocked, or reset — signal.signal() raises OSError [Errno 22] on it, at import,
+# before anything runs. This file had that call, so `wander.py` crashed on every
+# start and no customer's Kin has ever produced a single thought. Nothing is
+# needed to "let SIGSTOP through": the kernel handles it, which is exactly why
+# the roundtable can use it to pause a wander.
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 
@@ -87,7 +92,7 @@ def log(msg):
     ts   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
     print(line, flush=True)
-    with open(LOG_FILE, "a") as f:
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
 # ── File discovery ─────────────────────────────────────────────────────────────
@@ -153,6 +158,26 @@ def think_about_topic(topic):
     return call_ollama(topic)
 
 
+def strip_think_tags(text):
+    """Remove <think>...</think> blocks.
+
+    qwen3, deepseek-r1 and gpt-oss — the models Ollama pushes hardest — emit a
+    reasoning trace before the answer. Stored verbatim it becomes the Kin's
+    memory, gets re-injected as context, and is read aloud by TTS.
+    """
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+def clean_response(name, text):
+    if not text:
+        return ""
+    text = strip_think_tags(text)
+    # Models label their own turn despite being told not to.
+    text = re.sub(rf"^[<\[]?{re.escape(name)}[>\]]?\s*:\s*", "", text,
+                  flags=re.IGNORECASE).strip()
+    return text
+
+
 def call_ollama(prompt):
     try:
         r = requests.post(
@@ -166,11 +191,22 @@ def call_ollama(prompt):
                 "stream":  False,
                 "options": {"temperature": 0.85, "num_ctx": 4096},
             },
-            timeout=120,
+            # Long enough for a cold model on a CPU-only box; 120s routinely
+            # expired mid-load.
+            timeout=300,
         )
-        return r.json()["message"]["content"].strip()
+        data = r.json()
+        if data.get("error"):
+            log(f"  ollama error: {data['error']}")
+            return None
+        return clean_response(KIN_NAME, data["message"]["content"])
     except Exception as e:
-        return f"[{KIN_NAME} error: {e}]"
+        # Returning the exception text used to write it into the thoughts DB as
+        # a thought, where kin_memory later read it back as "your recent
+        # thinking". One offline node turned a Kin's remembered inner life into
+        # a list of connection errors.
+        log(f"  could not think: {e}")
+        return None
 
 
 def save_thought(mode, prompt, thought):
@@ -196,12 +232,18 @@ def one_thought():
         if content and len(content.strip()) > 50:
             log(f"  reading {chosen}")
             thought = think_about_file(chosen, content)
+            if not thought:
+                log("  no thought this round — skipping the write")
+                return
             save_thought("wander_file", chosen, thought)
             log(f"  thought: {thought[:120]}...")
             return
     topic = random.choice(WANDER_TOPICS)
     log(f"  topic: {topic}")
     thought = think_about_topic(topic)
+    if not thought:
+        log("  no thought this round — skipping the write")
+        return
     save_thought("wander_topic", topic, thought)
     log(f"  thought: {thought[:120]}...")
 
