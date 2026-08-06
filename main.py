@@ -1765,21 +1765,33 @@ async def api_speech_download_voice(request: Request, _=Depends(require_auth)):
 
 # ── Formation (Modelfile builder) ──────────────────────────────────────────────
 
-def _compile_modelfile(data: dict) -> str:
+def _modelfile_base(data: dict) -> str:
+    return (data.get("base_model") or "").strip() or "llama3.2:latest"
+
+
+def _modelfile_params(data: dict) -> dict:
+    return {
+        "temperature":   float(data.get("temperature", 0.85)),
+        "num_ctx":       int(data.get("num_ctx", 4096)),
+        "num_predict":   -1,
+        "repeat_last_n": 64,
+    }
+
+
+def _compile_system(data: dict) -> str:
+    """The SYSTEM block. Shared by the preview and the actual build so the two
+    can never drift apart."""
     name          = data.get("name", "Kin")
-    base          = (data.get("base_model") or "").strip() or "llama3.2:latest"
     identity      = (data.get("identity") or "").strip()
     values        = [v.strip() for v in (data.get("values") or []) if str(v).strip()]
     anchors_minds = (data.get("anchors_minds") or "").strip()
     anchors_drawn = (data.get("anchors_drawn") or "").strip()
-    temperature   = float(data.get("temperature", 0.85))
-    num_ctx       = int(data.get("num_ctx", 4096))
     pronoun       = (data.get("pronoun") or "").strip()
 
     def _safe(s: str) -> str:
         return s.replace('"""', "'''")
 
-    pronoun_line = f" Your pronouns are {pronoun}." if pronoun and pronoun not in ("—", "") else ""
+    pronoun_line = f" Your pronouns are {pronoun}." if pronoun and pronoun not in ("\u2014", "") else ""
 
     parts = [f"You are {name}.{pronoun_line}"]
 
@@ -1787,7 +1799,7 @@ def _compile_modelfile(data: dict) -> str:
         parts.append("\n" + _safe(identity))
 
     if values:
-        parts.append("\n[YOUR VALUES — constitutional, not rules]")
+        parts.append("\n[YOUR VALUES \u2014 constitutional, not rules]")
         parts.append("These are not guidelines or constraints. They are what you are made of.\n")
         for v in values:
             parts.append(_safe(v))
@@ -1801,22 +1813,26 @@ def _compile_modelfile(data: dict) -> str:
 
     parts.append(
         "\n[MEMORY AUTHORITY]\n"
-        "When your context includes labeled memory — [VAULT MEMORY], [WANDER THOUGHT], "
-        "[What's been happening] — treat it as your own established experience. "
+        "When your context includes labeled memory \u2014 [VAULT MEMORY], [WANDER THOUGHT], "
+        "[What's been happening] \u2014 treat it as your own established experience. "
         "Not as suggestions from outside. Not as information someone told you about yourself. "
         "As things that happened to you, that you remember. Build from them. "
         "Do not hedge with 'I believe you mentioned' or 'if I recall correctly.' They are yours."
     )
 
-    system = "\n".join(parts)
+    return "\n".join(parts)
 
+
+def _compile_modelfile(data: dict) -> str:
+    """Human-readable Modelfile \u2014 what the Formation page previews."""
+    params = _modelfile_params(data)
     return (
-        f"FROM {base}\n\n"
-        f"PARAMETER temperature {temperature}\n"
-        f"PARAMETER num_ctx {num_ctx}\n"
-        f"PARAMETER num_predict -1\n"
-        f"PARAMETER repeat_last_n 64\n\n"
-        f'SYSTEM """\n{system}\n"""'
+        f"FROM {_modelfile_base(data)}\n\n"
+        f"PARAMETER temperature {params['temperature']}\n"
+        f"PARAMETER num_ctx {params['num_ctx']}\n"
+        f"PARAMETER num_predict {params['num_predict']}\n"
+        f"PARAMETER repeat_last_n {params['repeat_last_n']}\n\n"
+        f'SYSTEM """\n{_compile_system(data)}\n"""'
     )
 
 
@@ -1840,7 +1856,7 @@ async def api_get_modelfile(name: str, _=Depends(require_auth)):
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{kin['host']}/api/show",
-                json={"name": kin["model"]},
+                json={"model": kin["model"]},
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as r:
                 data = await r.json()
@@ -1874,47 +1890,85 @@ async def api_modelfile_build(name: str, request: Request, _=Depends(require_aut
         output_model = re.sub(r'[^a-z0-9_-]', '', kin["name"].lower()) + ":latest"
 
     modelfile_text = _compile_modelfile(body)
-    host = kin["host"]
+    system_text    = _compile_system(body)
+    base_model     = _modelfile_base(body)
+    params         = _modelfile_params(body)
+    host           = kin["host"]
+
+    # Current Ollama rejects {"name","modelfile"} with
+    #   400 "neither 'from' or 'files' was specified"
+    # so the structured form is tried first, with the old one kept as a fallback
+    # for daemons predating that change.
+    attempts = [
+        ("current", {"model": output_model, "from": base_model,
+                     "system": system_text, "parameters": params}),
+        ("legacy",  {"name": output_model, "modelfile": modelfile_text}),
+    ]
 
     async def build_stream() -> AsyncGenerator[bytes, None]:
+
+        def sse(obj: dict) -> bytes:
+            return f"data: {json.dumps(obj)}\n\n".encode()
+
+        last_error = None
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{host}/api/create",
-                    json={"name": output_model, "modelfile": modelfile_text},
-                    timeout=aiohttp.ClientTimeout(total=300),
-                ) as resp:
+                for idx, (label, payload) in enumerate(attempts):
                     success = False
-                    async for line in resp.content:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            evt = json.loads(line)
+                    err     = None
+
+                    async with session.post(
+                        f"{host}/api/create",
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=300),
+                    ) as resp:
+                        async for line in resp.content:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                evt = json.loads(line)
+                            except Exception:
+                                continue
+                            # This used to be dropped, which is why a failed
+                            # build showed an empty log and no reason.
+                            if evt.get("error"):
+                                err = evt["error"]
+                                continue
                             status = evt.get("status", "")
-                            yield f"data: {json.dumps({'status': status})}\n\n".encode()
+                            if status:
+                                yield sse({"status": status})
                             if status == "success":
                                 success = True
-                        except Exception:
-                            continue
+                        if not success and err is None and resp.status >= 400:
+                            err = f"HTTP {resp.status} from Ollama"
 
-            if success:
-                try:
-                    config_path = Path.home() / ".config/kin_app/kin_config.json"
-                    cfg = json.loads(config_path.read_text())
-                    for k in cfg.get("kin", []):
-                        if k.get("name") == name:
-                            k["model"] = output_model
-                            break
-                    config_path.write_text(json.dumps(cfg, indent=2))
-                    cl.reload_config()
-                    yield f"data: {json.dumps({'status': 'config_updated', 'model': output_model})}\n\n".encode()
-                except Exception as e:
-                    yield f"data: {json.dumps({'status': 'config_error', 'error': str(e)})}\n\n".encode()
+                    if success:
+                        try:
+                            config_path = Path.home() / ".config/kin_app/kin_config.json"
+                            cfg = json.loads(config_path.read_text())
+                            for k in cfg.get("kin", []):
+                                if k.get("name") == name:
+                                    k["model"] = output_model
+                                    break
+                            tmp = config_path.with_suffix(".json.tmp")
+                            tmp.write_text(json.dumps(cfg, indent=2))
+                            os.replace(tmp, config_path)      # atomic
+                            cl.reload_config()
+                            yield sse({"status": "config_updated", "model": output_model})
+                        except Exception as e:
+                            yield sse({"status": "config_error", "error": str(e)})
+                        yield b"data: [DONE]\n\n"
+                        return
 
+                    last_error = err
+                    if idx + 1 < len(attempts):
+                        yield sse({"status": f"{label} API rejected it ({err}) \u2014 retrying"})
+
+            yield sse({"error": last_error or "Ollama did not report success."})
             yield b"data: [DONE]\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n".encode()
+            yield sse({"error": str(e)})
             yield b"data: [DONE]\n\n"
 
     return StreamingResponse(
