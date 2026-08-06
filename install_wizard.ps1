@@ -655,6 +655,29 @@ function Start-InstallWorker {
                 $sync.AppDir = $appDir
                 Remove-Item $zipTmp -Force -ErrorAction SilentlyContinue
 
+                # Deploy the lifecycle scripts, exactly as install.sh does.
+                # This never happened on Windows, so the vault, bedtime, wander
+                # and roundtable all had nothing to run — and the vault page's
+                # "start it yourself" command pointed at a path that could not
+                # exist. The app looks here first, then falls back to the copy
+                # bundled in the app dir.
+                try {
+                    $scriptsSrc = Join-Path $appDir 'scripts'
+                    $scriptsDst = "$env:USERPROFILE\.local\share\echo_bloom\scripts"
+                    if (Test-Path $scriptsSrc) {
+                        if (-not (Test-Path $scriptsDst)) {
+                            New-Item -ItemType Directory -Path $scriptsDst -Force | Out-Null
+                        }
+                        Copy-Item "$scriptsSrc\*" $scriptsDst -Recurse -Force
+                        Write-WizLog "lifecycle scripts deployed to $scriptsDst"
+                    } else {
+                        Write-WizLog "no scripts/ directory in the download"
+                    }
+                } catch {
+                    # Not fatal: _script() still finds the bundled copy.
+                    Write-WizLog "scripts deploy failed: $($_.Exception.Message)"
+                }
+
                 Set-StepStatus 3 'done' "Installed to $appDir"
             } catch {
                 Set-StepStatus 3 'warn' "App files: $($_.Exception.Message)"

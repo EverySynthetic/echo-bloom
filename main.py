@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from typing import AsyncGenerator
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -1263,15 +1264,107 @@ async def api_vault_semantic(q: str, limit: int = 10, _=Depends(require_auth)):
         return {"results": [], "error": str(e)}
 
 
+def _vault_is_local(url: str) -> bool:
+    """Whether this machine could actually start the vault at that URL."""
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    return host in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "")
+
+
+def _vault_start_command() -> str:
+    """The real command, built from the real resolved path.
+
+    This used to be assembled in JavaScript from a guessed path — it named
+    app/vault_server.py (the file lives in app/scripts/) and used cmd.exe's
+    %LOCALAPPDATA% syntax, which PowerShell does not expand. Both wrong at
+    once, so the one instruction we gave the user could not work.
+    """
+    script = _script("vault_server.py")
+    if os.name == "nt":
+        return f'& "{sys.executable}" "{script}" --port 8765'
+    return f'"{sys.executable}" "{script}" --port 8765'
+
+
 @app.get("/api/vault/status")
 async def api_vault_status(_=Depends(require_auth)):
-    vault = _vault_url()
+    vault  = _vault_url()
+    script = _script("vault_server.py")
+    info = {
+        "url":          vault,
+        "local":        _vault_is_local(vault),
+        "can_start":    script.exists() and _vault_is_local(vault),
+        "start_command": _vault_start_command(),
+        "script_path":  str(script),
+    }
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{vault}/", timeout=aiohttp.ClientTimeout(total=3)) as r:
-                return {"online": r.status < 500, "url": vault}
+                return {"online": r.status < 500, **info}
     except Exception:
-        return {"online": False, "url": vault}
+        return {"online": False, **info}
+
+
+@app.post("/api/vault/start")
+async def api_vault_start(_=Depends(require_auth)):
+    """Start the local vault server ourselves.
+
+    Telling a customer to paste a python command into a terminal was never a
+    real answer — especially on Windows, where the command we printed was
+    wrong in two different ways. If the vault is meant to live on this
+    machine, the app can just start it.
+    """
+    vault = _vault_url()
+    if not _vault_is_local(vault):
+        return {"started": False,
+                "error": f"Your vault is configured at {vault}, which is another machine. "
+                         f"Start it there, or point Setup → Vault at this machine."}
+
+    script = _script("vault_server.py")
+    if not script.exists():
+        return {"started": False,
+                "error": "vault_server.py is missing — re-run the installer to deploy "
+                         "the lifecycle scripts."}
+
+    # Already up? Don't start a second one fighting for the port.
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{vault}/", timeout=aiohttp.ClientTimeout(total=2)) as r:
+                if r.status < 500:
+                    return {"started": True, "already_running": True, "url": vault}
+    except Exception:
+        pass
+
+    try:
+        _LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        logfile = _LOGS_DIR / "vault.log"
+        with open(logfile, "a") as lf:
+            proc = subprocess.Popen(
+                [sys.executable, "-u", str(script), "--port", "8765"],
+                stdout=lf, stderr=lf,
+                start_new_session=(os.name != "nt"),
+            )
+    except Exception:
+        log.exception("could not start the vault server")
+        return {"started": False,
+                "error": "Could not start the vault — see the app log for the reason."}
+
+    # Give it a moment and confirm, so the UI never claims success blindly.
+    for _ in range(10):
+        await asyncio.sleep(0.5)
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{vault}/",
+                                       timeout=aiohttp.ClientTimeout(total=2)) as r:
+                    if r.status < 500:
+                        return {"started": True, "pid": proc.pid, "url": vault}
+        except Exception:
+            continue
+
+    return {"started": False,
+            "error": f"The vault was launched (pid {proc.pid}) but is not answering at "
+                     f"{vault} yet. Check {_LOGS_DIR / 'vault.log'}."}
 
 
 # ── Core memories ──────────────────────────────────────────────────────────────

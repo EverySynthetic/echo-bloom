@@ -211,6 +211,18 @@ if (Test-Path $APP_DIR) { Remove-Item $APP_DIR -Recurse -Force }
 Expand-Archive -Path $zipPath -DestinationPath $INSTALL_DIR -Force
 Rename-Item "$INSTALL_DIR\echo-bloom-main" $APP_DIR
 Remove-Item $zipPath -Force
+
+# $SCRIPTS_DIR was created empty and never populated, so the vault, bedtime,
+# wander and roundtable had nothing to run on Windows. Mirrors deploy_scripts()
+# in install.sh.
+if (Test-Path "$APP_DIR\scripts") {
+    try {
+        Copy-Item "$APP_DIR\scripts\*" $SCRIPTS_DIR -Recurse -Force
+        Write-Step "Lifecycle scripts: deployed" 'Green'
+    } catch {
+        Write-Step "Lifecycle scripts: $($_.Exception.Message)" 'Yellow'
+    }
+}
 Write-Step "Echo Bloom: ready" 'Green'
 
 # ── pip packages ─────────────────────────────────────────────────────────────

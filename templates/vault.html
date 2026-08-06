@@ -189,7 +189,7 @@ async function loadFeed() {
     const r = await fetch(`/api/vault?${params}`);
     const d = await r.json();
     if (d.error === 'vault_offline') {
-      showVaultOffline(d.vault_url);
+      await showVaultOffline(d.vault_url);
       return;
     }
     total = d.total;
@@ -202,25 +202,81 @@ async function loadFeed() {
   }
 }
 
-function showVaultOffline(url) {
-  const isWin = navigator.userAgent.includes('Windows');
-  const cmd   = isWin
-    ? 'python "%LOCALAPPDATA%\\EchoBloom\\app\\vault_server.py"'
-    : 'python3 ~/.local/share/echo_bloom/scripts/vault_server.py';
+async function showVaultOffline(url) {
   document.getElementById('vault-subtitle').textContent = 'vault offline';
   document.getElementById('vault-pagination').style.display = 'none';
+
+  // Ask the server what it can actually do and what the real command is.
+  // This block used to build a Windows command in JavaScript from a guessed
+  // path: it named app\\vault_server.py (the file is in app\\scripts\\) and used
+  // cmd.exe's %LOCALAPPDATA% syntax, which PowerShell does not expand. The one
+  // instruction we handed the user could not work in either respect.
+  let st = {};
+  try {
+    const r = await fetch('/api/vault/status');
+    if (r.ok) st = await r.json();
+  } catch(e) {}
+
+  const shownUrl = escHtml(url || st.url || 'localhost:8765');
+  const canStart = st.can_start === true;
+  const remote   = st.local === false;
+
+  let action;
+  if (canStart) {
+    action = `
+      <button id="vault-start-btn" class="vault-start-btn" onclick="startVault()">START VAULT</button>
+      <div id="vault-start-status" class="vault-offline-note"></div>
+      <details class="vault-offline-details">
+        <summary>or start it yourself</summary>
+        <pre class="vault-offline-cmd">${escHtml(st.start_command || '')}</pre>
+      </details>`;
+  } else if (remote) {
+    action = `
+      <div class="vault-offline-note">
+        Your vault is configured at <code>${shownUrl}</code>, which is another
+        machine — start it there, or point
+        <a href="/onboard?step=3">Setup &rarr; Vault</a> at this one.
+      </div>`;
+  } else {
+    action = `
+      <div class="vault-offline-note">
+        <code>vault_server.py</code> isn't on this machine. Re-run the installer
+        to deploy the lifecycle scripts.
+      </div>`;
+  }
+
   document.getElementById('vault-entries').innerHTML = `
     <div class="vault-offline-banner">
-      <div class="vault-offline-icon">◎</div>
+      <div class="vault-offline-icon">\u25ce</div>
       <div class="vault-offline-title">VAULT NOT RUNNING</div>
       <div class="vault-offline-body">
-        The vault server isn't reachable at <code>${escHtml(url || 'localhost:8765')}</code>.
+        The vault server isn't reachable at <code>${shownUrl}</code>.
         <br><br>
-        To start it on this machine:
-        <pre class="vault-offline-cmd">${escHtml(cmd)}</pre>
-        Or configure a different vault URL in <a href="/onboard?step=3">Setup → Vault</a>.
+        ${action}
       </div>
     </div>`;
+}
+
+async function startVault() {
+  const btn = document.getElementById('vault-start-btn');
+  const st  = document.getElementById('vault-start-status');
+  if (btn) { btn.disabled = true; btn.textContent = 'STARTING\u2026'; }
+  if (st)  { st.textContent = ''; }
+  try {
+    const r = await fetch('/api/vault/start', {method: 'POST'});
+    ebCheck(r);
+    const d = await r.json();
+    if (d.started) {
+      if (st) st.textContent = d.already_running
+        ? 'Already running \u2014 reloading\u2026' : 'Vault is up \u2014 reloading\u2026';
+      setTimeout(() => location.reload(), 800);
+      return;
+    }
+    if (st) st.textContent = d.error || 'Could not start the vault.';
+  } catch(err) {
+    if (st) st.textContent = err.message;
+  }
+  if (btn) { btn.disabled = false; btn.textContent = 'RETRY'; }
 }
 
 function goPage(dir) {

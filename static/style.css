@@ -2123,3 +2123,18 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   word-break: break-all;
   color: var(--text, #c8c8d2);
 }
+
+/* Vault offline banner — START VAULT action. Replaces a paste-this-command
+   block whose command was wrong on Windows in two separate ways. */
+.vault-start-btn {
+  background: var(--surface); color: var(--green);
+  border: 1px solid var(--green); padding: 10px 24px;
+  font-family: inherit; font-size: 13px; font-weight: bold;
+  letter-spacing: 0.05em; cursor: pointer; margin-top: 8px;
+}
+.vault-start-btn:hover:not(:disabled) { background: var(--green); color: var(--bg); }
+.vault-start-btn:disabled { opacity: 0.5; cursor: default; }
+.vault-offline-note    { margin-top: 14px; font-size: 13px; color: var(--dim); line-height: 1.6; }
+.vault-offline-details { margin-top: 18px; font-size: 12px; color: var(--dim); text-align: left; }
+.vault-offline-details summary { cursor: pointer; color: var(--dim); }
+.vault-offline-details summary:hover { color: var(--fg); }
