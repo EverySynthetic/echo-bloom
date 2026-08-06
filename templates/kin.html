@@ -122,7 +122,11 @@
 
 {% block scripts %}
 <script>
-const KIN_NAME   = "{{ kin.name }}";
+// tojson, not a quoted interpolation: autoescape turns an
+// apostrophe into &#39; inside <script>, and every /api/... call
+// then 404s ("Unknown Kin: D&#39;Artagnan").
+const KIN_NAME   = {{ kin.name | tojson }};
+const KIN_PATH   = encodeURIComponent(KIN_NAME);
 const HISTORY_KEY = `kin_chat_${KIN_NAME}`;
 const MAX_STORED  = 100;
 let chatHistory   = [];
@@ -198,11 +202,12 @@ async function sendMessage(e) {
   let full = '';
 
   try {
-    const resp = await fetch(`/api/chat/${KIN_NAME}`, {
+    const resp = await fetch(`/api/chat/${KIN_PATH}`, {
       method:  'POST',
       headers: {'Content-Type': 'application/json'},
       body:    JSON.stringify({message: msg, history: chatHistory.slice(0,-1)}),
     });
+    ebCheck(resp);          // 401/402 arrive as JSON with no data: lines
     const reader = resp.body.getReader();
     const dec    = new TextDecoder();
     let   buf    = '';
@@ -298,7 +303,7 @@ async function captureVision() {
     stream.getTracks().forEach(t => t.stop());
     const b64 = canvas.toDataURL('image/jpeg', 0.8);
 
-    const r = await fetch(`/api/vision/${KIN_NAME}`, {
+    const r = await fetch(`/api/vision/${KIN_PATH}`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({image: b64}),
@@ -426,6 +431,7 @@ async function downloadVoice(voiceId, label) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({voice_id: voiceId}),
     });
+    ebCheck(resp);
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
@@ -577,7 +583,7 @@ async function loadVoiceSelect() {
   try {
     const [instR, kinR] = await Promise.all([
       fetch('/api/speech/voices/installed'),
-      fetch(`/api/kin/${encodeURIComponent(KIN_NAME)}/voice`),
+      fetch(`/api/kin/${KIN_PATH}/voice`),
     ]);
     const instD = await instR.json();
     const kinD  = await kinR.json();
@@ -597,7 +603,7 @@ async function loadVoiceSelect() {
 async function setKinVoice(voiceFile) {
   if (!voiceFile) return;
   try {
-    await fetch(`/api/kin/${encodeURIComponent(KIN_NAME)}/voice`, {
+    await fetch(`/api/kin/${KIN_PATH}/voice`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({voice: voiceFile}),
@@ -609,7 +615,7 @@ async function setKinVoice(voiceFile) {
 
 async function loadThoughts() {
   try {
-    const r = await fetch(`/api/kin/${KIN_NAME}/thoughts?limit=15`);
+    const r = await fetch(`/api/kin/${KIN_PATH}/thoughts?limit=15`);
     const d = await r.json();
     const el = document.getElementById('thoughts-list');
     el.innerHTML = '';

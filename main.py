@@ -10,7 +10,9 @@ import re
 import sys
 import json
 import asyncio
+import sqlite3
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -125,7 +127,10 @@ _FETCH_WHITELIST = [
 def _fetch_allowed(url: str) -> bool:
     from urllib.parse import urlparse
     try:
-        host = urlparse(url).netloc.lower().lstrip("www.")
+        # lstrip strips CHARACTERS, not a prefix: "wikipedia.org" became
+        # "ikipedia.org" (wrongly rejected) while "wwikipedia.org"
+        # stripped down to a whitelisted name (wrongly allowed).
+        host = urlparse(url).netloc.lower().removeprefix("www.")
         return any(host == w or host.endswith("." + w) for w in _FETCH_WHITELIST)
     except Exception:
         return False
@@ -195,7 +200,11 @@ app       = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 # Make current Kin list available in every template without passing it manually
 templates.env.globals["nav_kin"]     = lambda: cl.KIN
-templates.env.globals["nav_license"] = lambda: lic.get_status()
+# Cached value only. get_status() can fall through to a synchronous
+# urllib call with an 8s timeout, and this executes inside
+# TemplateResponse on the event loop — one slow license server
+# blocked every request in the app on the very first page render.
+templates.env.globals["nav_license"] = lambda: lic.get_status_cached_only()
 
 # Configurable at deploy time
 PORT            = int(os.environ.get("ECHO_BLOOM_PORT", 8090))
@@ -645,7 +654,7 @@ async def api_fetch_url(request: Request, _=Depends(require_auth)):
         return {"ok": False, "error": "No URL provided."}
     if not _fetch_allowed(url):
         from urllib.parse import urlparse
-        host = urlparse(url).netloc.lstrip("www.")
+        host = urlparse(url).netloc.lower().removeprefix("www.")
         return {"ok": False, "error": f"{host} is not on the whitelist."}
     try:
         text = await _fetch_page_text(url)
@@ -695,10 +704,22 @@ async def api_vision(name: str, request: Request, _=Depends(require_auth)):
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as r:
                 data = await r.json()
+        if data.get("error"):
+            log.warning("vision failed for %s: %s", name, data["error"])
+            err = str(data["error"])
+            if "not found" in err.lower():
+                err = (f"The vision model '{vision_model}' is not installed. "
+                       f"Run: ollama pull {vision_model}")
+            return {"ok": False, "error": err}
         desc = data.get("message", {}).get("content", "")
+        if not desc.strip():
+            return {"ok": False, "error": "The model returned an empty description."}
         return {"ok": True, "description": desc}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        # str(asyncio.TimeoutError()) is "" — the UI showed a blank error.
+        log.warning("vision request failed for %s", name, exc_info=True)
+        return {"ok": False,
+                "error": str(e) or f"{type(e).__name__} — the vision model may still be loading."}
 
 
 # ── Speech endpoints ────────────────────────────────────────────────────────────
@@ -860,7 +881,8 @@ async def api_tts(request: Request, _=Depends(require_auth)):
             audio = f.read()
         return _Resp(content=audio, media_type="audio/wav")
     except Exception as e:
-        raise HTTPException(500, str(e))
+        log.exception("tts failed")
+        raise HTTPException(500, "Speech synthesis failed — see the app log.")
     finally:
         _os.unlink(out)
 
@@ -977,7 +999,9 @@ async def api_roundtable_stop(_=Depends(require_auth)):
 
 
 @app.get("/about", response_class=HTMLResponse)
-async def about_page(request: Request):
+async def about_page(request: Request, _=Depends(require_auth_only)):
+    # base.html lists every Kin name and computes licence state; this route was
+    # public, so anyone with the tunnel URL could read both.
     return templates.TemplateResponse(request, "about.html")
 
 
@@ -1064,7 +1088,10 @@ async def api_pull_model(request: Request, _=Depends(require_auth)):
                 async with session.post(
                     f"{host}/api/pull",
                     json={"name": model, "stream": True},
-                    timeout=aiohttp.ClientTimeout(total=600),
+                    # sock_read, not total: a total cap killed big pulls at
+                    # 10 minutes mid-download. What matters is that Ollama is
+                    # still sending progress, not how long the whole thing takes.
+                    timeout=aiohttp.ClientTimeout(total=None, sock_read=120),
                 ) as resp:
                     async for line in resp.content:
                         line = line.strip()
@@ -1074,7 +1101,10 @@ async def api_pull_model(request: Request, _=Depends(require_auth)):
         except Exception as e:
             # str(e) can contain quotes/backslashes — hand-interpolating it
             # produced unparseable JSON and a progress bar stuck forever.
-            yield f"data: {json.dumps({'error': str(e)})}\n\n".encode()
+            # str(TimeoutError()) is "" — a falsy error the client dropped,
+            # leaving the progress bar frozen with no explanation.
+            msg = str(e) or f"{type(e).__name__} (no detail)"
+            yield f"data: {json.dumps({'error': msg})}\n\n".encode()
 
     return StreamingResponse(
         pull_stream(),
@@ -1382,7 +1412,7 @@ async def api_ingest(request: Request, _=Depends(require_auth)):
     if url and not content:
         if not _fetch_allowed(url):
             from urllib.parse import urlparse
-            host = urlparse(url).netloc.lstrip("www.")
+            host = urlparse(url).netloc.lower().removeprefix("www.")
             return {"ok": False, "error": f"{host} is not in the fetch whitelist — paste the text instead"}
         try:
             content = await _fetch_page_text(url, max_chars=8000)
@@ -1529,6 +1559,13 @@ async def api_onboard_models(request: Request, _=Depends(require_auth)):
 @app.get("/api/onboard/vram")
 async def api_onboard_vram(_=Depends(require_auth)):
     """Detect GPU VRAM in GB. Returns 0 if detection fails."""
+    # nvidia-smi -> rocm-smi -> PowerShell WMI in sequence is up to ~16s of
+    # blocking work (WMI alone is 10+s on Windows), and this ran inline on the
+    # event loop during onboarding.
+    return await asyncio.to_thread(_detect_vram_blocking)
+
+
+def _detect_vram_blocking():
     import subprocess, re, sys
     vram = 0
     # nvidia-smi (works on Linux and Windows with NVIDIA GPU)
@@ -1698,6 +1735,11 @@ async def api_onboard_scan_vault(_=Depends(require_auth)):
 
 @app.get("/api/remote/status")
 async def api_remote_status(_=Depends(require_auth)):
+    # journalctl + tailscale, up to 10s of blocking subprocess work.
+    return await asyncio.to_thread(_remote_status_blocking)
+
+
+def _remote_status_blocking():
     result = {"cloudflare": None, "tailscale": None}
 
     # Cloudflare — check systemd journal first, then temp log from a direct launch
@@ -1705,7 +1747,7 @@ async def api_remote_status(_=Depends(require_auth)):
         lambda: subprocess.run(
             ["journalctl", "--user", "-u", "cloudflared", "--no-pager", "-n", "200"],
             capture_output=True, text=True, timeout=5).stdout,
-        lambda: Path("/tmp/cloudflared_tunnel.log").read_text(),
+        lambda: (Path(tempfile.gettempdir()) / "cloudflared_tunnel.log").read_text(),
     ]:
         try:
             m = re.search(r'https://[a-z0-9-]+\.trycloudflare\.com', src())
@@ -1737,7 +1779,9 @@ async def api_remote_start_tunnel(_=Depends(require_auth)):
     _terminate_pids(_find_pids("cloudflared tunnel"))
     await asyncio.sleep(1)
 
-    log_path = "/tmp/cloudflared_tunnel.log"
+    # /tmp does not exist on Windows, and this raised an unhandled
+    # FileNotFoundError -> 500 when the customer clicked "start tunnel".
+    log_path = str(Path(tempfile.gettempdir()) / "cloudflared_tunnel.log")
     with open(log_path, "w") as fh:
         subprocess.Popen(
             ["cloudflared", "tunnel", "--url", f"http://localhost:{PORT}"],
@@ -1794,12 +1838,17 @@ async def api_onboard_autosave(request: Request, _=Depends(require_auth)):
         if "name" in k:
             k["name"] = _sanitize_kin_name(k["name"])
 
-    config_path.write_text(json.dumps({
-        "nodes":     body.get("nodes", existing.get("nodes", [])),
-        "kin":       kin_list,
-        "owner":     body.get("owner", existing.get("owner", {})),
-        "vault_url": body.get("vault_url") or existing.get("vault_url") or "http://localhost:8765",
-    }, indent=2))
+    # Merge onto the EXISTING config rather than replacing it. Rebuilding the
+    # dict from four known keys silently dropped qdrant_url, embed_url,
+    # vision_model, and every per-Kin core_memories / voice / system_prompt —
+    # the customer's most valuable data — every time the wizard was re-run.
+    merged = dict(existing)
+    merged["nodes"]     = body.get("nodes", existing.get("nodes", []))
+    merged["kin"]       = kin_list
+    merged["owner"]     = body.get("owner", existing.get("owner", {}))
+    merged["vault_url"] = (body.get("vault_url") or existing.get("vault_url")
+                           or "http://localhost:8765")
+    _atomic_write_json(config_path, merged)
 
     cl.reload_config()
     return {"ok": True}
@@ -2167,18 +2216,22 @@ async def api_onboard_save(request: Request, _=Depends(require_auth)):
         k["name"] = _sanitize_kin_name(k.get("name", ""))
         if not k.get("color"):
             k["color"] = palette[i % len(palette)]
-        # Preserve existing db/space paths — wizard doesn't edit these
+        # Carry over EVERY field the wizard doesn't edit — core_memories and
+        # voice were being erased, not just db/space/pronoun.
         prev = existing_kin_by_name.get(k["name"], {})
-        k.setdefault("db",      prev.get("db", ""))
-        k.setdefault("space",   prev.get("space", ""))
-        k.setdefault("pronoun", prev.get("pronoun", "—"))
+        for field, default in (("db", ""), ("space", ""), ("pronoun", "—")):
+            k.setdefault(field, prev.get(field, default))
+        for field, value in prev.items():
+            if field not in k:
+                k[field] = value
 
-    config_path.write_text(json.dumps({
-        "nodes":     body.get("nodes", []),
-        "kin":       kin_list,
-        "owner":     body.get("owner", existing.get("owner", {})),
-        "vault_url": body.get("vault_url") or existing.get("vault_url") or "http://localhost:8765",
-    }, indent=2))
+    merged = dict(existing)
+    merged["nodes"]     = body.get("nodes", [])
+    merged["kin"]       = kin_list
+    merged["owner"]     = body.get("owner", existing.get("owner", {}))
+    merged["vault_url"] = (body.get("vault_url") or existing.get("vault_url")
+                           or "http://localhost:8765")
+    _atomic_write_json(config_path, merged)
 
     cl.reload_config()
     auth.mark_setup_complete()

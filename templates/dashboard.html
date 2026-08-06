@@ -343,6 +343,7 @@ async function pullModel(btn) {
       headers: {'Content-Type': 'application/json'},
       body:    JSON.stringify({host, model}),
     });
+    ebCheck(r);
     const reader = r.body.getReader();
     const dec    = new TextDecoder();
     let buf = '';
@@ -356,7 +357,13 @@ async function pullModel(btn) {
         if (!line.startsWith('data: ')) continue;
         try {
           const d = JSON.parse(line.slice(6));
-          if (d.error) { status.textContent = 'Error: ' + d.error; return; }
+          if (d.error) {
+            // Mirror the catch block: without this the button stayed
+            // disabled on "PULLING…" until a page reload.
+            status.textContent = 'Error: ' + d.error;
+            btn.disabled = false; btn.textContent = 'RETRY';
+            return;
+          }
           if (d.status === 'done') {
             status.textContent = 'Done — reloading…';
             setTimeout(() => location.reload(), 1000);

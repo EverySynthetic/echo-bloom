@@ -56,7 +56,10 @@
   </div>
 
   <div class="welcome-skip">
-    Already set up? <a href="/" onclick="markDone()">Go to the dashboard</a>
+    My AI runs on another machine &mdash;
+    <a href="/onboard" onclick="markDone(event)">continue setup</a>
+    <br>
+    Already set up? <a href="/" onclick="markDone(event)">Go to the dashboard</a>
   </div>
 
 </div>
@@ -97,8 +100,25 @@ async function checkOllama() {
   }
 }
 
-async function markDone() {
-  await fetch('/api/setup-complete', {method: 'POST'});
+function markDone(ev) {
+  // sendBeacon, not fetch: navigation aborted the in-flight request, so
+  // setup_complete never got written and the next login bounced the user
+  // straight back here — reading as a loop.
+  try {
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon('/api/setup-complete');
+      return true;
+    }
+  } catch(e) {}
+  if (ev) {
+    ev.preventDefault();
+    const href = ev.currentTarget.getAttribute('href');
+    fetch('/api/setup-complete', {method: 'POST'})
+      .catch(() => {})
+      .then(() => { location.href = href; });
+    return false;
+  }
+  return true;
 }
 
 checkOllama();

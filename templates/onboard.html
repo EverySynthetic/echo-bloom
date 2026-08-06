@@ -493,6 +493,7 @@ async function pullModel(name) {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({host, model: name}),
     });
+    ebCheck(r);
     const reader = r.body.getReader();
     const dec    = new TextDecoder();
     let buf = '';
@@ -567,7 +568,10 @@ async function loadModels(hostOverride) {
       await renderModelGrid();
       setStatus('kin-status', d.ok ? 'no models installed — pull one below' : (d.error || 'could not reach Ollama'), d.ok ? null : false);
     }
-    return true;
+    // Report the truth: returning true unconditionally painted the node dot
+    // green for a host that could not be reached, and the pull the user then
+    // clicked was guaranteed to fail.
+    return d.ok === true;
   } catch(e) {
     document.getElementById('kin-no-models').style.display = 'block';
     await renderModelGrid();

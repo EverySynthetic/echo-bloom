@@ -508,7 +508,32 @@ def get_status(force: bool = False) -> dict:
     return value
 
 
-def _compute_status() -> dict:
+def get_status_cached_only() -> dict:
+    """Status without ever making a network call.
+
+    For use from Jinja template globals, which execute inside TemplateResponse
+    on the event loop: get_status() can fall through to _try_upgrade_offline_token
+    and a synchronous urllib request with an 8s timeout, which blocked every
+    other request in the app during a page render.
+
+    Returns the cached value when there is one. Otherwise computes a
+    local-only view: a saved key and a stored token are both read from disk,
+    which is cheap, but the outbound upgrade probe is skipped.
+    """
+    cached = _status_cache.get("value")
+    if cached is not None:
+        return cached
+    try:
+        value = _compute_status(allow_network=False)
+    except Exception:
+        log.exception("could not compute license status")
+        return {"state": "trial", "days_left": TRIAL_DAYS}
+    # Deliberately not cached: this is a partial view, and the next real
+    # get_status() call should do the full computation.
+    return value
+
+
+def _compute_status(allow_network: bool = True) -> dict:
     """
     Returns one of:
       {"state": "licensed",  "type": "permanent", "email": "...", "days_left": None}
@@ -529,10 +554,17 @@ def _compute_status() -> dict:
             }
 
     # Trial token (server-registered, fingerprint-bound)
-    ensure_trial_start()
+    if allow_network:
+        ensure_trial_start()
     token_state = _read_trial_token()
 
     if token_state is None:
+        if not allow_network:
+            # Network-free view on a machine that has not registered yet. Do
+            # NOT report expired: that would flash EXPIRED in the nav on a new
+            # customer's very first page load, before registration has had a
+            # chance to run. The next real get_status() registers and corrects.
+            return {"state": "trial", "days_left": TRIAL_DAYS}
         return {"state": "expired"}
 
     state = token_state.get("state")

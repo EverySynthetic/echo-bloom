@@ -288,6 +288,7 @@ async function startBuild() {
       body: JSON.stringify(data)
     });
 
+    ebCheck(resp);
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
