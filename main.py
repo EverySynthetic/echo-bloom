@@ -175,6 +175,14 @@ async def serve_installer_ps1():
     return Response(content=ps1.read_text(), media_type="text/plain")
 
 
+@app.get("/install_wizard.ps1", include_in_schema=False)
+async def serve_installer_wizard():
+    wiz = BASE_DIR / "install_wizard.ps1"
+    if not wiz.exists():
+        raise HTTPException(404, "Wizard not found")
+    return Response(content=wiz.read_text(), media_type="text/plain")
+
+
 @app.get("/install.sh", include_in_schema=False)
 async def serve_installer_sh():
     sh = BASE_DIR / "install.sh"

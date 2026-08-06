@@ -70,14 +70,16 @@
           COPY INSTALL COMMAND
         </button>
         <div class="install-cmd-wrap">
-          <code class="install-cmd" id="win-cmd">powershell -ExecutionPolicy Bypass -Command "iwr -useb https://everysynthetic.org/install.ps1 | iex"</code>
+          <code class="install-cmd" id="win-cmd">powershell -ExecutionPolicy Bypass -Command "iwr -useb https://everysynthetic.org/install_wizard.ps1 | iex"</code>
         </div>
         <div class="install-card-links">
-          <a href="/install.ps1" class="install-view-link" target="_blank" rel="noopener">view script ↗</a>
+          <a href="/install_wizard.ps1" class="install-view-link" target="_blank" rel="noopener">view wizard ↗</a>
+          &nbsp;·&nbsp;
+          <a href="/install.ps1" class="install-view-link" target="_blank" rel="noopener">headless script ↗</a>
         </div>
         <div class="install-card-note">
-          Paste into CMD or PowerShell. A window will appear showing
-          exactly what will be installed before anything happens.
+          Paste into CMD or PowerShell. A step-by-step installer window
+          walks you through everything — no surprises.
         </div>
       </div>
 
