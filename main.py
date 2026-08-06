@@ -37,6 +37,9 @@ def get_hw_caps() -> dict:
     if _hw_caps_cache is not None:
         return _hw_caps_cache
 
+    import sys
+
+    # ── VRAM ──────────────────────────────────────────────────────────────────
     vram_mb = 0
     try:
         r = subprocess.run(
@@ -48,6 +51,20 @@ def get_hw_caps() -> dict:
     except Exception:
         pass
 
+    if vram_mb == 0 and sys.platform == "win32":
+        # WMI fallback for Windows (covers AMD / integrated)
+        try:
+            r = subprocess.run(
+                ["powershell", "-Command",
+                 "(Get-WmiObject Win32_VideoController | Measure-Object AdapterRAM -Sum).Sum"],
+                capture_output=True, text=True, timeout=6,
+            )
+            if r.returncode == 0 and r.stdout.strip().isdigit():
+                vram_mb = int(r.stdout.strip()) // (1024 * 1024)
+        except Exception:
+            pass
+
+    # ── RAM ───────────────────────────────────────────────────────────────────
     ram_gb = 0.0
     try:
         with open("/proc/meminfo") as f:
@@ -57,6 +74,18 @@ def get_hw_caps() -> dict:
                     break
     except Exception:
         pass
+
+    if ram_gb == 0.0 and sys.platform == "win32":
+        try:
+            r = subprocess.run(
+                ["powershell", "-Command",
+                 "(Get-WmiObject -Class Win32_ComputerSystem).TotalPhysicalMemory"],
+                capture_output=True, text=True, timeout=6,
+            )
+            if r.returncode == 0 and r.stdout.strip().isdigit():
+                ram_gb = int(r.stdout.strip()) / (1024 ** 3)
+        except Exception:
+            pass
 
     _hw_caps_cache = {
         "vram_mb":   vram_mb,
