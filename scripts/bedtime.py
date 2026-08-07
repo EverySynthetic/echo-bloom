@@ -103,11 +103,79 @@ def _roundtable_pid():
         return None
 
 
+def _wander_child_pids():
+    """PIDs of the individual per-Kin wander loops.
+
+    Pausing the roundtable manager (below) does nothing to the wander loops
+    it spawned — those are separate subprocess.Popen'd processes, and a
+    suspended parent does not suspend its children. Every bedtime ritual
+    believed it had paused wandering and hadn't; wander kept calling Ollama
+    the whole time, which is exactly how a reflection can time out waiting
+    behind a wander loop that was never actually stopped.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return []
+    # Match on argv basenames, not a substring of the joined command line —
+    # the latter also matches this very function's own docstring/log lines
+    # if a shell ever passes them as arguments, and it matched a `claude`
+    # debug shell during testing that merely had "wander.py" in a heredoc.
+    pids = []
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        try:
+            args = proc.info.get("cmdline") or []
+        except Exception:
+            continue
+        if any(os.path.basename(a) == "wander.py" for a in args):
+            pids.append(proc.info["pid"])
+    return pids
+
+
+def _suspend(pid):
+    # psutil works on both platforms; signal.SIGSTOP does not exist on
+    # Windows at all — referencing it there is an AttributeError, which
+    # would have crashed pause_wanders() on the very first Windows customer
+    # to trigger bedtime from the dashboard.
+    try:
+        import psutil
+        psutil.Process(pid).suspend()
+        return True
+    except Exception:
+        pass
+    if hasattr(signal, "SIGSTOP"):
+        try:
+            os.kill(pid, signal.SIGSTOP)
+            return True
+        except Exception:
+            pass
+    return False
+
+
+def _resume(pid):
+    try:
+        import psutil
+        psutil.Process(pid).resume()
+        return True
+    except Exception:
+        pass
+    if hasattr(signal, "SIGCONT"):
+        try:
+            os.kill(pid, signal.SIGCONT)
+            return True
+        except Exception:
+            pass
+    return False
+
+
 def pause_wanders():
     pid = _roundtable_pid()
-    if pid:
-        os.kill(pid, signal.SIGSTOP)
+    if pid and _suspend(pid):
         log(f"Roundtable paused (pid {pid})")
+    wpids = _wander_child_pids()
+    paused = [w for w in wpids if _suspend(w)]
+    if paused:
+        log(f"  {len(paused)} wander process(es) paused directly: {paused}")
 
 
 def shutdown_remote_nodes():
@@ -143,14 +211,15 @@ def shutdown_remote_nodes():
 
 
 def resume_wanders():
-    """SIGCONT the roundtable. Every path that pauses must reach this."""
+    """Resume the roundtable and every wander child. Every path that pauses must reach this."""
     pid = _roundtable_pid()
     if pid:
-        try:
-            os.kill(pid, signal.SIGCONT)
+        if _resume(pid):
             log(f"Roundtable resumed (pid {pid})")
-        except Exception as e:
-            log(f"Could not resume the roundtable (pid {pid}): {e}")
+        else:
+            log(f"Could not resume the roundtable (pid {pid})")
+    for wpid in _wander_child_pids():
+        _resume(wpid)
 
 
 def stop_wanders():
