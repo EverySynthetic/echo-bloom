@@ -237,8 +237,32 @@ def get_recent_conversation(kin_name, limit=4, db_path=None):
                 pass
 
 
+def _vault_text_search(kin_name, query_text, limit):
+    """Keyword recall via the vault's FTS index.
+
+    The floor under semantic recall: vectors need an embedding model AND a
+    Qdrant server, and no installer ever shipped Qdrant — so on a stock
+    install the vector path below fails every time and recall returned
+    nothing, silently. The vault is always running (it's a systemd unit /
+    started by the app), so this path exists on every machine.
+    """
+    try:
+        r = requests.get(
+            f"{_vault_url()}/search",
+            params={"query": query_text, "author": kin_name, "limit": limit},
+            timeout=8,
+        )
+        r.raise_for_status()
+        return [m["content"].strip() for m in r.json() if m.get("content")]
+    except Exception as e:
+        log.warning("vault text search failed for %s (%s): %s",
+                    kin_name, _vault_url(), e)
+        return []
+
+
 def get_vault_memories(kin_name, query_text, limit=5):
-    """Semantically relevant vault memories for this Kin via Qdrant. Returns list of strings."""
+    """Relevant vault memories for this Kin. Semantic (Qdrant) when available,
+    keyword (vault FTS) when not. Returns list of strings."""
     if not query_text:
         return []
     try:
@@ -274,9 +298,11 @@ def get_vault_memories(kin_name, query_text, limit=5):
     except Exception as e:
         # This is the path that silently returned nothing while the embed call
         # timed out — the Kin then answered with no memory and no explanation.
-        log.warning("semantic recall failed for %s (embed=%s qdrant=%s): %s",
-                    kin_name, _embed_url(), _qdrant_url(), e)
-        return []
+        # Now it degrades to keyword search instead of to amnesia.
+        log.info("semantic recall unavailable for %s (embed=%s qdrant=%s): %s "
+                 "— falling back to vault text search",
+                 kin_name, _embed_url(), _qdrant_url(), e)
+        return _vault_text_search(kin_name, query_text, limit)
 
 
 def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,

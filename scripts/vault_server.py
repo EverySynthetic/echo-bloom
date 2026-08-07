@@ -71,7 +71,10 @@ def db():
         conn.close()
 
 
+HAS_FTS = False
+
 def init_db():
+    global HAS_FTS
     with db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS memories (
@@ -87,6 +90,40 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_layer  ON memories(layer)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_author ON memories(author)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ts     ON memories(created_at)")
+
+        # Full-text search. This is the recall floor: semantic (vector) recall
+        # needs an embedding model AND a Qdrant server, and no installer ever
+        # shipped Qdrant — so on every customer machine the "search my memory"
+        # feature was dead. FTS5 ships inside Python's own sqlite3: no daemon,
+        # no model, works everywhere. External-content table + triggers keep
+        # it in sync with `memories` automatically.
+        try:
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
+                USING fts5(content, content='memories', content_rowid='id')
+            """)
+            conn.executescript("""
+                CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+                    INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+                END;
+                CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+                    INSERT INTO memories_fts(memories_fts, rowid, content)
+                    VALUES ('delete', old.id, old.content);
+                END;
+                CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE OF content ON memories BEGIN
+                    INSERT INTO memories_fts(memories_fts, rowid, content)
+                    VALUES ('delete', old.id, old.content);
+                    INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+                END;
+            """)
+            # Index anything written before the FTS table existed. Cheap when
+            # already in sync; correct when upgrading an existing vault.
+            conn.execute("INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')")
+            HAS_FTS = True
+        except sqlite3.OperationalError as e:
+            # A Python built without FTS5 is rare but real; /search then falls
+            # back to LIKE and says so, instead of 500ing.
+            print(f"FTS5 unavailable ({e}) — /search will use substring matching.")
 
 
 init_db()
@@ -162,6 +199,51 @@ def recall(
             params + [limit, offset],
         ).fetchall()
     return [row_to_dict(r) for r in rows]
+
+
+@app.get("/search")
+def search(
+    query:  str = Query(..., min_length=1),
+    author: str = "",
+    layer:  str = "",
+    limit:  int = Query(5, le=50),
+):
+    """Ranked full-text search. The fallback kin_memory uses when the vector
+    path (embed model + Qdrant) is unavailable — which is every install where
+    nobody set those up by hand."""
+    # FTS5 has its own query syntax; a user's raw text ("what's bob's deal?")
+    # is full of it. Quote each term so everything is a plain AND of words.
+    terms = [t.replace('"', "") for t in query.split() if t.replace('"', "")]
+    if not terms:
+        return []
+    # OR, not AND: a natural query ("scared of noise") must not miss a memory
+    # because one filler word is absent. bm25 ranks multi-term hits first.
+    fts_query = " OR ".join(f'"{t}"' for t in terms)
+
+    filters, params = [], []
+    if author: filters.append("m.author = ?"); params.append(author)
+    if layer:  filters.append("m.layer = ?");  params.append(layer)
+    extra = (" AND " + " AND ".join(filters)) if filters else ""
+
+    with db() as conn:
+        if HAS_FTS:
+            try:
+                rows = conn.execute(
+                    f"""SELECT m.*, bm25(memories_fts) AS rank
+                        FROM memories_fts f JOIN memories m ON m.id = f.rowid
+                        WHERE memories_fts MATCH ?{extra}
+                        ORDER BY rank LIMIT ?""",
+                    [fts_query] + params + [limit],
+                ).fetchall()
+                return [row_to_dict(r) for r in rows]
+            except sqlite3.OperationalError:
+                pass  # malformed corner case — fall through to LIKE
+        like = " OR ".join(["m.content LIKE ?"] * len(terms))
+        rows = conn.execute(
+            f"SELECT m.* FROM memories m WHERE {like}{extra} ORDER BY m.id DESC LIMIT ?",
+            [f"%{t}%" for t in terms] + params + [limit],
+        ).fetchall()
+        return [row_to_dict(r) for r in rows]
 
 
 @app.get("/count")
