@@ -234,7 +234,7 @@ templates.env.globals["nav_license"] = lambda: lic.get_status_cached_only()
 
 # Configurable at deploy time
 PORT            = int(os.environ.get("ECHO_BLOOM_PORT", 8090))
-LICENSE_BUY_URL = os.environ.get("ECHO_BLOOM_BUY_URL", "https://buy.stripe.com/9B67sMfdY8PGdJFaBB6oo00")
+LICENSE_BUY_URL = os.environ.get("ECHO_BLOOM_BUY_URL", "https://buy.stripe.com/5kQ14oe9Uea0bBxfVV6oo01")
 LICENSE_PRICE   = os.environ.get("ECHO_BLOOM_PRICE",   "50")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
