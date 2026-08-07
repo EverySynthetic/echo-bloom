@@ -4,6 +4,12 @@
 
 set -euo pipefail
 
+# Are we on a real terminal? This MUST be answered before the tee redirect
+# below, because after it fd 1 is a pipe and [[ -t 1 ]] is false forever. The
+# whiptail detection used to run after the redirect, so it was always false and
+# every whiptail branch in this file was dead code on every machine ever.
+if [ -t 1 ] && [ -w /dev/tty ]; then REAL_TTY=true; else REAL_TTY=false; fi
+
 # Log everything to /tmp so crashes leave a trail
 INSTALL_LOG="/tmp/echo_bloom_install.log"
 exec > >(tee -a "$INSTALL_LOG") 2>&1
@@ -19,6 +25,19 @@ if [ ! -t 0 ]; then
     echo "  Use process substitution so stdin stays attached to your terminal:"
     echo ""
     echo "    bash <(curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh)"
+    echo ""
+    exit 1
+fi
+
+# macOS: /proc/meminfo, loginctl and systemctl --user are all Linux-only, so a
+# Mac user gets through dependency install and then falls off a cliff at the
+# service step with everything half-done. Say so at the door instead.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    echo ""
+    echo "  Echo Bloom's installer does not support macOS yet."
+    echo "  It relies on systemd to keep your Kin running, which macOS doesn't have."
+    echo ""
+    echo "  Linux and Windows are supported today. Mac is on the list."
     echo ""
     exit 1
 fi
@@ -56,17 +75,47 @@ cat << 'EOF'
 EOF
 }
 
+# ── Transient terminal output ────────────────────────────────────────────────
+# Progress bars and spinners are \r animations. Through the tee pipe they
+# render as a freeze-then-dump and fill the install log with hundreds of block
+# characters, so they go straight to the terminal or nowhere at all.
+tty_out() {
+    $REAL_TTY || return 0
+    # shellcheck disable=SC2059
+    printf "$@" > /dev/tty
+}
+
 # ── Check for whiptail, fall back to plain numbered list ─────────────────────
+# TERM=dumb is what non-interactive shells and some CI/SSH setups report;
+# whiptail on it renders unusable garbage.
 HAS_WHIPTAIL=false
-command -v whiptail &>/dev/null && [[ -n "${TERM:-}" ]] && [[ -t 1 ]] && HAS_WHIPTAIL=true
+command -v whiptail &>/dev/null && [[ -n "${TERM:-}" ]] && [[ "${TERM}" != "dumb" ]] \
+    && $REAL_TTY && HAS_WHIPTAIL=true
 
 # ── Detect VRAM ───────────────────────────────────────────────────────────────
+# Echoes three numbers: "<total GB> <card count> <largest single card GB>".
+#
+# The model tiers are gated on the TOTAL, because Ollama really does split a
+# model across cards. But the total on its own is a half-truth: 16GB + 11GB
+# unlocks a tier no single card in the machine can hold, and the customer was
+# never told the model would be split — so a two-card box could pick something
+# that runs, just much slower than the number implied. Report all three and
+# say plainly when a split is coming.
+#
+# Runs in a subshell via $(...), so these have to come back on stdout — set as
+# globals from in here they would be discarded.
 detect_vram() {
-    local vram=0
+    local vram=0 count=0 largest=0
     local total_mb=0
     if command -v nvidia-smi &>/dev/null; then
-        total_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null \
-            | tr -d ' ' | awk '{sum += $1} END {print sum+0}') || total_mb=0
+        local per_card=""
+        per_card=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null \
+            | tr -d ' ' | grep -E '^[0-9]+$') || per_card=""
+        if [[ -n "$per_card" ]]; then
+            total_mb=$(echo "$per_card" | awk '{sum += $1} END {print sum+0}')
+            count=$(echo "$per_card" | wc -l | tr -d ' ')
+            largest=$(( $(echo "$per_card" | sort -rn | head -1) / 1024 ))
+        fi
         if [[ "$total_mb" =~ ^[0-9]+$ ]] && [[ "$total_mb" -gt 0 ]]; then
             vram=$(( total_mb / 1024 ))
         fi
@@ -75,8 +124,10 @@ detect_vram() {
         raw=$(rocm-smi --showmeminfo vram 2>/dev/null | grep -i 'total' \
             | grep -oP '\d+' | awk '{sum += $1} END {print sum+0}') || raw=0
         [[ "$raw" =~ ^[0-9]+$ ]] && vram=$(( raw / 1024 / 1024 )) || vram=0
+        # rocm-smi's per-card breakdown isn't parsed here; treat it as one pool.
+        [[ $vram -gt 0 ]] && { count=1; largest=$vram; }
     fi
-    echo "$vram"
+    echo "$vram $count $largest"
 }
 
 # ── Detect RAM (in GB) ────────────────────────────────────────────────────────
@@ -232,7 +283,12 @@ pick_model_whiptail() {
         else
             cur_ids=("${MODEL_IDS[@]}")
             cur_labels=("${MODEL_LABELS[@]}")
-            msg="$(printf 'Detected: %dGB VRAM · %dGB RAM\nChoose the model your AI will think with:' "$vram" "$ram")"
+            if [[ ${GPU_COUNT:-1} -gt 1 ]]; then
+                msg="$(printf 'Detected: %dGB VRAM across %d cards (largest %dGB) · %dGB RAM\nAnything over %dGB is split across cards — works, but slower.\n\nChoose the model your AI will think with:' \
+                    "$vram" "$GPU_COUNT" "$GPU_LARGEST" "$ram" "$GPU_LARGEST")"
+            else
+                msg="$(printf 'Detected: %dGB VRAM · %dGB RAM\nChoose the model your AI will think with:' "$vram" "$ram")"
+            fi
         fi
 
         for label in "${cur_labels[@]}"; do
@@ -245,12 +301,16 @@ pick_model_whiptail() {
             menu_args+=("X" "⚠  I wouldn't do this — show models beyond my VRAM")
         fi
 
+        # whiptail draws its UI on stdout and returns the selection on stderr,
+        # hence the fd shuffle. stdout must go to /dev/tty, not to fd 2 — the
+        # tee redirect at the top of this file makes BOTH 1 and 2 a pipe, and
+        # cursor addressing through a pipe is unreadable garbage.
         local choice
         choice=$(whiptail --title "$title" \
             --menu "$msg" \
             22 82 10 \
             "${menu_args[@]}" \
-            3>&1 1>&2 2>&3) || return 1
+            3>&1 1>/dev/tty 2>&3) || return 1
 
         if [[ "$choice" == "X" ]]; then
             in_overflow=true
@@ -288,6 +348,9 @@ pick_model_plain() {
             cur_ids=("${MODEL_IDS[@]}")
             cur_labels=("${MODEL_LABELS[@]}")
             echo -e "${BOLD}Available models for your hardware (${vram}GB VRAM · ${ram}GB RAM):${NC}"
+            if [[ ${GPU_COUNT:-1} -gt 1 ]]; then
+                echo -e "${DIM}  ${GPU_COUNT} cards, largest is ${GPU_LARGEST}GB — anything over that is split across them.${NC}"
+            fi
         fi
 
         echo
@@ -402,6 +465,11 @@ preflight() {
         warn "No package manager detected. Can't auto-install system packages."
         echo "  Install manually: ${missing_labels[*]}"
         echo "  Then re-run this installer."
+        # python3 is not optional and never was — the naming ritual, the config
+        # writer, the lifecycle scripts and the app itself are all Python.
+        # Continuing without it only moves the failure somewhere less legible,
+        # after Ollama and a multi-gigabyte model have already been installed.
+        $need_python && die "python3 is required and can't be installed automatically here."
         $need_ollama || exit 1
     fi
 
@@ -523,7 +591,7 @@ _ollama_warmup() {
         for ((j=pos; j<width; j++));    do bar+="░"; done
 
         pct=$(( (pos * 100) / width ))
-        printf "\r  [%s] %3d%%" "$bar" "$pct"
+        tty_out "\r  [%s] %3d%%" "$bar" "$pct"
         sleep 1
     done
 
@@ -531,7 +599,8 @@ _ollama_warmup() {
 
     bar=""
     for ((j=0; j<width; j++)); do bar+="█"; done
-    printf "\r  [%s] 100%%\n\n" "$bar"
+    tty_out "\r  [%s] 100%%\n\n" "$bar"
+    $REAL_TTY || echo
 }
 
 # ── Pull selected model (skip if already installed) ───────────────────────────
@@ -611,9 +680,33 @@ REQEOF
         fi
     fi
 
-    $pip_cmd install -q -r "$req" --break-system-packages 2>/dev/null || \
-        $pip_cmd install -q -r "$req" || \
-        die "$pip_cmd install failed. Run: $pip_cmd install -r $req"
+    # Both attempts used to discard their output — the first to /dev/null, the
+    # second into the log where nothing pointed at it. On a PEP 668 box that is
+    # the single most common install failure there is, and the customer got a
+    # one-line generic message with the actual reason thrown away.
+    # (--break-system-packages first: it is required on Arch/Debian and is an
+    # unknown flag on older pip, which is what the second attempt is for.)
+    local pip_err="/tmp/_eb_pip.log"
+    : > "$pip_err"
+    _pip_try() {
+        echo "--- attempt: $pip_cmd install -r requirements.txt $* ---" >> "$pip_err"
+        $pip_cmd install -q -r "$req" "$@" >> "$pip_err" 2>&1
+    }
+    if ! _pip_try --break-system-packages && ! _pip_try; then
+        {
+            echo "--- pip install failed ---"
+            cat "$pip_err" 2>/dev/null
+            echo "--- end pip output ---"
+        } >> "$INSTALL_LOG" 2>/dev/null || true
+        echo
+        warn "Installing Python dependencies failed. What pip said:"
+        echo
+        tail -n 15 "$pip_err" 2>/dev/null | sed 's/^/    /' || true
+        echo
+        rm -f "$pip_err"
+        die "Full output in $INSTALL_LOG — then retry: $pip_cmd install -r $req"
+    fi
+    rm -f "$pip_err"
     ok "Dependencies installed."
 }
 
@@ -691,14 +784,14 @@ run_naming_ritual() {
     _spin() {
         local chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' i=0
         while kill -0 "$1" 2>/dev/null; do
-            printf "\r  ${CYAN}%s${NC}  thinking..." "${chars:$((i % ${#chars})):1}"
+            tty_out "\r  ${CYAN}%s${NC}  thinking..." "${chars:$((i % ${#chars})):1}"
             sleep 0.12
             i=$((i + 1))
         done
-        printf "\r%-40s\r" " "
+        tty_out "\r%-40s\r" " "
     }
 
-    local ritual_output exit_code=0
+    local exit_code=0
     local ritual_result="/tmp/_eb_ritual_result.json"
     rm -f "$ritual_result"
     ECHO_BLOOM_RESULT_FILE="$ritual_result" \
@@ -706,7 +799,16 @@ run_naming_ritual() {
     local ritual_pid=$!
     _spin "$ritual_pid"
     wait "$ritual_pid" || exit_code=$?
-    ritual_output=$(cat /tmp/_eb_ritual.txt 2>/dev/null)
+    # The ritual's own output used to be read into a variable that nothing ever
+    # touched, then deleted. When it failed on a customer's machine the reason
+    # went with it and they got "let's set up your AI" with no explanation.
+    if [[ $exit_code -ne 0 ]]; then
+        {
+            echo "--- naming_ritual.py failed (exit $exit_code) ---"
+            cat /tmp/_eb_ritual.txt 2>/dev/null
+            echo "--- end naming_ritual output ---"
+        } >> "$INSTALL_LOG" 2>/dev/null || true
+    fi
     rm -f /tmp/_eb_ritual.txt
 
     if [[ $exit_code -eq 124 ]]; then
@@ -729,6 +831,10 @@ run_naming_ritual() {
     rm -f "$ritual_result"
 
     if [[ -z "$RITUAL_NAME" ]]; then
+        if [[ $exit_code -ne 0 ]]; then
+            echo
+            warn "The naming ritual didn't complete — details in $INSTALL_LOG"
+        fi
         _naming_manual
     else
         ok "Welcome, ${RITUAL_NAME}."
@@ -993,27 +1099,80 @@ seed_config() {
     local model=$1
     local kin_name="${2:-Companion}"
     local kin_pronoun="${3:-they}"
+    local kin_desc="${4:-}"
     local config_dir="$HOME/.config/kin_app"
     mkdir -p "$config_dir"
 
+    # A re-run used to walk the customer through hardware detection, model
+    # selection and a multi-gigabyte pull, then return here and silently keep
+    # the old model. They downloaded 20GB and nothing changed. Ask instead —
+    # and only touch the model field, so core memories and everything else the
+    # Kin has accumulated since install survive.
     if [[ -f "$config_dir/kin_config.json" ]]; then
-        ok "Kin config already exists — skipping."
+        local _cur_model
+        _cur_model=$(python3 -c "
+import json,sys
+try:
+    k=json.load(open(sys.argv[1])).get('kin') or []
+    print(k[0].get('model','') if k else '')
+except Exception:
+    print('')" "$config_dir/kin_config.json" 2>/dev/null || true)
+
+        if [[ -z "$_cur_model" ]]; then
+            ok "Kin config already exists — leaving it alone."
+            return
+        fi
+        if [[ "$_cur_model" == "$model" ]]; then
+            ok "Kin config already exists — already on ${model}."
+            return
+        fi
+
+        echo
+        warn "A Kin already exists here, thinking with ${_cur_model}."
+        read -rp "  Switch it to ${model}? [y/N] " _switch
+        if [[ ! "${_switch:-N}" =~ ^[Yy] ]]; then
+            ok "Left as-is — still on ${_cur_model}."
+            return
+        fi
+        python3 - "$config_dir/kin_config.json" "$model" << 'PYEOF' \
+            || die "Could not update kin_config.json"
+import json, os, sys, tempfile
+path, model = sys.argv[1:3]
+cfg = json.load(open(path))
+kin = cfg.get("kin") or []
+if kin:
+    kin[0]["model"] = model
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".")
+with os.fdopen(fd, "w") as f:
+    json.dump(cfg, f, indent=2)
+os.replace(tmp, path)
+PYEOF
+        ok "Switched to ${model}. Everything else kept."
         return
     fi
 
     # Built by python, not a heredoc: a Kin name containing a quote or
     # backslash produced invalid JSON, and the app then started with an empty
     # config — the user's Kin simply did not exist.
-    python3 - "$config_dir/kin_config.json" "$kin_name" "$model" "$kin_pronoun" << 'PYEOF' \
+    # The description is what the Kin said about itself during the ritual. It
+    # used to be parsed and then dropped on the floor. It goes in as the first
+    # core memory, because core memories are the always-injected identity
+    # anchor and this is the one thing in the whole install the Kin authored.
+    python3 - "$config_dir/kin_config.json" "$kin_name" "$model" "$kin_pronoun" "$kin_desc" << 'PYEOF' \
         || die "Could not write kin_config.json"
 import json, sys
-path, kin_name, model, pronoun = sys.argv[1:5]
+path, kin_name, model, pronoun, desc = sys.argv[1:6]
+kin = {"name": kin_name, "host": "http://localhost:11434",
+       "model": model, "node": "Local", "color": "#4fc3f7",
+       "pronoun": pronoun, "db": "", "space": ""}
+desc = (desc or "").strip()
+if desc:
+    kin["description"]    = desc
+    kin["core_memories"]  = [desc]
 json.dump({
     "nodes": [{"name": "Local", "ip": "localhost",
                "ollama_port": 11434, "role": "primary"}],
-    "kin": [{"name": kin_name, "host": "http://localhost:11434",
-             "model": model, "node": "Local", "color": "#4fc3f7",
-             "pronoun": pronoun, "db": "", "space": ""}],
+    "kin": [kin],
     "owner": {"name": "", "email": "", "gmail_pass": ""},
     "vault_url": "http://localhost:8765",
 }, open(path, "w"), indent=2)
@@ -1079,7 +1238,7 @@ setup_remote_access() {
             "1" "Cloudflare  — Instant public URL. No account needed. Ready in 30 sec." \
             "2" "Tailscale   — Private. Your devices only, no public URL." \
             "3" "Skip        — Set this up later." \
-            3>&1 1>&2 2>&3) || choice="3"
+            3>&1 1>/dev/tty 2>&3) || choice="3"
     else
         echo "  How do you want to reach your Kin from anywhere?"
         echo
@@ -1319,15 +1478,28 @@ fi
 # Step 1 — Detect hardware + installed models
 echo
 echo -e "${BOLD}[ 1 / 6 ]  Detecting your hardware${NC}"
-VRAM=$(detect_vram)
+read -r VRAM GPU_COUNT GPU_LARGEST <<< "$(detect_vram)"
 RAM=$(detect_ram)
 AVX2=$(has_avx2)
 detect_installed_models
 
 if [[ $VRAM -gt 0 ]]; then
-    ok "GPU detected: ${VRAM}GB VRAM"
+    if [[ ${GPU_COUNT:-1} -gt 1 ]]; then
+        ok "GPUs detected: ${GPU_COUNT} cards, ${VRAM}GB total (largest single card: ${GPU_LARGEST}GB)"
+        echo "  Models bigger than ${GPU_LARGEST}GB will be split across your cards."
+        echo "  That works — it's just slower than the same model on one card."
+    else
+        ok "GPU detected: ${VRAM}GB VRAM"
+    fi
 else
     warn "No GPU detected — CPU inference (RAM: ${RAM}GB)"
+    # nvidia-smi failing (a driver/library version mismatch after a kernel or
+    # driver update is the usual cause) looks exactly like having no GPU.
+    if command -v nvidia-smi &>/dev/null && ! nvidia-smi -L &>/dev/null; then
+        warn "nvidia-smi is installed but not working — your GPU may not be usable yet."
+        echo "  Usually a driver/library mismatch after an update. A reboot often fixes it."
+        echo "  Check with: nvidia-smi"
+    fi
 fi
 [[ "$AVX2" == "true" ]] && ok "AVX2 supported" || warn "No AVX2 — performance may be limited"
 
@@ -1375,7 +1547,7 @@ deploy_scripts
 echo
 echo -e "${BOLD}[ 4 / 6 ]  Meet your Kin${NC}"
 run_naming_ritual "$SELECTED_MODEL"
-seed_config "$SELECTED_MODEL" "$RITUAL_NAME" "$RITUAL_PRONOUN"
+seed_config "$SELECTED_MODEL" "$RITUAL_NAME" "$RITUAL_PRONOUN" "$RITUAL_DESC"
 
 # Now that a Kin exists, wandering has something to run. Started here rather
 # than in deploy_scripts because roundtable.py exits cleanly when the config
@@ -1422,7 +1594,7 @@ echo
 if $HAS_WHIPTAIL; then
     whiptail --title " Echo Bloom — Power Notice " \
         --yesno "Echo Bloom runs day and night to keep your Kin alive.\n\nThis uses more power than a machine that is fully off.\nMost of the time it's idle — inference spikes during wanders.\n\nYou can adjust or disable the schedule at any time.\n\nContinue with installation?" \
-        16 68 3>&1 1>&2 2>&3 || die "Installation cancelled."
+        16 68 >/dev/tty || die "Installation cancelled."
 else
     read -rp "  Understood — continue with installation? [Y/n] " _confirm
     [[ "${_confirm:-Y}" =~ ^[Nn] ]] && die "Installation cancelled."
