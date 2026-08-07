@@ -1,3 +1,9 @@
+# KEEP THIS FILE PURE ASCII. It is downloaded to disk and run by
+# powershell -File, and PowerShell 5.1 reads a BOM-less file as ANSI: an
+# em dash becomes three cp1252 bytes, one of which is a curly quote that
+# 5.1 honors as a string terminator. Nine parse errors, no window, and a
+# user staring at their wallpaper. The wizard survives the same characters
+# only because it is piped through iex as a correctly-decoded string.
 $url  = 'http://localhost:8090'
 $task = 'EchoBloom'
 
@@ -11,13 +17,13 @@ function Test-AppUp {
     } catch { return $false }
 }
 
-# Already running — open browser and exit quietly
+# Already running - open browser and exit quietly
 if (Test-AppUp) { Start-Process $url; exit }
 
 # Try to start the scheduled task
 Start-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
 
-# ── UI ────────────────────────────────────────────────────────────────────────
+# -- UI ------------------------------------------------------------------------
 $form                  = New-Object System.Windows.Forms.Form
 $form.Text             = 'Echo Bloom'
 $form.Size             = New-Object System.Drawing.Size(380, 145)
@@ -64,13 +70,13 @@ $hint.TextAlign     = 'MiddleCenter'
 $hint.Location      = New-Object System.Drawing.Point(10, 100)
 $form.Controls.Add($hint)
 
-# ── Poll timer ────────────────────────────────────────────────────────────────
+# -- Poll timer ----------------------------------------------------------------
 $script:count = 0
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 1000
 
 # Launch the browser BEFORE closing the form. The old order closed the form
-# first, and any failure in Start-Process left the user staring at nothing —
+# first, and any failure in Start-Process left the user staring at nothing -
 # panel gone, no browser, no error. Now a failure keeps the panel open and
 # names the problem.
 function Open-Browser {
@@ -83,7 +89,7 @@ function Open-Browser {
             return $true
         } catch {
             $sub.Text  = "Could not open a browser: $($_.Exception.Message)"
-            $hint.Text = "Open $url yourself — the server is running."
+            $hint.Text = "Open $url yourself - the server is running."
             $hint.ForeColor = [System.Drawing.Color]::FromArgb(220, 180, 100)
             return $false
         }
@@ -102,7 +108,7 @@ $timer.Add_Tick({
 
     if ($script:count -ge 45) {
         $timer.Stop()
-        $sub.Text = 'Taking longer than expected — opening anyway...'
+        $sub.Text = 'Taking longer than expected - opening anyway...'
         Start-Sleep -Milliseconds 1200
         if (Open-Browser) { $form.Close() }
     }

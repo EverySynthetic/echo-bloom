@@ -292,15 +292,12 @@ echo.
 echo   Starting the installer. A window will open in a moment.
 echo   Nothing is installed system-wide and no admin rights are needed.
 echo.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; iwr -useb https://everysynthetic.org/install_wizard.ps1 | iex"
-if errorlevel 1 (
-  echo.
-  echo   The installer could not start.
-  echo   Check your internet connection, then run this file again.
-  echo.
-  pause
-)
+start "" powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; iwr -useb https://everysynthetic.org/install_wizard.ps1 | iex"
 """
+# `start` hands off to the wizard and lets this console close instead of
+# squatting behind the browser for the whole install. The wizard is a GUI
+# with its own error reporting, so the old errorlevel/pause branch only
+# ever fired for "powershell itself is missing," which no Windows is.
 
 
 @app.get("/EchoBloom-Install.bat", include_in_schema=False)
