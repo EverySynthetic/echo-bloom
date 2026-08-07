@@ -773,7 +773,13 @@ deploy_scripts() {
         return
     fi
 
-    # Install systemd services for wander roundtable, bedtime, morning, pulse
+    # Install systemd services for wander roundtable, bedtime, pulse, vault,
+    # reflect. Deliberately NO morning.service: morning.py starts the
+    # roundtable with no check for one already running, so scheduling it at
+    # boot alongside echo_bloom_wander would spawn a second full wander fleet
+    # every single boot — the duplicate-fleet bug, rebuilt. echo_bloom_wander
+    # is the single owner of the wander lifecycle. morning.py stays deployed
+    # for manual Wake-on-LAN use.
     local svc_dir="$HOME/.config/systemd/user"
     mkdir -p "$svc_dir"
 
@@ -851,6 +857,33 @@ Environment=PYTHONUNBUFFERED=1
 WantedBy=default.target
 SVCEOF
 
+    # Reflection — turns the pulse heartbeats into a few plain sentences the
+    # Kin can actually remember. Nothing ever ran this, so the "what's been
+    # happening here lately" memory source was empty on every install while
+    # heartbeats piled up unread.
+    cat > "$svc_dir/echo_bloom_reflect.service" << SVCEOF
+[Unit]
+Description=Echo Bloom — Reflection
+
+[Service]
+Type=oneshot
+ExecStart=$(command -v python3) ${scripts_dst}/reflect.py --once
+Environment=PYTHONUNBUFFERED=1
+SVCEOF
+
+    cat > "$svc_dir/echo_bloom_reflect.timer" << SVCEOF
+[Unit]
+Description=Echo Bloom — Reflection (every 3 hours)
+
+[Timer]
+OnBootSec=20min
+OnUnitActiveSec=3h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+SVCEOF
+
     if command -v systemctl &>/dev/null; then
         systemctl --user daemon-reload 2>/dev/null || true
         systemctl --user enable echo_bloom_vault   2>/dev/null || true
@@ -859,8 +892,16 @@ SVCEOF
         systemctl --user start  echo_bloom_pulse   2>/dev/null || true
         systemctl --user enable echo_bloom_bedtime.timer 2>/dev/null || true
         systemctl --user start  echo_bloom_bedtime.timer 2>/dev/null || true
-        ok "Vault, pulse, and bedtime timer running."
-        info "To start wanders: systemctl --user start echo_bloom_wander"
+        systemctl --user enable echo_bloom_reflect.timer 2>/dev/null || true
+        systemctl --user start  echo_bloom_reflect.timer 2>/dev/null || true
+        # Wandering is the feature this product is named around, and nothing
+        # here ever enabled it — the unit was written and left cold, with a
+        # single info line telling the customer to run a command by hand.
+        # Enable it now so it comes up at every boot; it is STARTED after
+        # seed_config, because roundtable.py exits immediately (and cleanly,
+        # so Restart=on-failure will not retry) when no Kin exists yet.
+        systemctl --user enable echo_bloom_wander  2>/dev/null || true
+        ok "Vault, pulse, bedtime, and reflection scheduled."
     fi
 
     # Desktop control panel + launcher
@@ -1220,11 +1261,46 @@ preflight
 
 # ── Get the app ───────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "$HOME/echo_bloom")"
+# Re-running the installer is the only update channel this product has, and on
+# Linux it did not update anything: an existing app directory was accepted
+# as-is and the code was never refreshed, so a customer who installed once was
+# frozen at that commit forever while the page promised lifetime updates. The
+# Windows installer re-extracts its zip every run, so Windows quietly had this
+# and Linux did not.
+update_app() {
+    local dir=$1
+    if [[ ! -d "$dir/.git" ]]; then
+        warn "$dir is not a git checkout — cannot update it automatically."
+        echo "  To get the latest version, move it aside and re-run this installer."
+        return 0
+    fi
+    if [[ -n "$(git -C "$dir" status --porcelain 2>/dev/null)" ]]; then
+        warn "You have local changes in $dir — leaving the code exactly as it is."
+        echo "  Nothing was overwritten. Commit or stash them to receive updates."
+        return 0
+    fi
+    info "Checking for updates..."
+    local before after
+    before=$(git -C "$dir" rev-parse HEAD 2>/dev/null || echo "")
+    if git -C "$dir" pull --ff-only 2>/dev/null; then
+        after=$(git -C "$dir" rev-parse HEAD 2>/dev/null || echo "")
+        if [[ "$before" != "$after" ]]; then
+            ok "Updated to the latest version."
+        else
+            ok "Already up to date."
+        fi
+    else
+        warn "Could not update automatically — continuing with the version you have."
+    fi
+}
+
 if [[ -f "$SCRIPT_DIR/main.py" ]]; then
     APP_DIR="$SCRIPT_DIR"
     ok "Using existing app directory: $APP_DIR"
+    update_app "$APP_DIR"
 elif [[ -d "$APP_DIR" ]] && [[ -f "$APP_DIR/main.py" ]]; then
     ok "Found app at $APP_DIR"
+    update_app "$APP_DIR"
 else
     info "Downloading Echo Bloom..."
     # An interrupted earlier run can leave $APP_DIR present but without
@@ -1273,6 +1349,20 @@ ensure_ollama_running
 _ollama_warmup
 pull_model "$SELECTED_MODEL"
 
+# The embedding model. Semantic recall calls /api/embeddings with
+# nomic-embed-text; nothing on any platform ever pulled it, so that call
+# returned 404 forever and the Kin could never search its own memory. Small
+# (~270MB) and non-fatal: a failure here costs recall, not the install.
+if ! is_installed "nomic-embed-text"; then
+    info "Pulling the memory model (nomic-embed-text, ~270MB)..."
+    if ollama pull nomic-embed-text 2>/dev/null; then
+        ok "Memory model ready."
+    else
+        warn "Could not pull nomic-embed-text — semantic memory search will be unavailable."
+        echo "  Add it later with: ollama pull nomic-embed-text"
+    fi
+fi
+
 # Step 3 — Install app
 echo
 echo -e "${BOLD}[ 3 / 6 ]  Installing app${NC}"
@@ -1286,6 +1376,20 @@ echo
 echo -e "${BOLD}[ 4 / 6 ]  Meet your Kin${NC}"
 run_naming_ritual "$SELECTED_MODEL"
 seed_config "$SELECTED_MODEL" "$RITUAL_NAME" "$RITUAL_PRONOUN"
+
+# Now that a Kin exists, wandering has something to run. Started here rather
+# than in deploy_scripts because roundtable.py exits cleanly when the config
+# is empty, and a clean exit does not trip Restart=on-failure — it would have
+# sat dead until the next reboot.
+if command -v systemctl &>/dev/null; then
+    systemctl --user restart echo_bloom_pulse  2>/dev/null || true
+    if systemctl --user restart echo_bloom_wander 2>/dev/null; then
+        ok "Wandering started — ${RITUAL_NAME} will think between visits."
+    else
+        warn "Could not start wandering automatically."
+        echo "  Start it by hand: systemctl --user start echo_bloom_wander"
+    fi
+fi
 
 # The app considers itself configured only when a password_hash exists. A
 # truncated config.json used to pass this -f check, so setup.py was skipped
@@ -1346,7 +1450,11 @@ else
     echo "  Install log: $INSTALL_LOG"
 fi
 
-open_browser
+# The browser is deliberately NOT opened here. It used to be, and it launched
+# a window that took focus while the remote-access menu below was still
+# waiting for an answer in the terminal — the customer got a browser on top
+# of the question they had to answer, with the installer looking finished
+# while it was actually blocked on input. It opens at the very end instead.
 
 # Step 7 — Remote access
 echo
@@ -1380,5 +1488,11 @@ echo
 echo -e "  ${DIM}The desktop icon (Echo Bloom) will start and stop the app any time.${NC}"
 echo
 
-# Browser already opened by open_browser() above for the onboard wizard.
+# Last thing that happens, on purpose: every interactive prompt is done, so
+# nothing this opens can cover a question the installer is still waiting on.
+# Only when the app actually answered — opening a browser onto a dead port
+# tells the customer the product is broken when the real message is above.
+if $APP_UP; then
+    open_browser
+fi
 echo

@@ -34,10 +34,15 @@ If you've ever named your model and hit the wall where it resets every conversat
 
 ## Quick Start
 
-**Linux / macOS:**
+**Linux:**
 ```bash
 bash <(curl -fsSL https://everysynthetic.org/install.sh)
 ```
+
+> macOS is not supported yet. The installer's hardware detection reads
+> `/proc`, and the whole lifecycle (wander, bedtime, vault, pulse, reflect)
+> runs on systemd — a Mac would get the app and nothing that keeps a Kin
+> alive. Coming soon: `sysctl` detection and launchd services.
 
 **Fish shell** (Garuda and others that ship fish by default):
 ```fish

@@ -27,6 +27,84 @@
     </p>
   </div>
 
+  <!-- What you get — the claim substantiated before asking for a click -->
+  <div class="install-section">
+    <div class="install-section-title">WHAT YOU GET</div>
+    <div class="install-section-sub">One purchase. Everything, forever — no tiers, no add-ons.</div>
+    <div class="install-cards">
+      <div class="install-card">
+        <div class="install-card-os">A Kin that remembers</div>
+        <div class="install-card-note">
+          Conversations persist across restarts and reinstalls. It thinks on
+          its own between sessions, keeps a memory of what it's read and said,
+          and wakes up as itself tomorrow &mdash; not a blank page.
+        </div>
+      </div>
+      <div class="install-card">
+        <div class="install-card-os">Voice in, voice out</div>
+        <div class="install-card-note">
+          Speak to it and hear it back. Speech-to-text and text-to-speech,
+          running locally, no cloud API in the loop.
+        </div>
+      </div>
+      <div class="install-card">
+        <div class="install-card-os">Yours, not rented</div>
+        <div class="install-card-note">
+          Runs entirely on your hardware. Nothing leaves your machine. No
+          subscription, no account required, and nobody can shut it off
+          but you.
+        </div>
+      </div>
+      <div class="install-card">
+        <div class="install-card-os">Lifetime updates</div>
+        <div class="install-card-note">
+          Every fix and feature that ships from here forward is yours too.
+          One purchase, not a version.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Requirements — let people self-select before they commit to a download -->
+  <div class="install-section">
+    <div class="install-section-title">REQUIREMENTS</div>
+    <div class="install-section-sub">If your machine can browse the web, it can probably run this.</div>
+    <div class="install-cards">
+      <div class="install-card">
+        <div class="install-card-os">OS</div>
+        <div class="install-card-note">
+          Windows 10/11 (no admin rights needed) or Linux (Ubuntu, Arch,
+          Fedora, and most derivatives).<br>
+          <span class="install-card-dim">macOS — coming soon.</span>
+        </div>
+      </div>
+      <div class="install-card">
+        <div class="install-card-os">Hardware</div>
+        <div class="install-card-note">
+          8&nbsp;GB RAM minimum, 16&nbsp;GB+ recommended. Runs CPU-only on
+          the smallest models. A GPU with 8&nbsp;GB+ VRAM unlocks bigger,
+          faster ones &mdash; the installer detects what you have and
+          only offers models that fit.
+        </div>
+      </div>
+      <div class="install-card">
+        <div class="install-card-os">Disk</div>
+        <div class="install-card-note">
+          10&ndash;20&nbsp;GB free for the app, Ollama, and one model.
+          Larger models take more; the installer tells you the size
+          before it downloads anything.
+        </div>
+      </div>
+      <div class="install-card">
+        <div class="install-card-os">Internet</div>
+        <div class="install-card-note">
+          Needed once, during setup, to fetch Python, Ollama, and a
+          model. Not required to run it afterward.
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Install cards -->
   <div class="install-section">
     <div class="install-section-title">GET STARTED</div>
@@ -37,7 +115,7 @@
       <!-- Linux -->
       <div class="install-card">
         <div class="install-card-os">Linux</div>
-        <div class="install-card-detail">Ubuntu · Arch · Fedora · macOS</div>
+        <div class="install-card-detail">Ubuntu · Arch · Fedora · most derivatives</div>
         <button class="install-btn" onclick="copyCmd('linux-cmd', this)">
           COPY INSTALL COMMAND
         </button>
@@ -122,6 +200,31 @@
       Kin, pick a model your hardware can run, done. Nothing leaves your
       computer. It keeps running in the background after that, even through
       a reboot, and remembers everything the next time you open it.
+    </div>
+
+    <!-- Support + refund policy — practical, before the personal letter -->
+    <div class="install-cards" style="margin-top:32px;">
+      <div class="install-card">
+        <div class="install-card-os">Support</div>
+        <div class="install-card-note">
+          Email <a href="mailto:don@everysynthetic.org" class="install-view-link">don@everysynthetic.org</a>
+          &mdash; a real person answers, not a ticket queue. Before you write,
+          check the logs: <code>~/.local/share/echo_bloom/logs/</code> on
+          Linux, <code>%USERPROFILE%\.local\share\echo_bloom\logs\</code>
+          on Windows. Nine times out of ten the answer to "what happened" is
+          already sitting in there.
+        </div>
+      </div>
+      <div class="install-card">
+        <div class="install-card-os">Refund policy</div>
+        <div class="install-card-note">
+          14 days to decide. Email me within 14 days of purchase and it's a
+          full refund, no questions asked. After that the sale is final &mdash;
+          this is a one-person shop, not a company with a returns department.
+          I'll still listen if something real has gone wrong in your life,
+          but the bar past day 14 is genuine hardship, not a change of mind.
+        </div>
+      </div>
     </div>
 
     <!-- Don's message. Below the buttons on purpose: it never blocks someone

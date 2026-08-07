@@ -114,10 +114,38 @@ def wait_for_ollama(ip, name, port=11434, timeout=90):
 
 # ── Roundtable ─────────────────────────────────────────────────────────────────
 
+def _roundtable_already_running():
+    """True if a roundtable is already up.
+
+    Without this check, running morning.py while echo_bloom_wander.service is
+    active starts a SECOND roundtable, and each one spawns its own full set of
+    per-Kin wander loops. That exact duplicate-fleet condition ran unnoticed
+    for weeks once already, because the heartbeat reported the doubled process
+    count as a healthy number.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return False
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        try:
+            args = proc.info.get("cmdline") or []
+        except Exception:
+            continue
+        if proc.info["pid"] == os.getpid():
+            continue
+        if any(os.path.basename(a) == "roundtable.py" for a in args):
+            return True
+    return False
+
+
 def start_roundtable():
     if not ROUNDTABLE.exists():
         log(f"ERROR: roundtable.py not found at {ROUNDTABLE}")
         return False
+    if _roundtable_already_running():
+        log("Roundtable already running — leaving it alone.")
+        return True
     log("Starting wander roundtable...")
     with open(RT_LOG, "a", encoding="utf-8") as lf:
         proc = subprocess.Popen(
