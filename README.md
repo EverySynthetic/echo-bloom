@@ -71,7 +71,7 @@ Open `http://localhost:8090` — first run will prompt you to set a password in 
 
 Echo Bloom starts with a **14-day free trial** — no account, no credit card, no sign-up. It registers your machine automatically on first run.
 
-After the trial, a one-time purchase of **$75** unlocks it permanently. No subscription. No cloud dependency. Runs on your hardware forever.
+After the trial, a one-time purchase of **$50** (beta founding price — it goes up later) unlocks it permanently. No subscription. No cloud dependency. Runs on your hardware forever.
 
 **To activate after purchase:**
 1. Open Echo Bloom in your browser
