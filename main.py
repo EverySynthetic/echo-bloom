@@ -451,6 +451,12 @@ async def check_setup():
             time.sleep(10)  # let uvicorn finish binding; nothing depends on this
             res = _start_roundtable()
             print(f"[startup] roundtable autostart: {res}")
+            # A pid alone is not proof of life — the roundtable once died in
+            # under a second and the pid we'd just printed was already a ghost.
+            time.sleep(5)
+            if res.get("started") and not _find_pids("roundtable.py"):
+                print("[startup] WARNING: roundtable exited within seconds of "
+                      "starting — read logs/roundtable.log for the traceback.")
         threading.Thread(target=_autostart, daemon=True).start()
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
@@ -991,6 +997,20 @@ _SCRIPTS_DIR = Path.home() / ".local/share/echo_bloom/scripts"
 _LOGS_DIR    = Path.home() / ".local/share/echo_bloom/logs"
 
 
+def _utf8_env() -> dict:
+    """Environment for spawning lifecycle scripts.
+
+    On Windows, Python encodes redirected stdout as the ANSI code page
+    (cp1252) unless told otherwise — and every lifecycle script prints
+    box-drawing banners and Kin thoughts. The roundtable died on its very
+    first banner character on every Windows box, after living less than a
+    second: the pid the API returned was real, the process was already gone.
+    """
+    env = dict(os.environ)
+    env["PYTHONUTF8"] = "1"
+    return env
+
+
 def _find_pids(pattern: str) -> list[int]:
     """PIDs whose command line contains pattern.
 
@@ -1087,7 +1107,7 @@ def _start_roundtable() -> dict:
     with open(log, "a") as lf:
         proc = subprocess.Popen(
             [sys.executable, "-u", str(script), "--interval", "30"],
-            stdout=lf, stderr=lf,
+            stdout=lf, stderr=lf, env=_utf8_env(),
         )
     return {"started": True, "pid": proc.pid}
 
@@ -1179,7 +1199,8 @@ async def api_bedtime(_=Depends(require_auth)):
     if not script.exists():
         return {"started": False,
                 "error": "Scripts not deployed — re-run the installer to set up lifecycle scripts."}
-    subprocess.Popen([sys.executable, str(script), "--no-shutdown"])
+    subprocess.Popen([sys.executable, str(script), "--no-shutdown"],
+                     env=_utf8_env())
     return {"started": True}
 
 
@@ -1452,7 +1473,7 @@ async def api_vault_start(_=Depends(require_auth)):
         with open(logfile, "a") as lf:
             proc = subprocess.Popen(
                 [sys.executable, "-u", str(script), "--port", "8765"],
-                stdout=lf, stderr=lf,
+                stdout=lf, stderr=lf, env=_utf8_env(),
                 start_new_session=(os.name != "nt"),
             )
     except Exception:

@@ -313,6 +313,7 @@ try {
 $bat = @"
 @echo off
 chcp 65001 >nul
+set PYTHONUTF8=1
 title Echo Bloom
 cd /d "$APP_DIR"
 echo Starting Echo Bloom on http://localhost:8090 ...
@@ -332,8 +333,22 @@ Write-Step "Browser opener: $OPENER" 'Green'
 # ── Scheduled task (auto-start at login, survives window close) ───────────────
 
 try {
-    $action    = New-ScheduledTaskAction -Execute $PYTHON `
-                   -Argument "-m uvicorn main:app --host 0.0.0.0 --port 8090" `
+    # Running python.exe directly from an interactive-logon task opens a
+    # console window that sits on the desktop for as long as the server
+    # lives — and closing that window kills the server. wscript runs it
+    # hidden; output goes to logs\server.log instead of a console nobody
+    # should have to see. PYTHONUTF8 because redirected stdout on Windows
+    # is cp1252 and the scripts print box-drawing characters and thoughts.
+    $logDir = "$env:USERPROFILE\.local\share\echo_bloom\logs"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $VBS = "$INSTALL_DIR\launch_server.vbs"
+    $vbsBody = "Set sh = CreateObject(""WScript.Shell"")`r`n" +
+               "sh.CurrentDirectory = ""$APP_DIR""`r`n" +
+               "rc = sh.Run(""cmd /c set PYTHONUTF8=1&& """"$PYTHON"""" -m uvicorn main:app --host 0.0.0.0 --port 8090 >> """"$logDir\server.log"""" 2>&1"", 0, True)`r`n" +
+               "WScript.Quit rc`r`n"
+    [System.IO.File]::WriteAllText($VBS, $vbsBody, (New-Object System.Text.UTF8Encoding($false)))
+    $action    = New-ScheduledTaskAction -Execute 'wscript.exe' `
+                   -Argument "//B `"$VBS`"" `
                    -WorkingDirectory $APP_DIR
     $trigger   = New-ScheduledTaskTrigger -AtLogon
     $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
@@ -387,7 +402,10 @@ $launch = [System.Windows.Forms.MessageBox]::Show(
 )
 
 if ($launch -eq 'Yes') {
-    Start-Process -FilePath $LAUNCHER -WindowStyle Minimized
+    # Launch through the opener (progress panel + browser), not the visible
+    # console .bat — that stays as the manual fallback it says it is.
+    Start-Process powershell -ArgumentList `
+        "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$OPENER`""
     Write-Host "  Waiting for Echo Bloom to start..." -ForegroundColor DarkGray
     $ready = $false
     for ($i = 0; $i -lt 30; $i++) {

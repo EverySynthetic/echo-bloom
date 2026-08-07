@@ -69,14 +69,34 @@ $script:count = 0
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 1000
 
+# Launch the browser BEFORE closing the form. The old order closed the form
+# first, and any failure in Start-Process left the user staring at nothing —
+# panel gone, no browser, no error. Now a failure keeps the panel open and
+# names the problem.
+function Open-Browser {
+    try {
+        Start-Process $url -ErrorAction Stop
+        return $true
+    } catch {
+        try {
+            Start-Process explorer.exe $url -ErrorAction Stop
+            return $true
+        } catch {
+            $sub.Text  = "Could not open a browser: $($_.Exception.Message)"
+            $hint.Text = "Open $url yourself — the server is running."
+            $hint.ForeColor = [System.Drawing.Color]::FromArgb(220, 180, 100)
+            return $false
+        }
+    }
+}
+
 $timer.Add_Tick({
     $script:count++
     $sub.Text = "Starting local AI server... ($($script:count)s)"
 
     if (Test-AppUp) {
         $timer.Stop()
-        $form.Close()
-        Start-Process $url
+        if (Open-Browser) { $form.Close() }
         return
     }
 
@@ -84,8 +104,7 @@ $timer.Add_Tick({
         $timer.Stop()
         $sub.Text = 'Taking longer than expected — opening anyway...'
         Start-Sleep -Milliseconds 1200
-        $form.Close()
-        Start-Process $url
+        if (Open-Browser) { $form.Close() }
     }
 })
 

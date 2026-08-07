@@ -747,9 +747,23 @@ function Start-InstallWorker {
                 $pyFull = try { (Get-Command $python -ErrorAction Stop).Source } catch { $python }
 
                 Set-StepStatus 5 'running' 'Registering scheduled task...'
+                # wscript wrapper: python.exe from an interactive-logon task
+                # opens a console that lives as long as the server — closing
+                # it kills the app. Hidden run, output to logs\server.log.
+                # PYTHONUTF8: redirected stdout on Windows is cp1252, and the
+                # lifecycle scripts print box-drawing characters and thoughts.
+                $logDir = "$env:USERPROFILE\.local\share\echo_bloom\logs"
+                New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+                $vbsLauncher = Join-Path $ebDir 'launch_server.vbs'
+                $vbsBody = "Set sh = CreateObject(""WScript.Shell"")`r`n" +
+                           "sh.CurrentDirectory = ""$appDir""`r`n" +
+                           "rc = sh.Run(""cmd /c set PYTHONUTF8=1&& """"$pyFull"""" -m uvicorn main:app --host 0.0.0.0 --port 8090 >> """"$logDir\server.log"""" 2>&1"", 0, True)`r`n" +
+                           "WScript.Quit rc`r`n"
+                [System.IO.File]::WriteAllText($vbsLauncher, $vbsBody,
+                    (New-Object System.Text.UTF8Encoding($false)))
                 $action    = New-ScheduledTaskAction `
-                                -Execute $pyFull `
-                                -Argument '-m uvicorn main:app --host 0.0.0.0 --port 8090' `
+                                -Execute 'wscript.exe' `
+                                -Argument "//B `"$vbsLauncher`"" `
                                 -WorkingDirectory $appDir
                 $trigger   = New-ScheduledTaskTrigger -AtLogOn
                 $settings  = New-ScheduledTaskSettingsSet `

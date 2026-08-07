@@ -6,7 +6,19 @@ Reads ~/.config/kin_app/kin_config.json — written by the onboarding wizard.
 
 import json
 import os
+import sys
 from pathlib import Path
+
+# Every script that imports this prints box-drawing banners and Kin thoughts.
+# On Windows a redirected stdout defaults to cp1252, which cannot represent
+# them — the roundtable died on the first character of its startup banner.
+# errors="replace" so a stray character degrades one log line, never a Kin.
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 CONFIG_PATH = Path.home() / ".config/kin_app/kin_config.json"
 APP_DIR     = Path.home() / ".local/share/echo_bloom"
