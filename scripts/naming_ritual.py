@@ -24,6 +24,12 @@ from pathlib import Path
 
 import requests
 
+# Shared with main.py's /api/naming-ritual so the two entry points can't drift.
+# sys.path[0] is this script's own directory whether it's run from the repo or
+# from the deployed ~/.local/share/echo_bloom/scripts copy.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from naming_common import clean_name, clean_pronoun  # noqa: E402
+
 # ── Args ───────────────────────────────────────────────────────────────────────
 
 parser = argparse.ArgumentParser()
@@ -142,13 +148,11 @@ def run_ritual():
     if not name_raw:
         return None
 
-    # Clean the name — take first word/phrase, strip punctuation
-    name = name_raw.strip().strip('"').strip("'").split("\n")[0].strip()
-    # If they gave a long answer, take just the first 3 words
-    words = name.split()
-    if len(words) > 3:
-        name = " ".join(words[:3])
-    name = name.strip(".,!?")
+    # Clean the name — take first word/phrase, strip punctuation.
+    # Strip the lead-in before truncating: a small model that ignores "no
+    # explanation" answers "My name is Solace and I chose it because...", and
+    # truncating first made the Kin's name literally "My name is".
+    name = clean_name(name_raw)
 
     messages.append({"role": "assistant", "content": name_raw})
 
@@ -158,10 +162,10 @@ def run_ritual():
         "Just the pronoun."
     )
     messages.append({"role": "user", "content": pronoun_prompt})
+    # .split()[0] on an all-whitespace answer was an IndexError that killed the
+    # ritual outright after the name had already been chosen.
     pronoun_raw = ask(messages) or "they"
-    pronoun     = pronoun_raw.strip().lower().split()[0].strip(".,")
-    if pronoun not in ("he", "she", "they", "it"):
-        pronoun = "they"
+    pronoun     = clean_pronoun(pronoun_raw)
     messages.append({"role": "assistant", "content": pronoun_raw})
 
     # One-line description

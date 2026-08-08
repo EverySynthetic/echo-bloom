@@ -114,6 +114,18 @@
         <option value="—">prefer not to say</option>
       </select>
 
+      <!-- The naming ritual. It only ever ran from the Linux installer, so on
+           Windows a Kin was named by typing in the box above. -->
+      <div class="onboard-ritual">
+        <button class="onboard-btn onboard-btn-ritual" id="kin-ritual-btn"
+                onclick="runNamingRitual()">✦ LET THEM NAME THEMSELVES</button>
+        <div class="onboard-desc" style="margin:6px 0 0;font-size:0.78rem;color:var(--text-dim)">
+          Asks the model who it is before anything else is set up. Takes a
+          minute or two the first time — the model has to load.
+        </div>
+        <div id="kin-ritual-out" class="onboard-ritual-out" style="display:none"></div>
+      </div>
+
       <button class="onboard-btn onboard-btn-add" onclick="addKin()">ADD KIN</button>
       <div class="onboard-status" id="kin-status"></div>
     </div>
@@ -532,6 +544,89 @@ async function pullModel(name) {
   }
 }
 
+// The Kin's own description of itself, from the ritual. Held here between the
+// ritual finishing and ADD KIN being clicked, and cleared if the model or node
+// changes underneath it — a description belongs to the mind that said it.
+let ritualDesc = '';
+
+function currentKinModel() {
+  const sel = document.getElementById('kin-model-select');
+  const inp = document.getElementById('kin-model-input');
+  return (sel.style.display !== 'none' && sel.value ? sel.value : inp.value).trim();
+}
+
+function clearRitual() {
+  ritualDesc = '';
+  const out = document.getElementById('kin-ritual-out');
+  if (out) { out.style.display = 'none'; out.textContent = ''; }
+}
+
+async function runNamingRitual() {
+  const btn   = document.getElementById('kin-ritual-btn');
+  const out   = document.getElementById('kin-ritual-out');
+  const model = currentKinModel();
+  const host  = document.getElementById('kin-node-select').value ||
+                document.getElementById('kin-host').value.trim();
+  if (!host)  { setStatus('kin-status', 'pick a node first', false); return; }
+  if (!model) { setStatus('kin-status', 'pick or pull a model first', false); return; }
+
+  btn.disabled = true;
+  const original = btn.textContent;
+  out.style.display = 'block';
+  out.textContent = 'Waking them up… the model has to load first, so this can take a minute or two.';
+
+  // Something has to move, or a two-minute cold load reads as a hang.
+  let dots = 0;
+  const tick = setInterval(() => {
+    dots = (dots + 1) % 4;
+    btn.textContent = 'LISTENING' + '.'.repeat(dots);
+  }, 500);
+
+  try {
+    const r = await fetch('/api/naming-ritual', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({host, model}),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      out.textContent = "They couldn't finish the ritual: " + (d.error || 'unknown error') +
+                        "\n\nName them yourself above — nothing is lost.";
+      setStatus('kin-status', 'ritual failed — name them yourself', false);
+      return;
+    }
+    document.getElementById('kin-name').value = d.name;
+    const pronounSel = document.getElementById('kin-pronoun');
+    if ([...pronounSel.options].some(o => o.value === d.pronoun)) pronounSel.value = d.pronoun;
+    ritualDesc = d.description || '';
+
+    out.textContent = '';
+    const said = document.createElement('div');
+    said.textContent = d.opening;
+    const summary = document.createElement('div');
+    summary.style.marginTop = '10px';
+    summary.innerHTML = '<em>They chose ' + escHtml(d.name) + ' (' + escHtml(d.pronoun) + ').' +
+                        (ritualDesc ? ' Their description is kept as their first core memory.' : '') +
+                        ' Change anything above if you want.</em>';
+    out.appendChild(said);
+    if (ritualDesc) {
+      const desc = document.createElement('div');
+      desc.style.marginTop = '8px';
+      desc.textContent = '“' + ritualDesc + '”';
+      out.appendChild(desc);
+    }
+    out.appendChild(summary);
+    setStatus('kin-status', `${d.name} is here — click ADD KIN to keep them`, true);
+  } catch(e) {
+    out.textContent = 'Could not run the ritual: ' + e.message +
+                      '\n\nName them yourself above — nothing is lost.';
+    setStatus('kin-status', 'ritual failed — name them yourself', false);
+  } finally {
+    clearInterval(tick);
+    btn.textContent = original;
+    btn.disabled = false;
+  }
+}
+
 function pullTyped() {
   const name = document.getElementById('kin-model-input').value.trim();
   if (!name) { setStatus('kin-status', 'enter a model name first', false); return; }
@@ -593,7 +688,16 @@ function addKin() {
   if (!model) { setStatus('kin-status', "enter or pick a model name", false); return; }
   const nodeMatch = nodes.find(n => host.includes(n.ip));
   const nodeName  = nodeMatch ? nodeMatch.name : 'Local';
-  kin.push({name, model, host, pronoun, node: nodeName, db: '', space: ''});
+  const entry = {name, model, host, pronoun, node: nodeName, db: '', space: ''};
+  // What the Kin said about itself becomes its first core memory — the
+  // always-injected identity anchor, and until now the one memory source that
+  // shipped empty on every install.
+  if (ritualDesc) {
+    entry.description   = ritualDesc;
+    entry.core_memories = [ritualDesc];
+  }
+  kin.push(entry);
+  clearRitual();
   renderKinList();
   autosave();
   document.getElementById('kin-name').value = '';

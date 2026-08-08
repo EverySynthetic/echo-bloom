@@ -1348,6 +1348,16 @@ a:hover { color: var(--text); }
 
 .onboard-status { font-size: 12px; min-height: 18px; }
 
+/* Naming ritual — the Kin answers before the owner types anything */
+.onboard-ritual         { margin: 4px 0 2px; }
+.onboard-btn-ritual     { border-color: var(--amber); color: var(--amber); width: 100%; }
+.onboard-btn-ritual:hover:not(:disabled) { background: var(--amber); color: var(--bg); }
+.onboard-btn-ritual:disabled { opacity: 0.55; cursor: default; }
+.onboard-ritual-out     { margin-top: 10px; padding: 12px 14px; border-left: 2px solid var(--amber);
+                          background: var(--surface2); font-size: 0.86rem; line-height: 1.55;
+                          white-space: pre-wrap; }
+.onboard-ritual-out em  { color: var(--text-dim); font-style: normal; font-size: 0.8rem; }
+
 .onboard-list { display: flex; flex-direction: column; gap: 6px; }
 
 .onboard-list-item {
