@@ -105,6 +105,32 @@ mkdir -p "$(dirname "$PARITY_STATE")" 2>/dev/null
 rm -f "$NEW_STATE"
 [ "$LAB_NOTE" -eq 0 ] && ok "lab fingerprints recorded"
 
+# ── Services that run code from somewhere other than $APP_DIR ────────────────
+# The licence server ran from ~/Desktop/kin_app/license_server for five days
+# after the licence stack was fixed in this repo — fail-closed Stripe signature
+# verification, the replay window, compare_digest on the admin token, delivery
+# tracking and /admin/resend were all committed here and none of them were the
+# code taking money. Nothing checked, because this script only ever looked at
+# the app. Any unit whose ExecStart points outside $APP_DIR is drift.
+step "Services vs repo"
+SVC_DRIFT=0
+for unit in echo_bloom echo_bloom_license; do
+  UNIT_FILE="$HOME/.config/systemd/user/${unit}.service"
+  [ -f "$UNIT_FILE" ] || continue
+  WD=$(grep -m1 '^WorkingDirectory=' "$UNIT_FILE" 2>/dev/null | cut -d= -f2-)
+  case "$WD" in
+    "$APP_DIR"|"$APP_DIR"/*) ;;
+    "") ;;
+    *)
+      warn "$unit runs from $WD — NOT this repo"
+      echo "    the code taking money / serving the app is not what you just pushed"
+      SVC_DRIFT=1
+      DRIFT=1
+      ;;
+  esac
+done
+[ "$SVC_DRIFT" -eq 0 ] && ok "services run from $APP_DIR"
+
 if [ "$CHECK_ONLY" -eq 1 ]; then
   echo ""
   if [ "$BEHIND" = "0" ] && [ "$DRIFT" -eq 0 ]; then
