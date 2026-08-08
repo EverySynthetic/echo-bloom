@@ -55,6 +55,14 @@
       {{ days_left }} day{{ 's' if days_left != 1 else '' }} remaining on your free trial.
       <br>Everything is fully functional. No features are locked.
     </div>
+    <a href="{{ buy_url }}" class="license-buy-btn" target="_blank" rel="noopener">
+      BUY ECHO BLOOM — ${{ price }}
+    </a>
+    <div class="license-buy-note">
+      Buy any time — the days you have left aren't lost.<br>
+      One-time. No subscription. Runs on your hardware forever.<br>
+      Beta price — this is the founding rate. It goes up later; yours won't.
+    </div>
     <a href="/" class="license-back-btn">← BACK TO DASHBOARD</a>
   </div>
 
@@ -87,6 +95,19 @@
       <button class="license-key-btn" type="submit">ACTIVATE</button>
     </form>
     <div class="license-key-status" id="license-key-status"></div>
+
+    {# Anywhere you can enter a key, you can get one. On "trial" there was no
+       buy button anywhere in the product — the whole 14 days, which is the
+       fortnight someone decides whether to pay. #}
+    {% if state != "licensed" or license_type != "permanent" %}
+    <div class="license-key-buy">
+      Don't have a key yet?
+      <a href="{{ buy_url }}" target="_blank" rel="noopener">Buy Echo Bloom — ${{ price }}</a>
+      <span class="license-key-buy-note">
+        One-time. No subscription. The key arrives by email and works on any machine.
+      </span>
+    </div>
+    {% endif %}
   </div>
   {% endif %}
 

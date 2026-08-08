@@ -63,6 +63,22 @@
         </div>
       </div>
     </div>
+
+    <!-- The price, and a way to pay it. Everything above claims "one purchase"
+         and the page had no checkout link anywhere on it. The trial buttons
+         stay the primary path — this is for the people already convinced, and
+         for anyone coming back to buy after the 14 days. -->
+    <div class="install-buy">
+      <div class="install-buy-price">${{ price }}<span>one time</span></div>
+      <a href="{{ buy_url }}" class="install-buy-btn" target="_blank" rel="noopener">
+        BUY ECHO BLOOM
+      </a>
+      <div class="install-buy-note">
+        Or start the free 14-day trial above &mdash; no card, no account.<br>
+        Your key arrives by email and works on any machine you own.<br>
+        Beta price: this is the founding rate. It goes up later; yours won't.
+      </div>
+    </div>
   </div>
 
   <!-- Requirements — let people self-select before they commit to a download -->
@@ -250,6 +266,7 @@
 
     <div class="install-footer-note">
       Free 14-day trial · No account required · Runs entirely on your hardware
+      · <a href="{{ buy_url }}" class="install-footer-link" target="_blank" rel="noopener">Buy — ${{ price }}</a>
       · <a href="/about" class="install-footer-link">Read the story</a>
     </div>
   </div>

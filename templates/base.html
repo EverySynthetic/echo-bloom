@@ -27,10 +27,16 @@
       <a href="/onboard" class="nav-vault">SETUP</a>
       <a href="/install" class="nav-vault">INSTALL</a>
       {% set _lic = nav_license() %}
+      {# Always a way in. This used to render only on trial/expired/denied, so
+         once you were licensed the link vanished and /license — the only page
+         with a key box on it — was reachable by typing the URL and no other
+         way. Same for any state the checks below don't name. #}
       {% if _lic.state == "trial" %}
         <a href="/license" class="nav-license nav-license--trial">{{ _lic.days_left }}d trial</a>
       {% elif _lic.state in ("expired", "denied") %}
         <a href="/license" class="nav-license nav-license--expired">EXPIRED</a>
+      {% else %}
+        <a href="/license" class="nav-license nav-license--ok">LICENSE</a>
       {% endif %}
       <a href="/logout" class="nav-logout">logout</a>
     </div>

@@ -328,7 +328,13 @@ async def serve_windows_launcher():
 
 @app.get("/install", response_class=HTMLResponse)
 async def install_page(request: Request):
-    return templates.TemplateResponse(request, "install.html")
+    # This page said "$50", "One purchase" and "purchase" three times and
+    # carried no way to buy — ten links, none of them to checkout. It is the
+    # page a stranger lands on from the channel.
+    return templates.TemplateResponse(request, "install.html", {
+        "buy_url": LICENSE_BUY_URL,
+        "price":   LICENSE_PRICE,
+    })
 
 
 # ── Security headers ───────────────────────────────────────────────────────────
@@ -1194,7 +1200,14 @@ async def api_license_activate(request: Request, _=Depends(require_auth_only)):
 
 @app.get("/api/license/status")
 async def api_license_status(_=Depends(require_auth_only)):
-    return lic.get_status()
+    # buy_url/price ride along so anywhere that can render a key box can also
+    # render a way to get a key. The dashboard card offered ACTIVATE and no
+    # means of buying, for the whole trial — which is exactly the fortnight
+    # someone decides whether to pay.
+    status = dict(lic.get_status())
+    status["buy_url"] = LICENSE_BUY_URL
+    status["price"]   = LICENSE_PRICE
+    return status
 
 
 @app.post("/api/bedtime")

@@ -255,6 +255,16 @@ function renderLicense(d) {
         <button class="ctrl-btn dash-lic-btn" type="submit">ACTIVATE</button>
       </form>
       <span class="dash-lic-msg" id="dash-lic-msg"></span>`;
+    // A key box with no way to get a key. This card offered ACTIVATE and
+    // nothing else for the entire trial, and /license only showed a buy
+    // button once the trial had already expired.
+    if (d.buy_url) {
+      html += `
+      <div class="dash-lic-buy">
+        <a href="${d.buy_url}" target="_blank" rel="noopener">BUY ECHO BLOOM${d.price ? ' — $' + d.price : ''}</a>
+        <span>one-time · key arrives by email · <a href="/license">licence details</a></span>
+      </div>`;
+    }
   }
 
   body.innerHTML = html;

@@ -199,6 +199,30 @@ a:hover { color: var(--text); }
 .dash-lic-btn { margin: 0; }
 .dash-lic-btn:hover { border-color: var(--green); color: var(--green); }
 
+/* A key box needs a way to get a key next to it. */
+.dash-lic-buy {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.dash-lic-buy > a:first-child {
+  background: var(--green);
+  color: #000;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  padding: 6px 14px;
+  border-radius: 4px;
+  text-decoration: none;
+  transition: opacity 0.15s;
+}
+.dash-lic-buy > a:first-child:hover { opacity: 0.85; }
+.dash-lic-buy > span { font-size: 11px; color: var(--muted); }
+.dash-lic-buy > span a { color: var(--muted); text-decoration: underline; }
+.dash-lic-buy > span a:hover { color: var(--text); }
+
 .dash-lic-msg     { font-size: 11px; }
 .dash-lic-msg.ok  { color: var(--green); }
 .dash-lic-msg.err { color: var(--red);   }
@@ -981,6 +1005,13 @@ a:hover { color: var(--text); }
   border: 1px solid var(--red);
   animation: pulse-expired 2s ease-in-out infinite;
 }
+/* Licensed: present but quiet — it's a way back to the key box, not a nag. */
+.nav-license--ok {
+  color: var(--muted);
+  border: 1px solid var(--border);
+  opacity: 0.7;
+}
+.nav-license--ok:hover { opacity: 1; color: var(--text); }
 @keyframes pulse-expired {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
@@ -1048,6 +1079,24 @@ a:hover { color: var(--text); }
   letter-spacing: 0.08em;
 }
 .license-back-btn:hover { color: var(--text); }
+
+.license-key-buy {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.license-key-buy > a {
+  color: var(--green);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-decoration: underline;
+}
+.license-key-buy > a:hover { opacity: 0.8; }
+.license-key-buy-note { font-size: 11px; color: var(--muted); }
 
 .license-key-section {
   background: var(--surface);
@@ -1961,6 +2010,52 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   font-size: 12px;
   color: var(--text-dim);
   margin-bottom: 32px;
+}
+
+/* Price + checkout. The page claimed "one purchase" four times and had no
+   link to buy anything. */
+.install-buy {
+  margin-top: 36px;
+  padding: 28px 24px;
+  border: 1px solid var(--green);
+  border-radius: 8px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.install-buy-price {
+  font-size: 42px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1;
+}
+.install-buy-price span {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.14em;
+  color: var(--text-dim);
+  margin-top: 6px;
+  text-transform: uppercase;
+}
+.install-buy-btn {
+  background: var(--green);
+  color: #000;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.1em;
+  padding: 14px 40px;
+  border-radius: 5px;
+  text-decoration: none;
+  transition: opacity 0.15s;
+}
+.install-buy-btn:hover { opacity: 0.85; }
+.install-buy-note {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.7;
 }
 
 .install-cards {
