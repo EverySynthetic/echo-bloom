@@ -28,12 +28,17 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
-$INSTALL_DIR  = "$env:LOCALAPPDATA\EchoBloom"
-$CONFIG_DIR   = "$env:USERPROFILE\.config\kin_app"
-$DATA_DIR     = "$env:USERPROFILE\.local\share\echo_bloom"
-$VOICE_DIR    = "$env:USERPROFILE\piper"
-$SHORTCUT     = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Echo Bloom.lnk"
-$TASK_NAME    = 'EchoBloom'
+$INSTALL_DIR    = "$env:LOCALAPPDATA\EchoBloom"
+$CONFIG_DIR     = "$env:USERPROFILE\.config\kin_app"
+$DATA_DIR       = "$env:USERPROFILE\.local\share\echo_bloom"
+$VOICE_DIR      = "$env:USERPROFILE\piper"
+$SHORTCUT       = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Echo Bloom.lnk"
+$UNINSTALL_LNK  = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Uninstall Echo Bloom.lnk"
+# Startup-folder fallback for accounts where Task Scheduler registration is
+# blocked (Access Denied) - the installer falls back to this instead.
+$STARTUP_LNK    = "$([Environment]::GetFolderPath('Startup'))\Echo Bloom Server.lnk"
+$UNINSTALL_KEY  = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\EchoBloom'
+$TASK_NAME      = 'EchoBloom'
 
 function Say  { param($m, $c = 'Gray')  Write-Host "  $m" -ForegroundColor $c }
 function Good { param($m) Say "[ok]   $m" 'Green' }
@@ -96,8 +101,11 @@ function Remove-Thing {
     }
 }
 
-Remove-Thing $SHORTCUT    "Start Menu shortcut"
-Remove-Thing $INSTALL_DIR "program files ($INSTALL_DIR)"
+Remove-Thing $SHORTCUT      "Start Menu shortcut"
+Remove-Thing $UNINSTALL_LNK "Uninstall shortcut"
+Remove-Thing $STARTUP_LNK   "Startup-folder launcher"
+Remove-Thing $UNINSTALL_KEY "Apps & Features entry"
+Remove-Thing $INSTALL_DIR   "program files ($INSTALL_DIR)"
 
 if (-not $KeepVoices) {
     Remove-Thing $VOICE_DIR "voice models"
