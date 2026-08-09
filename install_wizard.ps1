@@ -766,9 +766,18 @@ function Start-InstallWorker {
                     try {
                         Stop-ScheduledTask -TaskName 'EchoBloom' -ErrorAction SilentlyContinue
                     } catch {}
+                    # Not just uvicorn: the app spawns the lifecycle scripts
+                    # (wander, roundtable, vault_server) as children that
+                    # inherit $appDir as their working directory, so they hold
+                    # it locked too. Matching only 'main:app' left all three
+                    # running and the folder undeletable - which is exactly how
+                    # a reinstall failed on a real test machine. '*echo_bloom*'
+                    # catches them via their ~\.local\share\echo_bloom\scripts
+                    # path; it does not match this installer (EchoBloom-Install
+                    # has no underscore) so we cannot kill ourselves here.
                     try {
                         Get-CimInstance Win32_Process -Filter "Name like '%python%' or Name like '%wscript%' or Name like '%cmd%'" -ErrorAction SilentlyContinue |
-                            Where-Object { $_.CommandLine -and ($_.CommandLine -like '*main:app*' -or $_.CommandLine -like '*launch_server.vbs*') } |
+                            Where-Object { $_.CommandLine -and ($_.CommandLine -like '*main:app*' -or $_.CommandLine -like '*launch_server.vbs*' -or $_.CommandLine -like '*echo_bloom*') } |
                             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
                     } catch {}
                     Start-Sleep -Seconds 2
