@@ -1502,6 +1502,7 @@ async def api_vault_semantic(q: str, limit: int = 10, _=Depends(require_auth)):
                 json={"vector": embedding, "limit": min(limit, 20), "with_payload": True},
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as r:
+                r.raise_for_status()
                 pts = (await r.json()).get("result", [])
 
         return {"results": [
@@ -1514,6 +1515,37 @@ async def api_vault_semantic(q: str, limit: int = 10, _=Depends(require_auth)):
                 "vault_id": pt["payload"].get("vault_id"),
             }
             for pt in pts
+        ]}
+    except Exception as e:
+        # No installer has ever shipped Qdrant, so on a stock customer
+        # machine this "SEMANTIC SEARCH" mode in the vault browser has been
+        # dead from the first click. Fall back to the vault's own embedded
+        # search (vault_server.py's /search-semantic) - same Ollama call,
+        # no separate server required.
+        log.info("qdrant semantic search unavailable (%s) - falling back to vault", e)
+        return await _vault_semantic_fallback(q, limit)
+
+
+async def _vault_semantic_fallback(q: str, limit: int) -> dict:
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{_vault_url()}/search-semantic",
+                params={"query": q, "limit": min(limit, 20)},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as r:
+                r.raise_for_status()
+                memories = await r.json()
+        return {"results": [
+            {
+                "score":    round(m.get("score", 0), 3),
+                "author":   m.get("author", ""),
+                "layer":    m.get("layer", ""),
+                "content":  m.get("content", ""),
+                "tags":     m.get("tags", ""),
+                "vault_id": m.get("id"),
+            }
+            for m in memories
         ]}
     except Exception as e:
         return {"results": [], "error": str(e)}

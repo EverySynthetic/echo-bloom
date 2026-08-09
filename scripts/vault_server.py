@@ -15,6 +15,8 @@ Endpoints:
     POST /remember                      — store a memory
     GET  /recall                        — filtered recall (layer, author, search)
     GET  /recall/all                    — all memories (paginated)
+    GET  /search                        — ranked keyword search (FTS5)
+    GET  /search-semantic               — ranked vector search (embedded, no server needed)
     GET  /count                         — count memories (with same filters)
     GET  /layers                        — distinct layers with counts
     GET  /authors                       — distinct authors with counts
@@ -26,20 +28,25 @@ POST /remember body:
 """
 
 import argparse
+import array
+import math
+import os
 import sqlite3
 import sys
+import threading
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
 try:
-    from fastapi import FastAPI, HTTPException, Query
+    from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel
+    import requests
     import uvicorn
 except ImportError:
     print("Missing dependencies. Run:")
-    print("  pip install fastapi uvicorn pydantic --break-system-packages")
+    print("  pip install fastapi uvicorn pydantic requests --break-system-packages")
     sys.exit(1)
 
 # ── Args ───────────────────────────────────────────────────────────────────────
@@ -52,6 +59,13 @@ args = parser.parse_args()
 
 DB_PATH = Path(args.db)
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+# Same defaults kin_memory.py uses. No installer has ever shipped a Qdrant
+# server, so that vector path is dead on every stock install — this gives
+# every machine that already has Ollama (every machine running Echo Bloom,
+# full stop) real semantic recall with nothing extra to install or run.
+EMBED_URL   = os.environ.get("ECHO_BLOOM_EMBED_URL",   "http://localhost:11434/api/embeddings")
+EMBED_MODEL = os.environ.get("ECHO_BLOOM_EMBED_MODEL", "nomic-embed-text")
 
 # ── DB setup ───────────────────────────────────────────────────────────────────
 
@@ -125,14 +139,108 @@ def init_db():
             # back to LIKE and says so, instead of 500ing.
             print(f"FTS5 unavailable ({e}) — /search will use substring matching.")
 
+        # One vector per memory, keyed to it. A separate table (not a column
+        # on `memories`) so /recall and /recall/all never have to know it
+        # exists or strip a BLOB out of every row they return.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory_vectors (
+                memory_id  INTEGER PRIMARY KEY,
+                model      TEXT NOT NULL,
+                vector     BLOB NOT NULL,
+                FOREIGN KEY (memory_id) REFERENCES memories(id)
+            )
+        """)
+
 
 init_db()
+
+# ── Embeddings (semantic recall without a Qdrant server) ───────────────────────
+
+def _embed(text: str, timeout: int = 30):
+    """Vector for `text`, or None if the embed model/Ollama isn't reachable.
+
+    keep_alive pins the model resident — a cold load can take ~10s under
+    load, same fix kin_memory.py already needed for the same call.
+    """
+    try:
+        r = requests.post(
+            EMBED_URL,
+            json={"model": EMBED_MODEL, "prompt": text, "keep_alive": "999h"},
+            timeout=timeout,
+        )
+        r.raise_for_status()
+        return r.json()["embedding"]
+    except Exception as e:
+        print(f"embed unavailable ({EMBED_URL}, {EMBED_MODEL}): {e}")
+        return None
+
+
+def _vector_to_blob(vector) -> bytes:
+    return array.array("f", vector).tobytes()
+
+
+def _blob_to_vector(blob: bytes) -> array.array:
+    vec = array.array("f")
+    vec.frombytes(blob)
+    return vec
+
+
+def _cosine(a, b) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na  = math.sqrt(sum(x * x for x in a))
+    nb  = math.sqrt(sum(x * x for x in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _embed_and_store(memory_id: int, content: str):
+    """Runs after /remember has already responded — a slow or unreachable
+    embed model must never delay or fail the write it's attached to."""
+    vector = _embed(content)
+    if vector is None:
+        return
+    with db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO memory_vectors (memory_id, model, vector) VALUES (?,?,?)",
+            (memory_id, EMBED_MODEL, _vector_to_blob(vector)),
+        )
+
+
+def _backfill_vectors():
+    """Embeds any memory written before this feature existed (or written
+    while the embed model was briefly unreachable). Runs in a background
+    thread so a slow first embed call never delays server startup."""
+    with db() as conn:
+        rows = conn.execute("""
+            SELECT m.id, m.content FROM memories m
+            LEFT JOIN memory_vectors v ON v.memory_id = m.id
+            WHERE v.memory_id IS NULL
+        """).fetchall()
+    if not rows:
+        return
+    print(f"vault: backfilling {len(rows)} memor{'y' if len(rows) == 1 else 'ies'} without a vector...")
+    done = 0
+    for row in rows:
+        vector = _embed(row["content"])
+        if vector is not None:
+            with db() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO memory_vectors (memory_id, model, vector) VALUES (?,?,?)",
+                    (row["id"], EMBED_MODEL, _vector_to_blob(vector)),
+                )
+            done += 1
+    print(f"vault: backfilled {done}/{len(rows)} vectors")
+
 
 # ── App ────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="Echo Bloom Vault", docs_url=None, redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
+
+
+@app.on_event("startup")
+def _startup_backfill():
+    threading.Thread(target=_backfill_vectors, daemon=True).start()
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 
@@ -156,14 +264,19 @@ def health():
 
 
 @app.post("/remember")
-def remember(mem: MemoryIn):
+def remember(mem: MemoryIn, background_tasks: BackgroundTasks):
     ts = datetime.utcnow().isoformat()
     with db() as conn:
         cur = conn.execute(
             "INSERT INTO memories (content, layer, author, tags, created_at) VALUES (?,?,?,?,?)",
             (mem.content, mem.layer, mem.author, mem.tags, ts),
         )
-        return {"id": cur.lastrowid, "created_at": ts}
+        memory_id = cur.lastrowid
+    # After the response, not before: embedding is a nice-to-have for
+    # /search-semantic, and pulse.py writes one of these every 60 seconds —
+    # it must never wait on Ollama to finish a write.
+    background_tasks.add_task(_embed_and_store, memory_id, mem.content)
+    return {"id": memory_id, "created_at": ts}
 
 
 @app.get("/recall/all")
@@ -244,6 +357,51 @@ def search(
             [f"%{t}%" for t in terms] + params + [limit],
         ).fetchall()
         return [row_to_dict(r) for r in rows]
+
+
+@app.get("/search-semantic")
+def search_semantic(
+    query:  str = Query(..., min_length=1),
+    author: str = "",
+    layer:  str = "",
+    limit:  int = Query(5, le=50),
+):
+    """Ranked vector search — meaning, not just shared words. Brute-force
+    cosine over vectors stored right in this DB, so it works on every
+    install with nothing to run beyond Ollama, which Echo Bloom already
+    requires. Fine at personal-vault scale; a real vector DB would matter
+    at cluster scale, which is what Qdrant is still for on machines that
+    have it configured."""
+    query_vector = _embed(query)
+    if query_vector is None:
+        raise HTTPException(503, "embedding model unavailable")
+
+    filters, params = [], []
+    if author: filters.append("m.author = ?"); params.append(author)
+    if layer:  filters.append("m.layer = ?");  params.append(layer)
+    extra = (" AND " + " AND ".join(filters)) if filters else ""
+
+    with db() as conn:
+        rows = conn.execute(
+            f"""SELECT m.*, v.vector AS _vector FROM memories m
+                JOIN memory_vectors v ON v.memory_id = m.id
+                WHERE 1=1{extra}""",
+            params,
+        ).fetchall()
+
+    scored = [
+        (_cosine(query_vector, _blob_to_vector(r["_vector"])), r)
+        for r in rows
+    ]
+    scored.sort(key=lambda t: t[0], reverse=True)
+
+    results = []
+    for score, r in scored[:limit]:
+        d = row_to_dict(r)
+        d.pop("_vector")
+        d["score"] = score
+        results.append(d)
+    return results
 
 
 @app.get("/count")
