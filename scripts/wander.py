@@ -310,6 +310,19 @@ def save_thought(mode, prompt, thought):
     except Exception as e:
         log(f"  DB write failed: {e}")
 
+    try:
+        r = requests.post(f"{cfg.vault_url()}/remember", json={
+            "author":     KIN_NAME,
+            "layer":      "wander",
+            "content":    thought,
+            "tags":       f"wander,{mode}",
+            "visibility": "shared",
+        }, timeout=8)
+        if not r.ok:
+            log(f"  vault write failed: HTTP {r.status_code}")
+    except Exception as e:
+        log(f"  vault write failed: {e}")
+
 # ── Main loop ──────────────────────────────────────────────────────────────────
 
 # The file list and what has already been read, kept across thoughts.
