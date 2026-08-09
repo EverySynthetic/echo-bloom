@@ -6,4 +6,4 @@ server always reflects whatever commit is actually deployed there — that's
 what customer installs compare their own version against.
 """
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
