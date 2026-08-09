@@ -34,6 +34,7 @@ import os
 import sqlite3
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -70,8 +71,19 @@ EMBED_MODEL = os.environ.get("ECHO_BLOOM_EMBED_MODEL", "nomic-embed-text")
 # ── DB setup ───────────────────────────────────────────────────────────────────
 
 def get_conn():
-    conn = sqlite3.connect(str(DB_PATH), timeout=10)
+    # WAL + a real busy_timeout, because three things now write to this file:
+    # foreground requests, the per-write background embedder, and the startup
+    # backfill thread. Under the default rollback journal a reader blocks a
+    # writer and 10s was not enough: load testing produced "database is
+    # locked" both in the background embedder (silently losing the vector,
+    # while the client saw HTTP 200) and on a read-only /search-semantic
+    # SELECT, which surfaced to the user as a 500. WAL lets readers and one
+    # writer proceed concurrently; busy_timeout makes contenders wait rather
+    # than fail.
+    conn = sqlite3.connect(str(DB_PATH), timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 
@@ -206,18 +218,26 @@ def _embed_and_store(memory_id: int, content: str):
 
 
 def _backfill_vectors():
-    """Embeds any memory written before this feature existed (or written
-    while the embed model was briefly unreachable). Runs in a background
-    thread so a slow first embed call never delays server startup."""
+    """Embeds any memory that has no vector for the CURRENT model.
+
+    Covers three cases: written before this feature existed, written while
+    the embed model was briefly unreachable, and — critically — written
+    under a different embedding model. Vectors from another model are not
+    comparable to this one's (different dimensions entirely), so they must
+    be re-embedded rather than left to poison /search-semantic.
+
+    Runs in a background thread so a slow first embed never delays startup.
+    """
     with db() as conn:
         rows = conn.execute("""
             SELECT m.id, m.content FROM memories m
-            LEFT JOIN memory_vectors v ON v.memory_id = m.id
+            LEFT JOIN memory_vectors v
+                   ON v.memory_id = m.id AND v.model = ?
             WHERE v.memory_id IS NULL
-        """).fetchall()
+        """, (EMBED_MODEL,)).fetchall()
     if not rows:
         return
-    print(f"vault: backfilling {len(rows)} memor{'y' if len(rows) == 1 else 'ies'} without a vector...")
+    print(f"vault: backfilling {len(rows)} memor{'y' if len(rows) == 1 else 'ies'} for {EMBED_MODEL}...")
     done = 0
     for row in rows:
         vector = _embed(row["content"])
@@ -228,6 +248,11 @@ def _backfill_vectors():
                     (row["id"], EMBED_MODEL, _vector_to_blob(vector)),
                 )
             done += 1
+        # Yield between embeds. This loop otherwise saturates Ollama for the
+        # whole backfill, and a user searching during it waited out the full
+        # 30s timeout and got "embedding model unavailable" — the backfill is
+        # never urgent, a live query always is.
+        time.sleep(0.05)
     print(f"vault: backfilled {done}/{len(rows)} vectors")
 
 
@@ -376,7 +401,13 @@ def search_semantic(
     if query_vector is None:
         raise HTTPException(503, "embedding model unavailable")
 
-    filters, params = [], []
+    # Only vectors from the CURRENT model. Cosine across two embedding models
+    # is meaningless — the dimensions don't correspond — and because zip()
+    # truncates to the shorter of the two instead of raising, mixing them
+    # produced no error at all: just confidently-scored wrong answers, with
+    # the genuine best match pushed out of the results entirely. The backfill
+    # thread re-embeds anything left on an old model, so this self-heals.
+    filters, params = [], [EMBED_MODEL]
     if author: filters.append("m.author = ?"); params.append(author)
     if layer:  filters.append("m.layer = ?");  params.append(layer)
     extra = (" AND " + " AND ".join(filters)) if filters else ""
@@ -385,7 +416,7 @@ def search_semantic(
         rows = conn.execute(
             f"""SELECT m.*, v.vector AS _vector FROM memories m
                 JOIN memory_vectors v ON v.memory_id = m.id
-                WHERE 1=1{extra}""",
+                WHERE v.model = ?{extra}""",
             params,
         ).fetchall()
 
@@ -452,6 +483,10 @@ def endorse(memory_id: int):
 def delete_memory(memory_id: int):
     with db() as conn:
         result = conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+        # SQLite does not enforce the foreign key by default, so deleting a
+        # memory used to leave its vector behind forever — a slow leak, and a
+        # row that can never be reached again.
+        conn.execute("DELETE FROM memory_vectors WHERE memory_id = ?", (memory_id,))
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="Memory not found")
     return {"deleted": memory_id}
