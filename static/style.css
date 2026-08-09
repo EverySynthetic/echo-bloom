@@ -77,6 +77,39 @@ a:hover { color: var(--text); }
 }
 .nav-logout:hover { color: var(--red); }
 
+/* ── Update banner ─────────────────────────────────────────────────── */
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--amber);
+  background: var(--surface);
+  font-size: 12px;
+}
+.update-banner-text { color: var(--text-dim); }
+.update-banner-text strong { color: var(--amber); }
+.update-banner-actions { display: flex; gap: 8px; }
+.update-banner-btn {
+  border: 1px solid var(--amber);
+  color: var(--amber);
+  background: transparent;
+  padding: 4px 10px;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+}
+.update-banner-btn:hover { background: var(--amber); color: var(--bg); }
+.update-banner-cmd {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--green);
+}
+
 /* ── Main ─────────────────────────────────────────────────────────── */
 
 .main { padding: 24px; max-width: 1400px; margin: 0 auto; }

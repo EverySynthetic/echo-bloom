@@ -43,6 +43,17 @@
   </nav>
   {% endblock %}
 
+  <div id="update-banner" class="update-banner" hidden>
+    <span class="update-banner-text">
+      Echo Bloom <strong id="ub-latest"></strong> is available — you're on <span id="ub-current"></span>.
+    </span>
+    <span class="update-banner-actions">
+      <a id="ub-win-btn" class="update-banner-btn" href="/EchoBloom-Install.bat" download hidden>DOWNLOAD UPDATER</a>
+      <button id="ub-cmd-btn" type="button" class="update-banner-btn" hidden onclick="ubCopyCmd()">COPY UPDATE COMMAND</button>
+    </span>
+    <code id="ub-cmd" class="update-banner-cmd" hidden>bash &lt;(curl -fsSL https://everysynthetic.org/install.sh)</code>
+  </div>
+
   <main class="main">
     {% block content %}{% endblock %}
   </main>
@@ -56,6 +67,34 @@
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+    }
+  </script>
+  <script>
+    // Runs on every page regardless of block overrides below, so the
+    // banner shows up wherever someone happens to land, not just /.
+    // 401s here (setup/login pages, before a session exists) are expected
+    // and silently ignored — no update banner before there's an app to update.
+    fetch('/api/update-check').then(r => r.ok ? r.json() : null).then(data => {
+      if (!data || !data.update_available) return;
+      document.getElementById('ub-latest').textContent  = data.latest;
+      document.getElementById('ub-current').textContent = data.current;
+      if (navigator.userAgent.indexOf('Windows') !== -1) {
+        document.getElementById('ub-win-btn').hidden = false;
+      } else {
+        document.getElementById('ub-cmd-btn').hidden = false;
+        document.getElementById('ub-cmd').hidden = false;
+      }
+      document.getElementById('update-banner').hidden = false;
+    }).catch(() => {});
+
+    function ubCopyCmd() {
+      const el  = document.getElementById('ub-cmd');
+      const btn = document.getElementById('ub-cmd-btn');
+      navigator.clipboard.writeText(el.textContent).then(() => {
+        const orig = btn.textContent;
+        btn.textContent = 'COPIED ✓';
+        setTimeout(() => { btn.textContent = orig; }, 2000);
+      });
     }
   </script>
   {% block scripts %}{% endblock %}

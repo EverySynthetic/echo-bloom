@@ -35,6 +35,7 @@ log = logging_setup.get("main")
 import auth
 import cluster as cl
 import license as lic
+from version import VERSION
 
 # Shared with scripts/naming_ritual.py, which install.sh runs. One heuristic,
 # two entry points — copying it into both is how this codebase has drifted
@@ -644,6 +645,19 @@ async def kin_page(name: str, request: Request, _=Depends(require_auth)):
 
 
 # ── API ────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/update-check")
+async def api_update_check(_=Depends(require_auth)):
+    # Same license server every install already talks to for trial/key
+    # checks — /version there is always whatever's actually deployed, not
+    # a separately-tracked number that could drift.
+    latest = await asyncio.to_thread(lic.check_latest_version)
+    return {
+        "current": VERSION,
+        "latest": latest,
+        "update_available": bool(latest and latest != VERSION),
+    }
+
 
 @app.get("/api/cluster")
 async def api_cluster(_=Depends(require_auth)):

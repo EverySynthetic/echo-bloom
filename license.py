@@ -238,6 +238,26 @@ def _read_trial_token() -> dict | None:
     return _parse_trial_token(raw)
 
 
+# ── Update check ───────────────────────────────────────────────────────────────
+
+def check_latest_version(timeout: int = 4) -> str | None:
+    """Latest version live on everysynthetic.org, or None if unreachable.
+
+    Short timeout and silent failure on purpose — this runs on every
+    dashboard load and a slow or offline license server should never hold
+    up the app the customer actually opened it to use.
+    """
+    try:
+        req = urllib.request.Request(
+            f"{TRIAL_SERVER}/version",
+            headers={"User-Agent": "EchoBloom/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode()).get("version")
+    except Exception:
+        return None
+
+
 # ── Server registration ────────────────────────────────────────────────────────
 
 def _call_server(path: str, body: dict, timeout: int = 8) -> dict:

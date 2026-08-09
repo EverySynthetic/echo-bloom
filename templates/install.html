@@ -63,22 +63,6 @@
         </div>
       </div>
     </div>
-
-    <!-- The price, and a way to pay it. Everything above claims "one purchase"
-         and the page had no checkout link anywhere on it. The trial buttons
-         stay the primary path — this is for the people already convinced, and
-         for anyone coming back to buy after the 14 days. -->
-    <div class="install-buy">
-      <div class="install-buy-price">${{ price }}<span>one time</span></div>
-      <a href="{{ buy_url }}" class="install-buy-btn" target="_blank" rel="noopener">
-        BUY ECHO BLOOM
-      </a>
-      <div class="install-buy-note">
-        Or start the free 14-day trial above &mdash; no card, no account.<br>
-        Your key arrives by email and works on any machine you own.<br>
-        Beta price: this is the founding rate. It goes up later; yours won't.
-      </div>
-    </div>
   </div>
 
   <!-- Requirements — let people self-select before they commit to a download -->
@@ -206,6 +190,23 @@
       </div>
 
     </div><!-- .install-cards -->
+
+    <!-- The price, and a way to pay it. Moved below the install links on
+         purpose: the free trial is the primary path, and leading with a
+         buy button before anyone's even seen how to get started reads as
+         a paywall, not an offer. This is for the people already convinced,
+         or anyone coming back to buy after the 14 days. -->
+    <div class="install-buy">
+      <div class="install-buy-price">${{ price }}<span>one time</span></div>
+      <a href="{{ buy_url }}" class="install-buy-btn" target="_blank" rel="noopener">
+        BUY ECHO BLOOM
+      </a>
+      <div class="install-buy-note">
+        Or start the free 14-day trial above &mdash; no card, no account.<br>
+        Your key arrives by email and works on any machine you own.<br>
+        Beta price: this is the founding rate. It goes up later; yours won't.
+      </div>
+    </div>
 
     <!-- What happens after the command runs — the gap between "I typed
          something" and "now what" is where people bail or panic. -->

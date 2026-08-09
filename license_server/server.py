@@ -6,6 +6,7 @@ Set ECHO_BLOOM_PRIVATE_KEY in environment (or .env file).
 
 Endpoints:
   GET  /health                     — liveness check
+  GET  /version                    — latest deployed version (for the update banner)
   POST /register-trial             — client: register machine fingerprint for trial
   POST /stripe                     — Stripe webhook (auto-fires on payment)
   POST /admin/generate             — admin: issue a key manually
@@ -17,6 +18,7 @@ Endpoints:
 """
 
 import os
+import sys
 import json
 import base64
 import time
@@ -28,6 +30,9 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from datetime import datetime
 from contextlib import contextmanager
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from version import VERSION
 
 from fastapi import FastAPI, Request, HTTPException, Header
 import uvicorn
@@ -270,6 +275,14 @@ async def health():
         blacklist = conn.execute("SELECT COUNT(*) FROM blacklist").fetchone()[0]
         keys      = conn.execute("SELECT COUNT(*) FROM issued_keys").fetchone()[0]
     return {"ok": True, "trials": trials, "blacklisted": blacklist, "keys_issued": keys}
+
+
+@app.get("/version")
+async def version():
+    # This server's own VERSION is always whatever's actually deployed, so
+    # customer installs compare against it rather than a separately-tracked
+    # release number that could drift out of sync.
+    return {"version": VERSION}
 
 
 # ── Trial registration ─────────────────────────────────────────────────────────
