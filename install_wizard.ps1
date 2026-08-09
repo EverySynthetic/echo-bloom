@@ -285,21 +285,51 @@ $pg4.Controls.Add($pg4_body)
 $script:pg4_body = $pg4_body
 
 $pg4_open = New-Btn 'OPEN ECHO BLOOM  →' 320 355 200 36
-$pg4_open.Add_Click({
-    $o = $script:OPENER
-    if (Test-Path $o) {
-        Start-Process powershell -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$o`""
-    } else {
-        Start-Process 'http://localhost:8090'
-    }
-    $form.Close()
-})
+$pg4_open.Add_Click({ Show-Page 5 })
 $pg4.Controls.Add($pg4_open)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PAGE 5 — Remote access (optional)
+# ─────────────────────────────────────────────────────────────────────────────
+$pg5 = New-Page
+
+$pg5.Controls.Add((New-Lbl 'REMOTE ACCESS' 40 24 480 30 $C_FG $F_TITLE))
+
+$script:pg5_body = New-Lbl `
+    "Right now your Kin only answers on this network.`n`nCloudflare gives you a free public URL - no account, ready in under a minute. Your app password still protects it." `
+    40 64 480 90 $C_FG $F_MD
+$pg5.Controls.Add($script:pg5_body)
+
+$script:pg5_status = New-Lbl '' 40 162 480 20 $C_DIM $F_SM
+$pg5.Controls.Add($script:pg5_status)
+
+$script:pg5_url = New-Object System.Windows.Forms.TextBox
+$script:pg5_url.Location    = New-Object System.Drawing.Point(40, 186)
+$script:pg5_url.Size        = New-Object System.Drawing.Size(480, 24)
+$script:pg5_url.ReadOnly    = $true
+$script:pg5_url.BackColor   = $C_SURF
+$script:pg5_url.ForeColor   = $C_GREEN
+$script:pg5_url.Font        = $F_SM
+$script:pg5_url.BorderStyle = 'FixedSingle'
+$script:pg5_url.Visible     = $false
+$pg5.Controls.Add($script:pg5_url)
+
+$script:pg5_state = 'idle'   # idle -> working -> done | error
+
+$script:pg5_skip = New-Btn 'SKIP FOR NOW' 40 355 160 36 $C_AMBER $C_AMBER
+$script:pg5_skip.Add_Click({ Complete-Install })
+$pg5.Controls.Add($script:pg5_skip)
+
+$script:pg5_setup = New-Btn 'SET UP CLOUDFLARE TUNNEL  →' 260 355 260 36
+$script:pg5_setup.Add_Click({
+    if ($script:pg5_state -eq 'idle') { Start-CloudflareTunnel } else { Complete-Install }
+})
+$pg5.Controls.Add($script:pg5_setup)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Add pages to form
 # ─────────────────────────────────────────────────────────────────────────────
-$form.Controls.AddRange(@($pg1, $pg2, $pg3, $pg4))
+$form.Controls.AddRange(@($pg1, $pg2, $pg3, $pg4, $pg5))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Navigation
@@ -309,6 +339,7 @@ function Show-Page ([int]$n) {
     $pg2.Visible = ($n -eq 2)
     $pg3.Visible = ($n -eq 3)
     $pg4.Visible = ($n -eq 4)
+    $pg5.Visible = ($n -eq 5)
 
     if ($n -eq 3 -and -not $script:installStarted) {
         $script:installStarted = $true
@@ -320,6 +351,104 @@ function Show-Page ([int]$n) {
         $script:launchElapsed  = 0
         $script:launchTimer.Start()
     }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Page 5 — open the app and exit, with or without a tunnel set up first.
+# ─────────────────────────────────────────────────────────────────────────────
+function Complete-Install {
+    $o = $script:OPENER
+    if (Test-Path $o) {
+        Start-Process powershell -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$o`""
+    } else {
+        Start-Process 'http://localhost:8090'
+    }
+    $form.Close()
+}
+
+# Same log path main.py's own /api/remote/status already reads as a fallback
+# when journalctl isn't available (it never is here) - so the in-app Remote
+# Access card picks up a tunnel started from the wizard with no extra wiring.
+$script:CF_LOG = "$env:TEMP\cloudflared_tunnel.log"
+
+$script:pg5Timer = New-Object System.Windows.Forms.Timer
+$script:pg5Timer.Interval = 1000
+$script:pg5_waited = 0
+$script:pg5Timer.Add_Tick({
+    $script:pg5_waited++
+    $m = $null
+    try {
+        $m = [regex]::Match((Get-Content $script:CF_LOG -Raw -ErrorAction Stop), 'https://[a-z0-9-]+\.trycloudflare\.com')
+    } catch {}
+
+    if ($m -and $m.Success) {
+        $script:pg5Timer.Stop()
+        $script:pg5_state          = 'done'
+        $script:pg5_status.ForeColor = $C_GREEN
+        $script:pg5_status.Text    = 'Tunnel is live:'
+        $script:pg5_url.Text       = $m.Value
+        $script:pg5_url.Visible    = $true
+        $script:pg5_setup.Text     = 'CONTINUE  →'
+        $script:pg5_setup.Enabled  = $true
+    } elseif ($script:pg5_waited -ge 30) {
+        $script:pg5Timer.Stop()
+        $script:pg5_state          = 'error'
+        $script:pg5_status.ForeColor = $C_AMBER
+        $script:pg5_status.Text    = 'Taking longer than expected - check Settings -> Remote Access once the app is open.'
+        $script:pg5_setup.Text     = 'CONTINUE  →'
+        $script:pg5_setup.Enabled  = $true
+    } else {
+        $script:pg5_status.Text = "Waiting for the tunnel URL...  ($($script:pg5_waited)s)"
+    }
+})
+
+function Start-CloudflareTunnel {
+    $script:pg5_state         = 'working'
+    $script:pg5_setup.Enabled = $false
+    $script:pg5_skip.Enabled  = $false
+    $script:pg5_status.ForeColor = $C_DIM
+    $script:pg5_status.Text   = 'Downloading cloudflared...'
+    [System.Windows.Forms.Application]::DoEvents()
+
+    $cfExe = Join-Path $script:APP_DIR 'cloudflared.exe'
+    try {
+        if (-not (Test-Path $cfExe)) {
+            Invoke-WebRequest `
+                'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe' `
+                -OutFile $cfExe -UseBasicParsing
+        }
+    } catch {
+        $script:pg5_state            = 'error'
+        $script:pg5_status.ForeColor = $C_AMBER
+        $script:pg5_status.Text      = "Could not download cloudflared: $($_.Exception.Message)"
+        $script:pg5_setup.Text       = 'CONTINUE  →'
+        $script:pg5_setup.Enabled    = $true
+        $script:pg5_skip.Enabled     = $true
+        return
+    }
+
+    $script:pg5_status.Text = 'Starting tunnel...'
+    [System.Windows.Forms.Application]::DoEvents()
+
+    try {
+        Remove-Item $script:CF_LOG -Force -ErrorAction SilentlyContinue
+        Start-Process -FilePath $cfExe `
+            -ArgumentList 'tunnel --url http://localhost:8090' `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $script:CF_LOG `
+            -RedirectStandardError "$($script:CF_LOG).err"
+    } catch {
+        $script:pg5_state            = 'error'
+        $script:pg5_status.ForeColor = $C_AMBER
+        $script:pg5_status.Text      = "Could not start cloudflared: $($_.Exception.Message)"
+        $script:pg5_setup.Text       = 'CONTINUE  →'
+        $script:pg5_setup.Enabled    = $true
+        $script:pg5_skip.Enabled     = $true
+        return
+    }
+
+    $script:pg5_waited = 0
+    $script:pg5Timer.Start()
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
