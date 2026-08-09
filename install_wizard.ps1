@@ -767,8 +767,8 @@ function Start-InstallWorker {
                         Stop-ScheduledTask -TaskName 'EchoBloom' -ErrorAction SilentlyContinue
                     } catch {}
                     try {
-                        Get-CimInstance Win32_Process -Filter "Name like '%python%'" -ErrorAction SilentlyContinue |
-                            Where-Object { $_.CommandLine -and $_.CommandLine -like '*main:app*' } |
+                        Get-CimInstance Win32_Process -Filter "Name like '%python%' or Name like '%wscript%' or Name like '%cmd%'" -ErrorAction SilentlyContinue |
+                            Where-Object { $_.CommandLine -and ($_.CommandLine -like '*main:app*' -or $_.CommandLine -like '*launch_server.vbs*') } |
                             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
                     } catch {}
                     Start-Sleep -Seconds 2
@@ -777,8 +777,28 @@ function Start-InstallWorker {
                     } catch {
                         # Still locked — keep going with a renamed copy rather
                         # than failing the whole install.
-                        Move-Item $appDir "$appDir.old.$(Get-Random)" -Force
+                        try { Move-Item $appDir "$appDir.old.$(Get-Random)" -Force } catch {}
                     }
+                }
+                # Move-Item into a directory that still exists nests $srcDir
+                # inside it instead of replacing it — main.py ends up one level
+                # too deep, the app never starts, and the only trace is a
+                # throwaway "no scripts/ directory" log line miles from the
+                # real cause. This actually happened once already: the kill
+                # step above missed the process holding $appDir, both cleanup
+                # attempts silently failed, and the install "succeeded" into a
+                # broken nested state. Confirm the ground is actually clear —
+                # retrying past a lock that's still draining — before trusting
+                # Move-Item to do the right thing, and fail loudly instead of
+                # nesting if it never clears.
+                $clearRetries = 0
+                while ((Test-Path $appDir) -and $clearRetries -lt 6) {
+                    Start-Sleep -Milliseconds 500
+                    try { Remove-Item $appDir -Recurse -Force -ErrorAction Stop } catch {}
+                    $clearRetries++
+                }
+                if (Test-Path $appDir) {
+                    throw "Could not remove the old app folder at $appDir - an earlier Echo Bloom process may still be running. Restart your computer and run the installer again."
                 }
                 Move-Item $srcDir $appDir
 
