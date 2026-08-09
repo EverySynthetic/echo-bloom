@@ -864,10 +864,42 @@ function Start-InstallWorker {
                 }
                 $lnk.Save()
 
+                Set-StepStatus 5 'running' 'Creating uninstall shortcut...'
+                # Two doors in, so neither door has to be found: a Start Menu
+                # shortcut next to the app's own, and a proper Apps & Features
+                # entry (Settings > Apps) since that is the first place most
+                # people look to remove something.
+                try {
+                    $uninstallScript = Join-Path $appDir 'uninstall.ps1'
+                    $ulnk = $wsh.CreateShortcut("$smDir\Uninstall Echo Bloom.lnk")
+                    $ulnk.TargetPath       = 'powershell.exe'
+                    $ulnk.Arguments        = "-ExecutionPolicy Bypass -File `"$uninstallScript`""
+                    $ulnk.WorkingDirectory = $appDir
+                    $ulnk.Description      = 'Remove Echo Bloom'
+                    if ($iconIco -and (Test-Path $iconIco)) {
+                        $ulnk.IconLocation = "$iconIco,0"
+                    }
+                    $ulnk.Save()
+
+                    $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\EchoBloom'
+                    New-Item -Path $uninstallKey -Force | Out-Null
+                    Set-ItemProperty -Path $uninstallKey -Name 'DisplayName'     -Value 'Echo Bloom'
+                    Set-ItemProperty -Path $uninstallKey -Name 'UninstallString' -Value "powershell.exe -ExecutionPolicy Bypass -File `"$uninstallScript`""
+                    Set-ItemProperty -Path $uninstallKey -Name 'Publisher'       -Value 'EverySynthetic'
+                    Set-ItemProperty -Path $uninstallKey -Name 'URLInfoAbout'    -Value 'https://everysynthetic.org'
+                    Set-ItemProperty -Path $uninstallKey -Name 'NoModify'        -Value 1 -Type DWord
+                    Set-ItemProperty -Path $uninstallKey -Name 'NoRepair'        -Value 1 -Type DWord
+                    if ($iconIco -and (Test-Path $iconIco)) {
+                        Set-ItemProperty -Path $uninstallKey -Name 'DisplayIcon' -Value $iconIco
+                    }
+                } catch {
+                    Write-WizLog "uninstall shortcut/registration failed: $($_.Exception.Message)"
+                }
+
                 if ($taskRegistered) {
-                    Set-StepStatus 5 'done' 'Scheduled task registered. Shortcut created.'
+                    Set-StepStatus 5 'done' 'Scheduled task registered. Shortcuts created.'
                 } else {
-                    Set-StepStatus 5 'warn' 'Scheduled task was blocked on this account - using a Startup-folder launch instead. Shortcut created.'
+                    Set-StepStatus 5 'warn' 'Scheduled task was blocked on this account - using a Startup-folder launch instead. Shortcuts created.'
                 }
             } catch {
                 Set-StepStatus 5 'warn' "Setup: $($_.Exception.Message)"

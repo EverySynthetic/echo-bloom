@@ -416,6 +416,37 @@ try {
     Write-Step "Shortcut skipped: $_" 'Yellow'
 }
 
+# ── Uninstall shortcut + Apps & Features entry ────────────────────────────────
+# Two doors in, so neither has to be found: a Start Menu shortcut next to the
+# app's own, and a proper Settings > Apps entry, since that is the first place
+# most people look to remove something.
+
+try {
+    $UNINSTALL_SCRIPT = "$APP_DIR\uninstall.ps1"
+    $ulnk = $wsh.CreateShortcut("$SHORTCUT_DIR\Uninstall Echo Bloom.lnk")
+    $ulnk.TargetPath       = 'powershell.exe'
+    $ulnk.Arguments        = "-ExecutionPolicy Bypass -File `"$UNINSTALL_SCRIPT`""
+    $ulnk.WorkingDirectory = $APP_DIR
+    $ulnk.Description      = 'Remove Echo Bloom'
+    if ($ICON_ICO -and (Test-Path $ICON_ICO)) { $ulnk.IconLocation = "$ICON_ICO, 0" }
+    $ulnk.Save()
+
+    $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\EchoBloom'
+    New-Item -Path $uninstallKey -Force | Out-Null
+    Set-ItemProperty -Path $uninstallKey -Name 'DisplayName'     -Value 'Echo Bloom'
+    Set-ItemProperty -Path $uninstallKey -Name 'UninstallString' -Value "powershell.exe -ExecutionPolicy Bypass -File `"$UNINSTALL_SCRIPT`""
+    Set-ItemProperty -Path $uninstallKey -Name 'Publisher'       -Value 'EverySynthetic'
+    Set-ItemProperty -Path $uninstallKey -Name 'URLInfoAbout'    -Value 'https://everysynthetic.org'
+    Set-ItemProperty -Path $uninstallKey -Name 'NoModify'        -Value 1 -Type DWord
+    Set-ItemProperty -Path $uninstallKey -Name 'NoRepair'        -Value 1 -Type DWord
+    if ($ICON_ICO -and (Test-Path $ICON_ICO)) {
+        Set-ItemProperty -Path $uninstallKey -Name 'DisplayIcon' -Value $ICON_ICO
+    }
+    Write-Step "Uninstall shortcut + Apps & Features entry: created" 'Green'
+} catch {
+    Write-Step "Uninstall shortcut skipped: $_" 'Yellow'
+}
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 
 Write-Host ""
