@@ -332,7 +332,7 @@ function authorColor(name) {
 }
 
 function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function fmtTs(ts) {
@@ -368,8 +368,10 @@ function renderEntries(entries, isSemantic) {
     const coreBtn = isKin
       ? `<button class="mem-core-btn${isFlagged ? ' core-active' : ''}"
            id="core-${id}"
+           data-author="${escHtml(e.author || '')}"
+           data-content="${escHtml(rawContent)}"
            title="${isFlagged ? `Core memory for ${escHtml(e.author)} — click to remove` : `Flag as core memory for ${escHtml(e.author)}`}"
-           onclick="flagCore(${JSON.stringify(e.author || '')}, ${JSON.stringify(rawContent)}, this)">
+           onclick="flagCore(this.dataset.author, this.dataset.content, this)">
            ${isFlagged ? '★' : '☆'}
          </button>` : '';
     return `
