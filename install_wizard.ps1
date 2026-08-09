@@ -787,14 +787,50 @@ function Start-InstallWorker {
                                 -RunLevel Limited
 
                 Unregister-ScheduledTask -TaskName 'EchoBloom' -Confirm:$false -ErrorAction SilentlyContinue
-                Register-ScheduledTask `
-                    -TaskName  'EchoBloom' `
-                    -Action    $action `
-                    -Trigger   $trigger `
-                    -Settings  $settings `
-                    -Principal $principal | Out-Null
 
-                Start-ScheduledTask -TaskName 'EchoBloom' -ErrorAction SilentlyContinue
+                # Register-ScheduledTask's CIM errors (e.g. Access Denied on
+                # accounts where the Task Scheduler provider itself refuses
+                # non-elevated writes) are non-terminating, so a bare try/catch
+                # here does not catch them - the call "succeeds", the task
+                # never lands, and every future logon starts nothing. Verify
+                # the task actually exists instead of trusting the call.
+                try {
+                    Register-ScheduledTask `
+                        -TaskName  'EchoBloom' `
+                        -Action    $action `
+                        -Trigger   $trigger `
+                        -Settings  $settings `
+                        -Principal $principal `
+                        -ErrorAction Stop | Out-Null
+                } catch {
+                    Write-WizLog "Register-ScheduledTask threw: $($_.Exception.Message)"
+                }
+                $taskRegistered = [bool](Get-ScheduledTask -TaskName 'EchoBloom' -ErrorAction SilentlyContinue)
+
+                if ($taskRegistered) {
+                    Start-ScheduledTask -TaskName 'EchoBloom' -ErrorAction SilentlyContinue
+                } else {
+                    Write-WizLog 'scheduled task did not register - falling back to a Startup-folder launch'
+                    try {
+                        $startupDir = [Environment]::GetFolderPath('Startup')
+                        $wshStartup = New-Object -ComObject WScript.Shell
+                        $startupLnk = $wshStartup.CreateShortcut((Join-Path $startupDir 'Echo Bloom Server.lnk'))
+                        $startupLnk.TargetPath       = 'wscript.exe'
+                        $startupLnk.Arguments        = "//B `"$vbsLauncher`""
+                        $startupLnk.WorkingDirectory = $appDir
+                        $startupLnk.Description      = 'Echo Bloom - starts the local server at logon'
+                        $startupLnk.Save()
+                    } catch {
+                        Write-WizLog "Startup-folder fallback failed: $($_.Exception.Message)"
+                    }
+                    # A Startup-folder shortcut only fires at the NEXT logon -
+                    # start it for this session too, since the user is here now.
+                    try {
+                        Start-Process 'wscript.exe' -ArgumentList "//B `"$vbsLauncher`"" -WindowStyle Hidden
+                    } catch {
+                        Write-WizLog "immediate server start failed: $($_.Exception.Message)"
+                    }
+                }
 
                 Set-StepStatus 5 'running' 'Converting icon...'
                 $iconSrc = Join-Path $appDir 'static\icons\icon-512.png'
@@ -828,7 +864,11 @@ function Start-InstallWorker {
                 }
                 $lnk.Save()
 
-                Set-StepStatus 5 'done' 'Scheduled task registered. Shortcut created.'
+                if ($taskRegistered) {
+                    Set-StepStatus 5 'done' 'Scheduled task registered. Shortcut created.'
+                } else {
+                    Set-StepStatus 5 'warn' 'Scheduled task was blocked on this account - using a Startup-folder launch instead. Shortcut created.'
+                }
             } catch {
                 Set-StepStatus 5 'warn' "Setup: $($_.Exception.Message)"
                 Write-WizLog "step 5 warning: $($_.Exception.Message)"
