@@ -207,7 +207,29 @@ Write-Step "Extracting..."
 if (Test-Path "$INSTALL_DIR\echo-bloom-main") {
     Remove-Item "$INSTALL_DIR\echo-bloom-main" -Recurse -Force
 }
-if (Test-Path $APP_DIR) { Remove-Item $APP_DIR -Recurse -Force }
+if (Test-Path $APP_DIR) {
+    # An earlier install's uvicorn (or the scheduled task's wscript/cmd
+    # wrapper around it) can still hold $APP_DIR as its working directory,
+    # which blocks Remove-Item outright — with $ErrorActionPreference =
+    # 'Stop' that used to crash the whole script here with a raw error.
+    # Stop the old process first, then actually confirm it's gone instead
+    # of assuming one Remove-Item call was enough.
+    try { Stop-ScheduledTask -TaskName 'EchoBloom' -ErrorAction SilentlyContinue } catch {}
+    try {
+        Get-CimInstance Win32_Process -Filter "Name like '%python%' or Name like '%wscript%' or Name like '%cmd%'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -and ($_.CommandLine -like '*main:app*' -or $_.CommandLine -like '*launch_server.vbs*') } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    } catch {}
+    $clearRetries = 0
+    while ((Test-Path $APP_DIR) -and $clearRetries -lt 6) {
+        Start-Sleep -Milliseconds 500
+        try { Remove-Item $APP_DIR -Recurse -Force -ErrorAction Stop } catch {}
+        $clearRetries++
+    }
+    if (Test-Path $APP_DIR) {
+        throw "Could not remove the old app folder at $APP_DIR - an earlier Echo Bloom process may still be running. Restart your computer and run this installer again."
+    }
+}
 Expand-Archive -Path $zipPath -DestinationPath $INSTALL_DIR -Force
 Rename-Item "$INSTALL_DIR\echo-bloom-main" $APP_DIR
 Remove-Item $zipPath -Force
