@@ -1823,8 +1823,17 @@ async def api_ingest(request: Request, _=Depends(require_auth)):
                 },
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as r:
-                rdata = await r.json()
-                vault_id = rdata.get("id")
+                # Only an exception set vault_error before, so a vault that
+                # answered 500 with a JSON body sailed through: .get("id")
+                # returned None and the caller saw vault_id: null with no
+                # reason given — the exact "offline vault looks like a
+                # successful store" case this was supposed to rule out.
+                if r.status >= 300:
+                    vault_error = f"vault store failed: HTTP {r.status}"
+                    log.warning("ingest: vault store returned %s from %s", r.status, vault)
+                else:
+                    rdata = await r.json()
+                    vault_id = rdata.get("id")
     except Exception as e:
         # Still worth embedding, but returning vault_id: None with no reason
         # made an offline vault indistinguishable from a successful store.

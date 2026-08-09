@@ -497,7 +497,12 @@ async function doIngest() {
       document.getElementById('ingest-text').value = '';
       document.getElementById('ingest-source').value = '';
     } else {
-      status.textContent = d.error || 'Ingest failed.';
+      // The API reports failures in `errors` (a list); only some early-exit
+      // cases set `error`. Reading just `error` meant a real failure showed a
+      // bare "Ingest failed." while the actual reason — vault offline, HTTP
+      // 500, embedding down — was computed, returned, and thrown away here.
+      const why = (d.errors && d.errors.length) ? d.errors.join('; ') : d.error;
+      status.textContent = why ? `Ingest failed — ${why}` : 'Ingest failed.';
       status.className = 'ingest-status err';
     }
   } catch(e) {
