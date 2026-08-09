@@ -154,12 +154,39 @@ rm -rf "$SCRIPTS_DIR/__pycache__"
 ok "$(ls -1 "$SCRIPTS_DIR"/*.py 2>/dev/null | wc -l) script(s) deployed, bytecode cache cleared"
 
 step "Restarting"
-if systemctl --user restart "$SERVICE" 2>/dev/null; then
-  sleep 3
-  STATE=$(systemctl --user is-active "$SERVICE" 2>/dev/null)
-  [ "$STATE" = "active" ] && ok "service active" || die "service is $STATE"
+# Every service running Python from this repo, not just the web app. The
+# vault, the heartbeat and the licence server each load their code once at
+# process start, so a pull that updates them changes nothing until they are
+# restarted — the app being back on new code while the vault quietly serves
+# old code is the same drift this script exists to prevent, one layer down.
+# Missing units are normal (a customer has no licence server), so absent is
+# skipped quietly and only a unit that exists and fails to come back is fatal.
+RESTARTED=0
+for _svc in echo_bloom echo_bloom_vault echo_bloom_pulse echo_bloom_license; do
+  systemctl --user list-unit-files "$_svc.service" >/dev/null 2>&1 || continue
+  systemctl --user cat "$_svc.service" >/dev/null 2>&1 || continue
+  if systemctl --user restart "$_svc.service" 2>/dev/null; then
+    RESTARTED=$((RESTARTED + 1))
+  else
+    warn "$_svc failed to restart"
+  fi
+done
+
+if [ "$RESTARTED" -eq 0 ]; then
+  warn "no systemd user services — restart Echo Bloom yourself"
 else
-  warn "no systemd user service — restart Echo Bloom yourself"
+  sleep 3
+  for _svc in echo_bloom echo_bloom_vault echo_bloom_pulse echo_bloom_license; do
+    systemctl --user cat "$_svc.service" >/dev/null 2>&1 || continue
+    STATE=$(systemctl --user is-active "$_svc.service" 2>/dev/null)
+    if [ "$STATE" = "active" ]; then
+      ok "$_svc active"
+    elif [ "$_svc" = "echo_bloom" ]; then
+      die "$_svc is $STATE"
+    else
+      warn "$_svc is $STATE"
+    fi
+  done
 fi
 
 step "Verifying"
