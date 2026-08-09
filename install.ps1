@@ -215,9 +215,14 @@ if (Test-Path $APP_DIR) {
     # Stop the old process first, then actually confirm it's gone instead
     # of assuming one Remove-Item call was enough.
     try { Stop-ScheduledTask -TaskName 'EchoBloom' -ErrorAction SilentlyContinue } catch {}
+    # Not just uvicorn: the app spawns the lifecycle scripts (wander,
+    # roundtable, vault_server) as children that inherit $APP_DIR as their
+    # working directory, so they hold it locked too. '*echo_bloom*' catches
+    # them via their ~\.local\share\echo_bloom\scripts path, and does not
+    # match this installer (EchoBloom-Install has no underscore).
     try {
         Get-CimInstance Win32_Process -Filter "Name like '%python%' or Name like '%wscript%' or Name like '%cmd%'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.CommandLine -and ($_.CommandLine -like '*main:app*' -or $_.CommandLine -like '*launch_server.vbs*') } |
+            Where-Object { $_.CommandLine -and ($_.CommandLine -like '*main:app*' -or $_.CommandLine -like '*launch_server.vbs*' -or $_.CommandLine -like '*echo_bloom*') } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     } catch {}
     $clearRetries = 0
