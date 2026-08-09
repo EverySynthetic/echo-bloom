@@ -362,11 +362,42 @@ try {
     $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME `
                    -LogonType Interactive -RunLevel Limited
     Unregister-ScheduledTask -TaskName 'EchoBloom' -Confirm:$false -ErrorAction SilentlyContinue
-    Register-ScheduledTask -TaskName 'EchoBloom' -Action $action -Trigger $trigger `
-                           -Settings $settings -Principal $principal | Out-Null
-    Write-Step "Scheduled task: registered (auto-starts at login)" 'Green'
+
+    # Register-ScheduledTask's CIM errors (e.g. Access Denied on accounts
+    # where the Task Scheduler provider itself refuses non-elevated writes)
+    # are non-terminating, so this try/catch alone does not see them - the
+    # call "succeeds", the task never lands, and every future login starts
+    # nothing while this step still claims victory. Verify the task is
+    # really there instead of trusting the call.
+    try {
+        Register-ScheduledTask -TaskName 'EchoBloom' -Action $action -Trigger $trigger `
+                               -Settings $settings -Principal $principal -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Step "Register-ScheduledTask threw: $_" 'Yellow'
+    }
+    $taskRegistered = [bool](Get-ScheduledTask -TaskName 'EchoBloom' -ErrorAction SilentlyContinue)
+
+    if ($taskRegistered) {
+        Write-Step "Scheduled task: registered (auto-starts at login)" 'Green'
+    } else {
+        Write-Step "Scheduled task: blocked on this account - using a Startup-folder launch instead" 'Yellow'
+        try {
+            $startupDir = [Environment]::GetFolderPath('Startup')
+            $wshStartup = New-Object -ComObject WScript.Shell
+            $startupLnk = $wshStartup.CreateShortcut((Join-Path $startupDir 'Echo Bloom Server.lnk'))
+            $startupLnk.TargetPath       = 'wscript.exe'
+            $startupLnk.Arguments        = "//B `"$VBS`""
+            $startupLnk.WorkingDirectory = $APP_DIR
+            $startupLnk.Description      = 'Echo Bloom - starts the local server at logon'
+            $startupLnk.Save()
+            Write-Step "Startup-folder launch: created" 'Green'
+        } catch {
+            Write-Step "Startup-folder fallback failed: $_" 'Yellow'
+        }
+    }
 } catch {
     Write-Step "Scheduled task skipped: $_" 'Yellow'
+    $taskRegistered = $false
 }
 
 # ── Start Menu shortcut (runs hidden opener, no CMD window) ──────────────────

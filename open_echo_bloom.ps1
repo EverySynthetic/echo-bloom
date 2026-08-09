@@ -4,8 +4,10 @@
 # 5.1 honors as a string terminator. Nine parse errors, no window, and a
 # user staring at their wallpaper. The wizard survives the same characters
 # only because it is piped through iex as a correctly-decoded string.
-$url  = 'http://localhost:8090'
-$task = 'EchoBloom'
+$url         = 'http://localhost:8090'
+$task        = 'EchoBloom'
+$ebDir       = "$env:LOCALAPPDATA\EchoBloom"
+$vbsLauncher = Join-Path $ebDir 'launch_server.vbs'
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -20,8 +22,15 @@ function Test-AppUp {
 # Already running - open browser and exit quietly
 if (Test-AppUp) { Start-Process $url; exit }
 
-# Try to start the scheduled task
-Start-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
+# Start the scheduled task if it exists. On accounts where the installer's
+# task registration was blocked (Access Denied, no fallback yet applied),
+# the task never landed and Start-ScheduledTask would silently no-op -
+# start the server directly instead so the app comes up anyway.
+if (Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue) {
+    Start-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
+} elseif (Test-Path $vbsLauncher) {
+    Start-Process 'wscript.exe' -ArgumentList "//B `"$vbsLauncher`"" -WindowStyle Hidden
+}
 
 # -- UI ------------------------------------------------------------------------
 $form                  = New-Object System.Windows.Forms.Form
