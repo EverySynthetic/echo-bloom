@@ -1832,17 +1832,41 @@ async def api_ingest(request: Request, _=Depends(require_auth)):
         log.warning("ingest: vault store failed against %s — continuing with embedding",
                     vault, exc_info=True)
 
-    # Chunk and embed into Qdrant
+    # Chunk and embed into Qdrant (the author's own cluster) and the vault
+    # (every install — including every customer's, where Qdrant below has
+    # never once been reachable). Same bug class as get_vault_memories:
+    # this used to only ever land in Qdrant, so ingested documents were
+    # unsearchable on every customer machine with no error surfaced.
     chunks   = _chunk_text(content)
     if not chunks:
         return {"ok": False, "error": "No usable text after chunking"}
 
-    qdrant   = _qdrant_url()
-    embedded = 0
+    qdrant       = _qdrant_url()
+    vault        = _vault_url()
+    embedded     = 0
+    vault_chunks = 0
     errors: list[str] = []
 
     async with aiohttp.ClientSession() as session:
         for chunk in chunks:
+            try:
+                async with session.post(
+                    f"{vault}/remember",
+                    json={
+                        "author":  kin_name,
+                        "layer":   "document_chunk",
+                        "content": chunk,
+                        "tags":    f"ingested,chunk,source:{source}",
+                    },
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as r:
+                    if r.status < 300:
+                        vault_chunks += 1
+                    else:
+                        errors.append(f"vault {r.status}")
+            except Exception as e:
+                errors.append(f"vault: {str(e)[:60]}")
+
             try:
                 async with session.post(
                     "http://localhost:11434/api/embeddings",
@@ -1875,14 +1899,18 @@ async def api_ingest(request: Request, _=Depends(require_auth)):
                     else:
                         errors.append(f"qdrant {r.status}")
             except Exception as e:
-                errors.append(str(e)[:60])
+                errors.append(f"qdrant: {str(e)[:60]}")
 
     return {
-        "ok":       embedded > 0,
-        "chunks":   len(chunks),
-        "embedded": embedded,
-        "vault_id": vault_id,
-        "errors":   ([vault_error] + errors)[:3] if vault_error else errors[:3],
+        # True if the document is searchable *anywhere* -- a customer with
+        # no Qdrant but a working vault should see success, not "0 embedded"
+        # for a document that actually is there.
+        "ok":           embedded > 0 or vault_chunks > 0,
+        "chunks":       len(chunks),
+        "embedded":     embedded,
+        "vault_chunks": vault_chunks,
+        "vault_id":     vault_id,
+        "errors":       ([vault_error] + errors)[:3] if vault_error else errors[:3],
     }
 
 

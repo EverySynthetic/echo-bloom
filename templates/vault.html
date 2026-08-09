@@ -483,7 +483,12 @@ async function doIngest() {
     });
     const d = await r.json();
     if (d.ok) {
-      status.textContent = `Done — ${d.embedded}/${d.chunks} chunks embedded` +
+      // vault_chunks (this app's own embedded search, works everywhere) and
+      // embedded (Qdrant, only where someone's set one up by hand) can
+      // differ — showing only the Qdrant count read as "0 embedded" failure
+      // on every machine that doesn't have one, even on success.
+      const stored = Math.max(d.vault_chunks || 0, d.embedded || 0);
+      status.textContent = `Done — ${stored}/${d.chunks} chunks searchable` +
         (d.vault_id ? `, vault #${d.vault_id}` : '') +
         (d.errors && d.errors.length ? ` (${d.errors.length} errors)` : '');
       status.className = 'ingest-status ok';
