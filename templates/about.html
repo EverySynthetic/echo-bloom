@@ -98,5 +98,14 @@
     </p>
   </div>
 
+  <div class="about-changelog">
+    <h2>Changelog</h2>
+    <ul class="changelog-list">
+      {% for v, desc in changelog %}
+      <li><span class="changelog-version">{{ v }}</span> — {{ desc }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+
 </div>
 {% endblock %}

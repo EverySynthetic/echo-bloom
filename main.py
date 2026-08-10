@@ -35,7 +35,7 @@ log = logging_setup.get("main")
 import auth
 import cluster as cl
 import license as lic
-from version import VERSION
+from version import VERSION, CHANGELOG
 
 # Shared with scripts/naming_ritual.py, which install.sh runs. One heuristic,
 # two entry points — copying it into both is how this codebase has drifted
@@ -1157,7 +1157,7 @@ async def api_roundtable_stop(_=Depends(require_auth)):
 async def about_page(request: Request, _=Depends(require_auth_only)):
     # base.html lists every Kin name and computes licence state; this route was
     # public, so anyone with the tunnel URL could read both.
-    return templates.TemplateResponse(request, "about.html")
+    return templates.TemplateResponse(request, "about.html", {"changelog": CHANGELOG})
 
 
 # ── License routes ─────────────────────────────────────────────────────────────
