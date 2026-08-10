@@ -252,8 +252,8 @@ a:hover { color: var(--text); }
   transition: opacity 0.15s;
 }
 .dash-lic-buy > a:first-child:hover { opacity: 0.85; }
-.dash-lic-buy > span { font-size: 11px; color: var(--muted); }
-.dash-lic-buy > span a { color: var(--muted); text-decoration: underline; }
+.dash-lic-buy > span { font-size: 11px; color: var(--text-dim); }
+.dash-lic-buy > span a { color: var(--text-dim); text-decoration: underline; }
 .dash-lic-buy > span a:hover { color: var(--text); }
 
 .dash-lic-msg     { font-size: 11px; }
@@ -564,7 +564,7 @@ a:hover { color: var(--text); }
   background: none;
   border: 1px solid transparent;
   border-radius: 4px;
-  color: var(--muted);
+  color: var(--text-dim);
   font-size: 15px;
   width: 30px;
   height: 30px;
@@ -622,7 +622,7 @@ a:hover { color: var(--text); }
 .fetch-cancel-btn {
   background: none;
   border: none;
-  color: var(--muted);
+  color: var(--text-dim);
   font-size: 14px;
   cursor: pointer;
   padding: 4px 8px;
@@ -1040,7 +1040,7 @@ a:hover { color: var(--text); }
 }
 /* Licensed: present but quiet — it's a way back to the key box, not a nag. */
 .nav-license--ok {
-  color: var(--muted);
+  color: var(--text-dim);
   border: 1px solid var(--border);
   opacity: 0.7;
 }
@@ -1084,7 +1084,7 @@ a:hover { color: var(--text); }
 }
 .license-body {
   font-size: 13px;
-  color: var(--muted);
+  color: var(--text-dim);
   line-height: 1.7;
 }
 .license-buy-btn {
@@ -1102,19 +1102,19 @@ a:hover { color: var(--text); }
 .license-buy-btn:hover { opacity: 0.85; }
 .license-buy-note {
   font-size: 11px;
-  color: var(--muted);
+  color: var(--text-dim);
   line-height: 1.6;
 }
 .license-transparency-note {
   font-size: 11px;
-  color: var(--muted);
+  color: var(--text-dim);
   line-height: 1.6;
   margin-top: 10px;
 }
 .license-back-btn {
   margin-top: 8px;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--text-dim);
   letter-spacing: 0.08em;
 }
 .license-back-btn:hover { color: var(--text); }
@@ -1123,7 +1123,7 @@ a:hover { color: var(--text); }
   border-top: 1px solid var(--border);
   padding-top: 12px;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--text-dim);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1135,7 +1135,7 @@ a:hover { color: var(--text); }
   text-decoration: underline;
 }
 .license-key-buy > a:hover { opacity: 0.8; }
-.license-key-buy-note { font-size: 11px; color: var(--muted); }
+.license-key-buy-note { font-size: 11px; color: var(--text-dim); }
 
 .license-key-section {
   background: var(--surface);
@@ -1149,7 +1149,7 @@ a:hover { color: var(--text); }
 .license-key-label {
   font-size: 11px;
   letter-spacing: 0.12em;
-  color: var(--muted);
+  color: var(--text-dim);
   text-transform: uppercase;
 }
 .license-key-form {
@@ -1184,7 +1184,7 @@ a:hover { color: var(--text); }
 .license-key-status {
   font-size: 12px;
   min-height: 18px;
-  color: var(--muted);
+  color: var(--text-dim);
 }
 .license-key-status.ok { color: var(--green); }
 .license-key-status.err { color: var(--red); }
