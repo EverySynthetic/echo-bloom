@@ -41,6 +41,11 @@ $form.MaximizeBox     = $false
 $form.BackColor       = $C_BG
 $form.StartPosition   = [System.Windows.Forms.FormStartPosition]::CenterScreen
 $form.Font            = $F_MD
+# The Cloudflare tunnel step (page 5) waits up to 30s for a URL — long enough
+# that alt-tabbing away loses the wizard behind other windows, and it looks
+# stuck or crashed rather than just waiting. TopMost keeps it in view for the
+# whole wizard, not just that step, since it's one window throughout.
+$form.TopMost         = $true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared install state
