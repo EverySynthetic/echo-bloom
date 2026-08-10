@@ -771,6 +771,19 @@ function Start-InstallWorker {
                     try {
                         Stop-ScheduledTask -TaskName 'EchoBloom' -ErrorAction SilentlyContinue
                     } catch {}
+                    # cloudflared.exe outlives the app on purpose — it's a
+                    # detached background process so remote access keeps
+                    # working after the wizard closes. That's exactly what
+                    # made it invisible to the kill list below: a second
+                    # install run (fixing a first attempt, or just updating)
+                    # hit "access to the path is denied" removing $appDir
+                    # because cloudflared.exe still had its own .exe file
+                    # inside it locked. Distinct enough a name that killing
+                    # every instance of it needs no command-line filtering,
+                    # unlike python.exe below.
+                    try {
+                        Stop-Process -Name 'cloudflared' -Force -ErrorAction SilentlyContinue
+                    } catch {}
                     # Not just uvicorn: the app spawns the lifecycle scripts
                     # (wander, roundtable, vault_server) as children that
                     # inherit $appDir as their working directory, so they hold
