@@ -85,6 +85,14 @@ try {
             $killed++
         }
 } catch {}
+# cloudflared.exe runs detached on purpose (remote access survives after the
+# wizard closes), which is exactly what let it survive into an uninstall and
+# lock its own .exe file inside $INSTALL_DIR - "access is denied" removing
+# program files, confirmed live. Distinct enough a name to kill outright,
+# same fix as the installer's reinstall path.
+try {
+    Stop-Process -Name 'cloudflared' -Force -ErrorAction SilentlyContinue
+} catch {}
 if ($killed) { Good "stopped $killed running process(es)" }
 Start-Sleep -Seconds 2
 

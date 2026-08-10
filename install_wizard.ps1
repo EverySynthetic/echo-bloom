@@ -1049,7 +1049,14 @@ function Start-InstallWorker {
                     $uninstallScript = Join-Path $appDir 'uninstall.ps1'
                     $ulnk = $wsh.CreateShortcut("$smDir\Uninstall Echo Bloom.lnk")
                     $ulnk.TargetPath       = 'powershell.exe'
-                    $ulnk.Arguments        = "-ExecutionPolicy Bypass -File `"$uninstallScript`""
+                    # -Yes: clicking a shortcut literally named "Uninstall Echo
+                    # Bloom" is already the confirmation. Read-Host's y/N prompt
+                    # here had no way to fail loudly if that console window
+                    # wasn't visible or focused - it just waits forever, which
+                    # is indistinguishable from a hang. The default behavior
+                    # is non-destructive anyway (memories are kept unless -All
+                    # is passed, which neither entry point here does).
+                    $ulnk.Arguments        = "-ExecutionPolicy Bypass -File `"$uninstallScript`" -Yes"
                     $ulnk.WorkingDirectory = $appDir
                     $ulnk.Description      = 'Remove Echo Bloom'
                     if ($iconIco -and (Test-Path $iconIco)) {
@@ -1060,7 +1067,7 @@ function Start-InstallWorker {
                     $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\EchoBloom'
                     New-Item -Path $uninstallKey -Force | Out-Null
                     Set-ItemProperty -Path $uninstallKey -Name 'DisplayName'     -Value 'Echo Bloom'
-                    Set-ItemProperty -Path $uninstallKey -Name 'UninstallString' -Value "powershell.exe -ExecutionPolicy Bypass -File `"$uninstallScript`""
+                    Set-ItemProperty -Path $uninstallKey -Name 'UninstallString' -Value "powershell.exe -ExecutionPolicy Bypass -File `"$uninstallScript`" -Yes"
                     Set-ItemProperty -Path $uninstallKey -Name 'Publisher'       -Value 'EverySynthetic'
                     Set-ItemProperty -Path $uninstallKey -Name 'URLInfoAbout'    -Value 'https://everysynthetic.org'
                     Set-ItemProperty -Path $uninstallKey -Name 'NoModify'        -Value 1 -Type DWord
