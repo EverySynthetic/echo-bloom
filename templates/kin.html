@@ -483,7 +483,13 @@ async function downloadVoice(voiceId, label) {
 
 const micBtn = document.getElementById('mic-btn');
 if (micBtn) {
-  micBtn.addEventListener('mousedown', async (e) => {
+  // Pointer Events instead of mousedown/mouseup: on phones, a touch that
+  // moves even slightly during the hold (natural for press-and-record) can
+  // become a scroll gesture, which never fires a synthetic mouseup — the
+  // recorder stays on with no way to stop it short of reloading the page.
+  // pointercancel/pointerleave are the events that fire when that happens.
+  micBtn.addEventListener('pointerdown', async (e) => {
+    e.preventDefault();
     const ok = await ensureSpeech(null);
     if (!ok) return;
     if (!mediaRecorder) await initRecording();
@@ -493,12 +499,15 @@ if (micBtn) {
     micBtn.classList.add('tool-active');
     micBtn.textContent = '●';
   });
-  micBtn.addEventListener('mouseup', () => {
+  const stopRecording = () => {
     if (isRecording && mediaRecorder && mediaRecorder.state !== 'inactive') {
       mediaRecorder.stop();
       isRecording = false;
     }
-  });
+  };
+  micBtn.addEventListener('pointerup', stopRecording);
+  micBtn.addEventListener('pointercancel', stopRecording);
+  micBtn.addEventListener('pointerleave', stopRecording);
 }
 
 // ── Speech — TTS ──────────────────────────────────────────────────────────────

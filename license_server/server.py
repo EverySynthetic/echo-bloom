@@ -257,6 +257,30 @@ def _require_admin(token: str):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
+# ── Rate limiting ────────────────────────────────────────────────────────────────
+
+# fingerprint is entirely client-supplied, so without this a script can mint
+# unlimited legitimate signed trials by POSTing a new random fingerprint each
+# time — idempotency-per-fingerprint doesn't help if the fingerprint itself
+# is free to pick. Single uvicorn process, no workers, so an in-memory window
+# is correct here — it would need to move to something shared the day this
+# runs multi-process.
+_TRIAL_WINDOW_SECONDS = 3600
+# license.py retries every 600s while in offline grace (up to 6/hour) — this
+# needs to clear that legitimate pattern with room, while staying far below
+# anything a trial-minting script would want.
+_TRIAL_MAX_PER_WINDOW = 12
+_trial_hits: dict[str, list[float]] = {}
+
+
+def _trial_rate_limited(ip: str) -> bool:
+    now  = time.time()
+    hits = [t for t in _trial_hits.get(ip, []) if now - t < _TRIAL_WINDOW_SECONDS]
+    hits.append(now)
+    _trial_hits[ip] = hits
+    return len(hits) > _TRIAL_MAX_PER_WINDOW
+
+
 # ── App ────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(docs_url=None, redoc_url=None)
@@ -301,6 +325,11 @@ async def register_trial(request: Request):
     fp   = (body.get("fingerprint") or "").strip()
     if not fp or len(fp) > 128:
         raise HTTPException(status_code=400, detail="fingerprint required")
+
+    client_ip = request.client.host if request.client else "unknown"
+    if _trial_rate_limited(client_ip):
+        raise HTTPException(status_code=429,
+                             detail="Too many trial registrations from this address")
 
     now = int(time.time())
 
