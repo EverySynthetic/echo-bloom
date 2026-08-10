@@ -36,7 +36,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 try:
@@ -256,6 +256,40 @@ def _backfill_vectors():
     print(f"vault: backfilled {done}/{len(rows)} vectors")
 
 
+HEARTBEAT_RETENTION_DAYS = 7
+
+
+def _prune_heartbeats():
+    """Heartbeats are ephemeral machine status, not memory — pulse.py writes
+    one every few minutes, forever, and nothing else ever expired them. Left
+    alone this becomes nearly the entire vault on a long-running install
+    (observed elsewhere: 93% heartbeat telemetry). vault_index.py already
+    skips this layer when embedding; this is the other half — stop it from
+    growing the SQLite file forever in the first place.
+
+    Runs in a background thread, same as the vector backfill, so a slow
+    prune never delays startup or blocks a request.
+    """
+    while True:
+        cutoff = (datetime.now() - timedelta(days=HEARTBEAT_RETENTION_DAYS)).isoformat()
+        with db() as conn:
+            ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM memories WHERE layer = 'heartbeat' AND created_at < ?",
+                (cutoff,),
+            ).fetchall()]
+            if ids:
+                conn.executemany("DELETE FROM memory_vectors WHERE memory_id = ?",
+                                  [(i,) for i in ids])
+                conn.execute(
+                    "DELETE FROM memories WHERE layer = 'heartbeat' AND created_at < ?",
+                    (cutoff,),
+                )
+        if ids:
+            print(f"vault: pruned {len(ids)} heartbeat entr{'y' if len(ids) == 1 else 'ies'} "
+                  f"older than {HEARTBEAT_RETENTION_DAYS}d")
+        time.sleep(86400)
+
+
 # ── App ────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="Echo Bloom Vault", docs_url=None, redoc_url=None)
@@ -266,6 +300,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"],
 @app.on_event("startup")
 def _startup_backfill():
     threading.Thread(target=_backfill_vectors, daemon=True).start()
+    threading.Thread(target=_prune_heartbeats, daemon=True).start()
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 
