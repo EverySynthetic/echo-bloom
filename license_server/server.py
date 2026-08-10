@@ -97,6 +97,8 @@ def _init_db():
             cols = [r[1] for r in conn.execute("PRAGMA table_info(issued_keys)")]
             if "delivered" not in cols:
                 conn.execute("ALTER TABLE issued_keys ADD COLUMN delivered INTEGER DEFAULT 0")
+            if "revoked" not in cols:
+                conn.execute("ALTER TABLE issued_keys ADD COLUMN revoked INTEGER DEFAULT 0")
         except Exception as e:
             print(f"[license-server] could not migrate issued_keys: {e}")
 
@@ -302,11 +304,23 @@ async def health():
 
 
 @app.get("/version")
-async def version():
+async def version(key: str = ""):
     # This server's own VERSION is always whatever's actually deployed, so
     # customer installs compare against it rather than a separately-tracked
     # release number that could drift out of sync.
-    return {"version": VERSION}
+    #
+    # Piggybacks key revocation onto this same call rather than adding a
+    # second one: every install already hits this on every page load to
+    # check for updates, so a revoked key stops working the next time that
+    # install is online — no separate check-in, no change to offline use.
+    out = {"version": VERSION}
+    if key:
+        with _db() as conn:
+            row = conn.execute(
+                "SELECT revoked FROM issued_keys WHERE key = ?", (key,)
+            ).fetchone()
+        out["key_revoked"] = bool(row and row["revoked"])
+    return out
 
 
 # ── Trial registration ─────────────────────────────────────────────────────────
@@ -500,6 +514,36 @@ async def admin_blacklist_list(x_admin_token: str = Header(default="")):
 
 
 # ── Admin: trials & keys ───────────────────────────────────────────────────────
+
+@app.post("/admin/revoke-key")
+async def admin_revoke_key(request: Request, x_admin_token: str = Header(default="")):
+    _require_admin(x_admin_token)
+    body = await request.json()
+    key  = (body.get("key") or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="key required")
+    with _db() as conn:
+        result = conn.execute(
+            "UPDATE issued_keys SET revoked = 1 WHERE key = ?", (key,)
+        )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="key not found")
+    print(f"[license-server] Revoked key: {key[:16]}…")
+    return {"ok": True, "key": key}
+
+
+@app.delete("/admin/revoke-key/{key}")
+async def admin_unrevoke_key(key: str, x_admin_token: str = Header(default="")):
+    _require_admin(x_admin_token)
+    with _db() as conn:
+        result = conn.execute(
+            "UPDATE issued_keys SET revoked = 0 WHERE key = ?", (key,)
+        )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="key not found")
+    print(f"[license-server] Un-revoked key: {key[:16]}…")
+    return {"ok": True}
+
 
 @app.get("/admin/trials")
 async def admin_trials(x_admin_token: str = Header(default=""), limit: int = 100):

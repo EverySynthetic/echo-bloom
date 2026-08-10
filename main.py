@@ -376,7 +376,7 @@ def require_auth(request: Request):
     # License gate — skip for /license routes (handled separately)
     if not str(request.url.path).startswith("/license"):
         status = lic.get_status()
-        if status["state"] in ("expired", "denied"):
+        if status["state"] in ("expired", "denied", "revoked"):
             if _is_api(request):
                 raise HTTPException(status_code=402, detail="license required")
             raise HTTPException(status_code=303, headers={"Location": "/license"})
@@ -1170,6 +1170,7 @@ async def license_page(request: Request, _=Depends(require_auth_only)):
         "days_left":    status.get("days_left"),
         "email":        status.get("email", ""),
         "license_type": status.get("type", ""),
+        "reason":       status.get("reason", ""),
         "buy_url":      LICENSE_BUY_URL,
         "price":        LICENSE_PRICE,
     }

@@ -15,6 +15,7 @@ import json
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -31,6 +32,7 @@ _PUBLIC_KEY_B64 = "F7yDQhDryltxou0UIhoYEWtWwZ9w8NO5nzZ6xf85oEI="
 TRIAL_SERVER      = os.environ.get("ECHO_BLOOM_LICENSE_SERVER",
                                    "https://license.everysynthetic.org")
 LICENSE_PATH      = Path.home() / ".config/kin_app/license"
+REVOKED_KEY_PATH  = Path.home() / ".config/kin_app/revoked_key"
 TRIAL_TOKEN_PATH  = Path.home() / ".config/kin_app/trial_token"
 FINGERPRINT_PATH  = Path.home() / ".config/kin_app/machine_id"
 _FIRST_SEEN_PATH  = Path.home() / ".config/kin_app/first_run"
@@ -246,14 +248,37 @@ def check_latest_version(timeout: int = 4) -> str | None:
     Short timeout and silent failure on purpose — this runs on every
     dashboard load and a slow or offline license server should never hold
     up the app the customer actually opened it to use.
+
+    Also carries key revocation, piggybacked on this same call rather than
+    a separate check-in: a saved permanent key rides along, and the server's
+    answer is the only way a revoked key ever stops working. Never reaching
+    the server (offline, license server down) changes nothing — the key
+    keeps working exactly as it does today. This is the whole enforcement
+    mechanism; there is no separate revocation network call anywhere.
     """
     try:
+        url = f"{TRIAL_SERVER}/version"
+        saved = load_saved_key()
+        if saved:
+            url += f"?key={urllib.parse.quote(saved)}"
         req = urllib.request.Request(
-            f"{TRIAL_SERVER}/version",
+            url,
             headers={"User-Agent": "EchoBloom/1.0"},
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode()).get("version")
+            data = json.loads(resp.read().decode())
+        if saved and "key_revoked" in data:
+            if data["key_revoked"]:
+                REVOKED_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+                REVOKED_KEY_PATH.write_text(saved)
+                invalidate_status_cache()
+            elif REVOKED_KEY_PATH.exists() and REVOKED_KEY_PATH.read_text().strip() == saved:
+                # Admin un-revoked it — clear the local marker the same way it
+                # was set, so a mistaken revoke is fully reversible without
+                # the customer having to touch a file by hand.
+                REVOKED_KEY_PATH.unlink(missing_ok=True)
+                invalidate_status_cache()
+        return data.get("version")
     except Exception:
         return None
 
@@ -560,10 +585,13 @@ def _compute_status(allow_network: bool = True) -> dict:
       {"state": "trial",     "days_left": N}
       {"state": "expired"}
       {"state": "denied",    "reason": "..."}
+      {"state": "revoked"}
     """
     # Purchased key wins over everything
     saved = load_saved_key()
     if saved:
+        if REVOKED_KEY_PATH.exists() and REVOKED_KEY_PATH.read_text().strip() == saved:
+            return {"state": "revoked"}
         result = verify_key(saved)
         if result["valid"]:
             return {

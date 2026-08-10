@@ -79,15 +79,36 @@
         {{ days_left }} day{{ 's' if days_left != 1 else '' }} remaining.
       {% endif %}
     </div>
+    {% if license_type == "permanent" %}
+    <div class="license-transparency-note">
+      Permanent keys are periodically re-checked against the license server
+      — piggybacked on the same update check every page load already does,
+      not a separate call. This only matters if a key is revoked (shared or
+      stolen); it changes nothing about normal offline use.
+    </div>
+    {% endif %}
     <a href="/" class="license-back-btn">← BACK TO DASHBOARD</a>
+  </div>
+
+  {% elif state == "revoked" %}
+  <div class="license-card">
+    <div class="license-icon">✗</div>
+    <div class="license-title">LICENSE REVOKED</div>
+    <div class="license-body">
+      This key has been revoked and no longer activates Echo Bloom.<br>
+      If you believe this is a mistake, contact <a href="mailto:don@everysynthetic.org">don@everysynthetic.org</a>.
+    </div>
+    <a href="{{ buy_url }}" class="license-buy-btn" target="_blank" rel="noopener">
+      BUY ECHO BLOOM — ${{ price }}
+    </a>
   </div>
   {% endif %}
 
   <!-- Key entry — always visible, even on denied (purchased key bypasses blacklist) -->
-  {% if state in ("expired", "trial", "licensed", "denied") %}
+  {% if state in ("expired", "trial", "licensed", "denied", "revoked") %}
   <div class="license-key-section">
     <div class="license-key-label">
-      {% if state in ("expired", "denied") %}Already have a key? Enter it here{% else %}Enter a new key{% endif %}
+      {% if state in ("expired", "denied", "revoked") %}Already have a key? Enter it here{% else %}Enter a new key{% endif %}
     </div>
     <form class="license-key-form" onsubmit="activateKey(event)">
       <input class="license-key-input" id="license-key-input"

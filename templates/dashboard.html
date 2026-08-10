@@ -240,6 +240,10 @@ function renderLicense(d) {
     status = '✗ TRIAL UNAVAILABLE';
     cls = 'dash-lic-warn';
     showKey = true;
+  } else if (d.state === 'revoked') {
+    status = '✗ LICENSE REVOKED';
+    cls = 'dash-lic-warn';
+    showKey = true;
   } else {
     status = '— UNKNOWN';
     cls = '';

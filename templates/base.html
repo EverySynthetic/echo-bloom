@@ -35,6 +35,8 @@
         <a href="/license" class="nav-license nav-license--trial">{{ _lic.days_left }}d trial</a>
       {% elif _lic.state in ("expired", "denied") %}
         <a href="/license" class="nav-license nav-license--expired">EXPIRED</a>
+      {% elif _lic.state == "revoked" %}
+        <a href="/license" class="nav-license nav-license--expired">REVOKED</a>
       {% else %}
         <a href="/license" class="nav-license nav-license--ok">LICENSE</a>
       {% endif %}
