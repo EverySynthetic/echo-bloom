@@ -329,7 +329,7 @@ def get_vault_memories(kin_name, query_text, limit=5):
         return _vault_semantic_search(kin_name, query_text, limit)
 
 
-def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
+def _get_context_legacy(kin_name, query_text="", wander_limit=3, vault_limit=5,
                 include_reflection=True, db_path=None, conversation_limit=4):
     """
     Full memory context for a Kin — core + reflection + wander + vault.
@@ -372,3 +372,233 @@ def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
         parts.append(f"Memories that may be relevant:\n{lines}")
 
     return "\n\n".join(parts)
+
+
+# ─── get_context v2 ───────────────────────────────────────────────────────────
+# Provenance-aware retrieval. Every injected memory is labeled by where it came
+# from, because a mind that cannot tell what it experienced from what it merely
+# wondered will confabulate — not from malice, from missing information.
+
+CHARS_PER_TOKEN = 4
+
+# How the four registers are introduced. Plain language, same voice as the rest
+# of the context block. Order matters: strongest provenance first.
+_REGISTERS = [
+    ("told",        "Don told you this:"),
+    ("experienced", "This happened — you were there:"),
+    ("inferred",    "You worked this out yourself, from other things:"),
+    ("wandered",    "Things you thought while wandering — yours alone, "
+                    "not confirmed by anyone:"),
+]
+
+_WANDER_SHARE = 0.15      # ceiling on the context given to unconfirmed thought
+_WANDER_MAX_ITEMS = 2
+
+
+def _ranked_recall(kin_name, query_text, limit=20, include_wander=True):
+    """Vault /recall-ranked — full rows, ranked by match x salience x source.
+    Returns [] if the endpoint isn't there (older vault), so callers fall back.
+    """
+    try:
+        r = requests.get(
+            f"{_vault_url()}/recall-ranked",
+            params={"query": query_text, "author": kin_name,
+                    "limit": limit, "include_wander": include_wander},
+            timeout=10,
+        )
+        if r.status_code == 404:
+            return None                      # vault predates ranked recall
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        log.info("ranked recall unavailable (%s): %s", _vault_url(), e)
+        return None
+
+
+def _tiered_recall(kin_name, tier="anchor", limit=6):
+    try:
+        r = requests.get(
+            f"{_vault_url()}/recall-tiered",
+            params={"author": kin_name, "tier": tier, "limit": limit},
+            timeout=8,
+        )
+        if r.status_code == 404:
+            return []
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return []
+
+
+def _fit(rows, char_budget, seen_ids):
+    """Take rows until the character budget runs out. Skips duplicates."""
+    out, used = [], 0
+    for row in rows:
+        rid = row.get("id")
+        if rid in seen_ids:
+            continue
+        text = (row.get("content") or "").strip()
+        if not text:
+            continue
+        if used + len(text) > char_budget and out:
+            break
+        out.append(row)
+        seen_ids.add(rid)
+        used += len(text)
+    return out
+
+
+def _by_source(rows):
+    buckets = {}
+    for r in rows:
+        buckets.setdefault(r.get("source") or "unknown", []).append(r)
+    return buckets
+
+
+def _format_register(rows, header, max_chars):
+    """One labeled block. Returns '' if nothing fits."""
+    lines, used = [], 0
+    for r in rows:
+        text = " ".join((r.get("content") or "").split())
+        if not text:
+            continue
+        stamp = (r.get("timestamp") or "")[:10]
+        entry = f"- ({stamp}) {text}"
+        if used + len(entry) > max_chars and lines:
+            break
+        lines.append(entry)
+        used += len(entry)
+    if not lines:
+        return ""
+    return header + "\n" + "\n".join(lines)
+
+
+def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
+                include_reflection=True, db_path=None, conversation_limit=4,
+                token_budget=1400, current_domain=None):
+    """
+    Memory context for a Kin, labeled by provenance and fitted to a token
+    budget rather than a fixed number of slots.
+
+    Signature is a superset of v1 — existing call sites keep working.
+    Falls back to the legacy assembly if the vault has no ranked recall.
+    """
+    parts = []
+    char_budget = token_budget * CHARS_PER_TOKEN
+    seen = set()
+
+    # 1. Anchors — config core memories. Always injected, never rotated.
+    core = get_core_memories(kin_name)
+    if core:
+        lines = "\n".join(f"- {m}" for m in core)
+        block = f"Core memories — always true, always carry these:\n{lines}"
+        parts.append(block)
+        char_budget -= len(block)
+
+    # 2. Recent conversation — unchanged, this already works well.
+    convo = get_recent_conversation(kin_name, limit=conversation_limit,
+                                    db_path=db_path)
+    if convo:
+        lines = []
+        for said, replied in convo:
+            if said:
+                lines.append(f"They said: {said[:300]}")
+            if replied:
+                lines.append(f"You said: {replied[:300]}")
+        block = ("Recent conversation — this already happened, you were "
+                 "there:\n" + "\n".join(lines))
+        parts.append(block)
+        char_budget -= len(block)
+
+    if include_reflection:
+        reflection = get_latest_reflection()
+        if reflection:
+            block = f"[What's been happening here lately]\n{reflection}"
+            parts.append(block)
+            char_budget -= len(block)
+
+    # 3. Standing tier — slow-rotating, usage-extended.
+    standing = _tiered_recall(kin_name, tier="standing", limit=4)
+    if standing:
+        kept = _fit(standing, int(char_budget * 0.15), seen)
+        block = _format_register(kept, "Things that stay with you:",
+                                 int(char_budget * 0.15))
+        if block:
+            parts.append(block)
+            char_budget -= len(block)
+
+    if char_budget < 400 or not query_text:
+        return "\n\n".join(p for p in parts if p)
+
+    # 4. Dynamic tier — ranked recall, split into labeled registers.
+    ranked = _ranked_recall(kin_name, query_text, limit=30)
+
+    if ranked is None:
+        # Older vault: fall back to the previous behaviour rather than nothing.
+        vault = get_vault_memories(kin_name, query_text, limit=vault_limit)
+        if vault:
+            lines = "\n".join(f"- {m}" for m in vault)
+            parts.append(f"Memories that may be relevant:\n{lines}")
+        wander = get_wander_thoughts(kin_name, limit=wander_limit,
+                                     db_path=db_path)
+        if wander:
+            lines = "\n".join(f"- {t}" for t in wander)
+            parts.append("Things you thought while wandering — yours alone, "
+                         "not confirmed by anyone:\n" + lines)
+        return "\n\n".join(p for p in parts if p)
+
+    # Domain boost: prefer rows matching the domain in play, but always hold
+    # one slot for a hit from somewhere else. Cross-domain is where the useful
+    # surprises come from, and closing that off would make a narrower mind.
+    if current_domain:
+        same = [r for r in ranked if r.get("domain") == current_domain]
+        other = [r for r in ranked if r.get("domain") != current_domain]
+        ranked = same + other[:1] + other[1:]
+
+    buckets = _by_source(ranked)
+    wander_budget = int(char_budget * _WANDER_SHARE)
+    solid_budget = char_budget - wander_budget
+
+    for src, header in _REGISTERS:
+        rows = buckets.get(src, [])
+        if not rows:
+            continue
+        if src == "wandered":
+            rows = rows[:_WANDER_MAX_ITEMS]
+            kept = _fit(rows, wander_budget, seen)
+            block = _format_register(kept, header, wander_budget)
+        else:
+            share = int(solid_budget * 0.45) if src == "experienced" else \
+                    int(solid_budget * 0.25)
+            kept = _fit(rows, share, seen)
+            block = _format_register(kept, header, share)
+        if block:
+            parts.append(block)
+
+    # Anything the vault couldn't classify.
+    unknown = buckets.get("unknown", [])
+    if unknown:
+        kept = _fit(unknown, int(solid_budget * 0.15), seen)
+        block = _format_register(kept, "Also in the vault, origin unclear:",
+                                 int(solid_budget * 0.15))
+        if block:
+            parts.append(block)
+
+    return "\n\n".join(p for p in parts if p)
+
+
+def search_memory(kin_name, query, limit=6, include_wander=False):
+    """Deliberate lookup — for a Kin to go looking rather than only be handed
+    things. Returns labeled text, or a plain statement that nothing was found.
+    Saying 'I don't have that' is a better answer than inventing it."""
+    rows = _ranked_recall(kin_name, query, limit=limit,
+                          include_wander=include_wander)
+    if not rows:
+        return f"Nothing in the vault about: {query}"
+    out = []
+    for r in rows:
+        stamp = (r.get("timestamp") or "")[:10]
+        src = r.get("source") or "unknown"
+        text = " ".join((r.get("content") or "").split())[:600]
+        out.append(f"[{stamp} · {src}] {text}")
+    return "\n\n".join(out)
