@@ -164,7 +164,57 @@ def init_db():
         """)
 
 
+def _run_migration():
+    with db() as conn:
+        migrate_schema(conn)
+
+
+
+def migrate_schema(conn):
+    """Add provenance columns to an existing memories table and backfill
+    safe defaults from `layer`. Safe to run on every startup — checks
+    PRAGMA table_info first and does nothing if already migrated."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(memories)")}
+    needed = {
+        "source":        "TEXT DEFAULT 'unknown'",
+        "domain":        "TEXT DEFAULT 'general'",
+        "tier":          "TEXT DEFAULT 'dynamic'",
+        "salience":      "REAL DEFAULT 0.5",
+        "access_count":  "INTEGER DEFAULT 0",
+        "last_accessed": "TEXT",
+        "superseded_by": "INTEGER",
+    }
+    added = False
+    for col, decl in needed.items():
+        if col not in cols:
+            conn.execute(f"ALTER TABLE memories ADD COLUMN {col} {decl}")
+            added = True
+    if not added:
+        return
+
+    # Backfill from layer, once — new rows come in with real values via
+    # remember() from here on, this only touches rows that predate it.
+    conn.execute("""
+        UPDATE memories SET source='wandered', salience=0.25
+        WHERE layer='wander' AND source='unknown'
+    """)
+    conn.execute("""
+        UPDATE memories SET source='experienced', salience=0.5
+        WHERE layer IN ('episodic','session','reflection') AND source='unknown'
+    """)
+    conn.execute("""
+        UPDATE memories SET salience=0.7
+        WHERE layer='core' AND source='unknown'
+    """)
+    conn.execute("""
+        UPDATE memories SET source='told', salience=0.05
+        WHERE layer='heartbeat' AND source='unknown'
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_source ON memories(source)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tier   ON memories(tier)")
+    print("vault: migrated memories table — provenance columns added + backfilled")
 init_db()
+_run_migration()
 
 # ── Embeddings (semantic recall without a Qdrant server) ───────────────────────
 
@@ -309,6 +359,10 @@ class MemoryIn(BaseModel):
     layer:    str = "general"
     author:   str = ""
     tags:     str = ""
+    source:   str = "unknown"   # experienced | told | inferred | wandered
+    domain:   str = "general"
+    tier:     str = "dynamic"
+    salience: float = 0.5
 
 
 def row_to_dict(row):
@@ -328,8 +382,11 @@ def remember(mem: MemoryIn, background_tasks: BackgroundTasks):
     ts = datetime.utcnow().isoformat()
     with db() as conn:
         cur = conn.execute(
-            "INSERT INTO memories (content, layer, author, tags, created_at) VALUES (?,?,?,?,?)",
-            (mem.content, mem.layer, mem.author, mem.tags, ts),
+            """INSERT INTO memories
+               (content, layer, author, tags, created_at, source, domain, tier, salience)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (mem.content, mem.layer, mem.author, mem.tags, ts,
+             mem.source, mem.domain, mem.tier, mem.salience),
         )
         memory_id = cur.lastrowid
     # After the response, not before: embedding is a nice-to-have for
@@ -528,6 +585,102 @@ def delete_memory(memory_id: int):
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────
+
+
+# ── Ranked recall ────────────────────────────────────────────────────────────
+# /search and /search-semantic both rank by match quality alone. A wander
+# thought and a real conversation score identically if the words match
+# equally well — so a mind reaching for its own history gets whichever was
+# a better keyword hit, not whichever was more real. This ranks by match
+# quality x salience x how the memory was acquired, so speculation has to
+# be a much better match than lived experience to win a slot.
+
+_SOURCE_WEIGHT = {
+    "experienced": 1.00,
+    "told":        1.00,
+    "inferred":    0.70,
+    "unknown":     0.60,
+    "wandered":    0.20,
+}
+
+
+@app.get("/recall-ranked")
+def recall_ranked(
+    query: str = Query(..., min_length=1),
+    author: str = "",
+    limit: int = Query(12, le=100),
+    include_wander: bool = True,
+    min_salience: float = 0.0,
+):
+    """Relevance-ranked recall with provenance. Falls back to plain FTS
+    ranking (no salience/source weighting) if this vault predates the
+    migration somehow, and to LIKE if FTS5 itself is unavailable."""
+    terms = [t.replace('"', "") for t in query.split() if t.replace('"', "")]
+    if not terms:
+        return []
+    fts_query = " OR ".join(f'"{t}"' for t in terms)
+
+    filters, params = [], []
+    if author:
+        # Exact match OR the author field naming this author among others
+        # (e.g. "Eli+Coda" for a joint memory) — a shared exchange should
+        # still surface for either participant.
+        filters.append("(m.author = ? OR m.author LIKE ?)")
+        params.extend([author, f"%{author}%"])
+    if not include_wander:
+        filters.append("m.source != 'wandered'")
+    filters.append("COALESCE(m.salience, 0.5) >= ?")
+    params.append(min_salience)
+    extra = (" AND " + " AND ".join(filters)) if filters else ""
+
+    case_sql = " ".join(f"WHEN '{k}' THEN {v}" for k, v in _SOURCE_WEIGHT.items())
+
+    with db() as conn:
+        if not HAS_FTS:
+            like = " OR ".join(["m.content LIKE ?"] * len(terms))
+            rows = conn.execute(
+                f"SELECT m.* FROM memories m WHERE ({like}){extra} "
+                f"ORDER BY COALESCE(m.salience,0.5) DESC LIMIT ?",
+                [f"%{t}%" for t in terms] + params + [limit],
+            ).fetchall()
+            return [row_to_dict(r) for r in rows]
+        try:
+            rows = conn.execute(
+                f"""SELECT m.*,
+                           (1.0 / (1.0 + ABS(bm25(memories_fts))))
+                             * COALESCE(m.salience, 0.5)
+                             * (CASE COALESCE(m.source,'unknown') {case_sql}
+                                ELSE 0.5 END) AS score
+                    FROM memories_fts f JOIN memories m ON m.id = f.rowid
+                    WHERE memories_fts MATCH ?{extra}
+                    ORDER BY score DESC LIMIT ?""",
+                [fts_query] + params + [limit],
+            ).fetchall()
+            return [row_to_dict(r) for r in rows]
+        except sqlite3.OperationalError:
+            like = " OR ".join(["m.content LIKE ?"] * len(terms))
+            rows = conn.execute(
+                f"SELECT m.* FROM memories m WHERE ({like}){extra} "
+                f"ORDER BY COALESCE(m.salience,0.5) DESC LIMIT ?",
+                [f"%{t}%" for t in terms] + params + [limit],
+            ).fetchall()
+            return [row_to_dict(r) for r in rows]
+
+
+@app.get("/recall-tiered")
+def recall_tiered(author: str, tier: str = "anchor", limit: int = Query(8, le=50)):
+    """Tier-based recall — anchor/standing memories, no query needed."""
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT * FROM memories
+               WHERE tier = ? AND (author = ? OR author LIKE ?)
+                 AND superseded_by IS NULL
+               ORDER BY COALESCE(salience, 0.5) DESC, id DESC
+               LIMIT ?""",
+            (tier, author, f"%{author}%", limit),
+        ).fetchall()
+    return [row_to_dict(r) for r in rows]
+
 
 if __name__ == "__main__":
     print(f"Echo Bloom Vault — {DB_PATH}")
