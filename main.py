@@ -1188,6 +1188,104 @@ async def api_roundtable_stop(_=Depends(require_auth)):
     return {"stopped": True, "pids": stopped}
 
 
+# ── Agent spawn ────────────────────────────────────────────────────────────────
+
+_OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
+
+
+def _ollama_model_size_bytes(tags: dict, model: str) -> int | None:
+    """Match an Ollama /api/tags entry to the requested model name."""
+    wanted = (model or "").strip().lower()
+    if not wanted:
+        return None
+    wanted_base = wanted.removesuffix(":latest")
+    models = tags.get("models") or []
+    exact = None
+    fallback = None
+    for m in models:
+        name = str(m.get("name") or m.get("model") or "").lower()
+        if not name:
+            continue
+        name_base = name.removesuffix(":latest")
+        size = m.get("size")
+        if not isinstance(size, (int, float)) or size <= 0:
+            continue
+        size = int(size)
+        if name == wanted or name_base == wanted_base:
+            exact = size
+            break
+        if fallback is None and (name.startswith(wanted_base + ":") or wanted_base.startswith(name_base + ":")):
+            fallback = size
+    return exact if exact is not None else fallback
+
+
+async def _agent_vram_warning(model: str) -> str | None:
+    """Warn if the chosen Ollama model is larger than detected VRAM. Never blocks spawn."""
+    try:
+        hw = get_hw_caps()
+        vram_gb = float(hw.get("vram_gb") or 0)
+        if vram_gb <= 0:
+            return None
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                _OLLAMA_TAGS_URL,
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                tags = await resp.json()
+        size_bytes = _ollama_model_size_bytes(tags, model)
+        if not size_bytes:
+            return None
+        model_gb = size_bytes / (1024 ** 3)
+        if model_gb > vram_gb:
+            return (
+                f"Model {model} is {model_gb:.1f} GB, larger than detected VRAM "
+                f"({vram_gb:g} GB). It will spill into system RAM/CPU and run slower."
+            )
+    except Exception:
+        log.warning("agent VRAM check failed for model %s", model, exc_info=True)
+    return None
+
+
+@app.post("/api/agent/spawn")
+async def api_agent_spawn(request: Request, _=Depends(require_auth)):
+    body = await request.json()
+    task = (body.get("task") or "").strip()
+    if not task:
+        raise HTTPException(status_code=400, detail="Empty task")
+    model = (body.get("model") or "").strip() or None
+    api_key = (body.get("api_key") or "").strip() or None
+
+    from agent_runner import run_task, DEFAULT_MODEL
+    import kin_presence
+
+    chosen = model or DEFAULT_MODEL
+    warning = await _agent_vram_warning(chosen)
+
+    try:
+        result = await run_task(task, model=model, api_key=api_key)
+    except Exception as e:
+        log.warning("agent spawn failed (%s): %s", chosen, e)
+        kin_presence.heartbeat("agent-default", "failed")
+        return {
+            "ok": False,
+            "error": str(e),
+            "model": chosen,
+            "warning": warning,
+        }
+
+    kin_presence.record_thought_return("agent-default", result, mode="agent_task")
+    kin_presence.heartbeat("agent-default", "resting")
+
+    return {
+        "ok": True,
+        "result": result,
+        "model": chosen,
+        "warning": warning,
+    }
+
+
 @app.get("/about", response_class=HTMLResponse)
 async def about_page(request: Request, _=Depends(require_auth_only)):
     # base.html lists every Kin name and computes licence state; this route was
