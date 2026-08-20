@@ -14,6 +14,18 @@
   --blue:       #4fc3f7;
   --font:       'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
   --kin-color:  #4fc3f7;
+
+  /* Shape and motion. These existed as scattered literals -- buttons were
+     3px, 4px and 5px depending on which page you were on, cards 4px or 8px,
+     hovers 0.15s or 0.2s. Nothing was wrong individually; together they read
+     as slightly-off without anyone being able to say why. Tokens so a new
+     component inherits the rhythm instead of picking a number.
+     Deliberately NOT normalised: the 2px kin-pull-bar (a 4px-tall pill, half
+     its own height on purpose) and the 0.3s width transitions on progress
+     bars, where slow is the point. */
+  --radius:     4px;   /* cards, panels, surfaces */
+  --radius-sm:  3px;   /* buttons, inputs, chips */
+  --transition: var(--transition); /* interactive state change */
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -247,9 +259,9 @@ a:hover { color: var(--text); }
   font-size: 11px;
   letter-spacing: 0.1em;
   padding: 6px 14px;
-  border-radius: 4px;
+  border-radius: var(--radius);
   text-decoration: none;
-  transition: opacity 0.15s;
+  transition: opacity var(--transition);
 }
 .dash-lic-buy > a:first-child:hover { opacity: 0.85; }
 .dash-lic-buy > span { font-size: 11px; color: var(--text-dim); }
@@ -370,7 +382,7 @@ a:hover { color: var(--text); }
   flex-direction: column;
   gap: 10px;
   border-left: 3px solid var(--kin-color);
-  transition: border-color 0.2s;
+  transition: border-color var(--transition);
 }
 .kin-card:hover { border-color: var(--kin-color); background: var(--surface2); }
 .kin-offline     { opacity: 0.45; }
@@ -563,7 +575,7 @@ a:hover { color: var(--text); }
 .tool-btn {
   background: none;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius);
   color: var(--text-dim);
   font-size: 15px;
   width: 30px;
@@ -572,7 +584,7 @@ a:hover { color: var(--text); }
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color var(--transition), border-color var(--transition);
   padding: 0;
   line-height: 1;
 }
@@ -599,7 +611,7 @@ a:hover { color: var(--text); }
   flex: 1;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius);
   color: var(--text);
   font-family: var(--font-mono);
   font-size: 12px;
@@ -610,7 +622,7 @@ a:hover { color: var(--text); }
   padding: 6px 14px;
   background: none;
   border: 1px solid var(--amber);
-  border-radius: 4px;
+  border-radius: var(--radius);
   color: var(--amber);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -670,7 +682,7 @@ a:hover { color: var(--text); }
   font-size: 12px;
   padding: 0 14px;
   cursor: pointer;
-  transition: color 0.15s;
+  transition: color var(--transition);
 }
 .chat-clear:hover { color: var(--red); }
 
@@ -1024,7 +1036,7 @@ a:hover { color: var(--text); }
   font-size: 10px;
   letter-spacing: 0.12em;
   padding: 2px 8px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-weight: 700;
 }
 .nav-license--trial {
@@ -1062,7 +1074,7 @@ a:hover { color: var(--text); }
 .license-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 40px;
   display: flex;
   flex-direction: column;
@@ -1095,9 +1107,9 @@ a:hover { color: var(--text); }
   font-weight: 700;
   font-size: 13px;
   letter-spacing: 0.1em;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   text-decoration: none;
-  transition: opacity 0.15s;
+  transition: opacity var(--transition);
 }
 .license-buy-btn:hover { opacity: 0.85; }
 .license-buy-note {
@@ -1140,7 +1152,7 @@ a:hover { color: var(--text); }
 .license-key-section {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 24px;
   display: flex;
   flex-direction: column;
@@ -1160,7 +1172,7 @@ a:hover { color: var(--text); }
   flex: 1;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius);
   padding: 8px 12px;
   font-family: var(--font-mono);
   font-size: 12px;
@@ -1171,14 +1183,14 @@ a:hover { color: var(--text); }
   padding: 8px 16px;
   background: var(--surface);
   border: 1px solid var(--green);
-  border-radius: 4px;
+  border-radius: var(--radius);
   color: var(--green);
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.1em;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background var(--transition);
 }
 .license-key-btn:hover { background: var(--green); color: #000; }
 .license-key-status {
@@ -1355,7 +1367,7 @@ a:hover { color: var(--text); }
   cursor: pointer;
   padding: 0 4px;
   line-height: 1;
-  transition: color 0.15s;
+  transition: color var(--transition);
 }
 .mem-core-btn:hover  { color: var(--amber); }
 .mem-core-btn.core-active { color: var(--amber); }
@@ -1609,7 +1621,7 @@ a:hover { color: var(--text); }
 .onboard-model-grid     { display: flex; flex-direction: column; gap: 6px; }
 .onboard-model-row      { display: flex; align-items: center; justify-content: space-between;
                           padding: 8px 10px; background: var(--surface2); border: 1px solid var(--border);
-                          border-radius: 4px; cursor: pointer; gap: 10px; }
+                          border-radius: var(--radius); cursor: pointer; gap: 10px; }
 .onboard-model-row:hover { border-color: var(--amber); }
 .onboard-model-selected  { border-color: var(--green) !important; }
 .onboard-model-info     { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -1617,14 +1629,14 @@ a:hover { color: var(--text); }
 .onboard-model-meta     { font-size: 0.75rem; color: var(--text-muted); }
 .onboard-btn-pull-sm    { padding: 4px 10px; font-size: 0.75rem; background: var(--surface2);
                           border: 1px solid var(--green); color: var(--green);
-                          border-radius: 3px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+                          border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; flex-shrink: 0; }
 .onboard-btn-pull-sm:hover { background: var(--green); color: var(--bg); }
 .onboard-model-warn     { border-color: var(--amber) !important; opacity: 0.75; }
 .onboard-model-warn:hover { opacity: 1; }
 .onboard-model-overflow-hdr { font-size: 0.78rem; color: var(--amber); padding: 8px 4px 4px;
                                border-top: 1px solid var(--border); margin-top: 4px; }
 .onboard-model-overflow-btn { font-size: 0.8rem; color: var(--amber); padding: 8px 10px;
-                               border: 1px dashed var(--amber); border-radius: 4px; margin-top: 6px;
+                               border: 1px dashed var(--amber); border-radius: var(--radius); margin-top: 6px;
                                cursor: pointer; text-align: center; opacity: 0.7; }
 .onboard-model-overflow-btn:hover { opacity: 1; background: var(--surface2); }
 
@@ -1684,7 +1696,7 @@ a:hover { color: var(--text); }
   padding: 8px 12px;
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.15s;
+  transition: border-color var(--transition);
 }
 .voice-option-btn:hover { border-color: var(--amber); color: var(--amber); }
 
@@ -1721,7 +1733,7 @@ a:hover { color: var(--text); }
   color: var(--text-muted);
   letter-spacing: 0.08em;
   margin-left: 6px;
-  transition: color 0.15s;
+  transition: color var(--transition);
 }
 .kin-formation-link:hover { color: var(--kin-color); }
 
@@ -1820,7 +1832,7 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   padding: 8px 10px;
   outline: none;
   resize: vertical;
-  transition: border-color 0.15s;
+  transition: border-color var(--transition);
 }
 .formation-input:focus,
 .formation-select:focus,
@@ -1891,7 +1903,7 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   letter-spacing: 0.12em;
   padding: 13px;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.2s, color 0.2s;
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
 }
 .formation-build-btn:hover:not(:disabled) {
   background: color-mix(in srgb, var(--kin-color) 10%, transparent);
@@ -1919,10 +1931,10 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   font-family: var(--font);
   font-size: 11px;
   padding: 3px 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   max-width: 150px;
-  transition: border-color 0.15s;
+  transition: border-color var(--transition);
 }
 .voice-select:hover { border-color: var(--text-dim); }
 .voice-select:focus { outline: none; border-color: var(--kin-color); color: var(--text); }
@@ -1956,7 +1968,7 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   font-family: var(--font);
   font-size: 12px;
   padding: 5px 8px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   flex: 1;
   min-width: 0;
 }
@@ -1968,7 +1980,7 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   font-family: var(--font);
   font-size: 12px;
   padding: 8px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   width: 100%;
   resize: vertical;
   min-height: 120px;
@@ -1981,7 +1993,7 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   font-family: var(--font);
   font-size: 12px;
   padding: 5px 8px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .ingest-select:focus { outline: none; border-color: var(--kin-color); color: var(--text); }
@@ -1993,9 +2005,9 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   font-size: 11px;
   letter-spacing: 0.1em;
   padding: 6px 18px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--transition), color var(--transition);
 }
 .ingest-submit:hover { background: var(--kin-color); color: var(--bg); }
 .ingest-submit:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -2063,7 +2075,7 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   margin-top: 36px;
   padding: 28px 24px;
   border: 1px solid var(--green);
-  border-radius: 8px;
+  border-radius: var(--radius);
   text-align: center;
   display: flex;
   flex-direction: column;
@@ -2092,9 +2104,9 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   font-size: 14px;
   letter-spacing: 0.1em;
   padding: 14px 40px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   text-decoration: none;
-  transition: opacity 0.15s;
+  transition: opacity var(--transition);
 }
 .install-buy-btn:hover { opacity: 0.85; }
 .install-buy-note {
@@ -2116,7 +2128,7 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
 .install-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius);
   padding: 24px;
   display: flex;
   flex-direction: column;
@@ -2143,9 +2155,9 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   font-size: 11px;
   letter-spacing: 0.12em;
   padding: 10px 16px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--transition), color var(--transition);
   width: 100%;
 }
 .install-btn:hover { background: var(--green); color: var(--bg); }
@@ -2153,7 +2165,7 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
 .install-cmd-wrap {
   background: var(--surface2);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 10px 12px;
   overflow-x: auto;
 }
@@ -2269,7 +2281,7 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   padding: 8px;
   background: rgba(0, 0, 0, 0.35);
   border: 1px solid var(--border, #2a2a32);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   word-break: break-all;
   color: var(--text, #c8c8d2);
 }
