@@ -660,9 +660,11 @@ async def api_setup_complete(_=Depends(require_auth)):
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, _=Depends(require_auth)):
     status = await cl.get_cluster_status()
+    from agent_runner import DEFAULT_MODEL
     return templates.TemplateResponse(request, "dashboard.html", {
         "nodes": status["nodes"],
         "kin":   status["kin"],
+        "agent_default_model": DEFAULT_MODEL,
     })
 
 
@@ -1219,37 +1221,79 @@ def _ollama_model_size_bytes(tags: dict, model: str) -> int | None:
     return exact if exact is not None else fallback
 
 
-async def _agent_vram_warning(model: str) -> str | None:
-    """Warn if the chosen Ollama model is larger than detected VRAM. Never blocks spawn."""
+async def _agent_model_preflight(model: str) -> dict:
+    """VRAM / install check for a model. Never blocks spawn."""
+    out = {"model": model, "warning": None, "installed": None, "vram_gb": None}
     try:
         hw = get_hw_caps()
         vram_gb = float(hw.get("vram_gb") or 0)
-        if vram_gb <= 0:
-            return None
+        out["vram_gb"] = vram_gb if vram_gb > 0 else None
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 _OLLAMA_TAGS_URL,
                 timeout=aiohttp.ClientTimeout(total=5),
             ) as resp:
                 if resp.status != 200:
-                    return None
+                    return out
                 tags = await resp.json()
         size_bytes = _ollama_model_size_bytes(tags, model)
         if not size_bytes:
-            return None
-        model_gb = size_bytes / (1024 ** 3)
-        if model_gb > vram_gb:
-            return (
-                f"Model {model} is {model_gb:.1f} GB, larger than detected VRAM "
-                f"({vram_gb:g} GB). It will spill into system RAM/CPU and run slower."
-            )
+            out["installed"] = False
+            out["warning"] = f"Model {model} is not installed."
+            return out
+        out["installed"] = True
+        if vram_gb > 0:
+            model_gb = size_bytes / (1024 ** 3)
+            if model_gb > vram_gb:
+                out["warning"] = (
+                    f"Model {model} is {model_gb:.1f} GB, larger than detected VRAM "
+                    f"({vram_gb:g} GB). It will spill into system RAM/CPU and run slower."
+                )
     except Exception:
         log.warning("agent VRAM check failed for model %s", model, exc_info=True)
-    return None
+    return out
+
+
+async def _agent_vram_warning(model: str) -> str | None:
+    return (await _agent_model_preflight(model)).get("warning")
+
+
+_agent_running = False
+_AGENT_NAME = "agent-default"
+
+
+@app.get("/api/presence")
+async def api_presence(_=Depends(require_auth)):
+    import kin_presence
+    return await asyncio.to_thread(kin_presence.get_all_presence)
+
+
+@app.get("/api/agent/vram-check")
+async def api_agent_vram_check(model: str = "", _=Depends(require_auth)):
+    from agent_runner import DEFAULT_MODEL
+    chosen = (model or "").strip() or DEFAULT_MODEL
+    data = await _agent_model_preflight(chosen)
+    return {"ok": True, **data}
+
+
+@app.post("/api/agent/dismiss")
+async def api_agent_dismiss(request: Request, _=Depends(require_auth)):
+    import kin_presence
+    name = _AGENT_NAME
+    try:
+        body = await request.json()
+        name = (body.get("name") or name).strip() or _AGENT_NAME
+    except Exception:
+        pass
+    if kin_presence.entity_type(name) == "kin":
+        raise HTTPException(status_code=400, detail="Cannot dismiss a Kin")
+    kin_presence.dismiss(name)
+    return {"ok": True}
 
 
 @app.post("/api/agent/spawn")
 async def api_agent_spawn(request: Request, _=Depends(require_auth)):
+    global _agent_running
     body = await request.json()
     task = (body.get("task") or "").strip()
     if not task:
@@ -1261,29 +1305,41 @@ async def api_agent_spawn(request: Request, _=Depends(require_auth)):
     import kin_presence
 
     chosen = model or DEFAULT_MODEL
-    warning = await _agent_vram_warning(chosen)
 
-    try:
-        result = await run_task(task, model=model, api_key=api_key)
-    except Exception as e:
-        log.warning("agent spawn failed (%s): %s", chosen, e)
-        kin_presence.heartbeat("agent-default", "failed")
+    if _agent_running:
         return {
             "ok": False,
-            "error": str(e),
+            "busy": True,
+            "error": "An agent is already at the bench.",
+            "model": chosen,
+        }
+
+    _agent_running = True
+    kin_presence.heartbeat(_AGENT_NAME, "working")
+    try:
+        warning = await _agent_vram_warning(chosen)
+        try:
+            result = await run_task(task, model=model, api_key=api_key)
+        except Exception as e:
+            log.warning("agent spawn failed (%s): %s", chosen, e)
+            kin_presence.heartbeat(_AGENT_NAME, "failed")
+            return {
+                "ok": False,
+                "error": str(e),
+                "model": chosen,
+                "warning": warning,
+            }
+
+        kin_presence.record_thought_return(_AGENT_NAME, result, mode="agent_task")
+        kin_presence.heartbeat(_AGENT_NAME, "resting")
+        return {
+            "ok": True,
+            "result": result,
             "model": chosen,
             "warning": warning,
         }
-
-    kin_presence.record_thought_return("agent-default", result, mode="agent_task")
-    kin_presence.heartbeat("agent-default", "resting")
-
-    return {
-        "ok": True,
-        "result": result,
-        "model": chosen,
-        "warning": warning,
-    }
+    finally:
+        _agent_running = False
 
 
 @app.get("/about", response_class=HTMLResponse)

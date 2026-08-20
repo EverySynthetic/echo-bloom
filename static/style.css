@@ -191,9 +191,48 @@ a:hover { color: var(--text); }
   cursor: pointer;
 }
 .ctrl-btn:hover      { border-color: var(--text-dim); color: var(--text); }
+.ctrl-btn:disabled   { opacity: 0.35; pointer-events: none; }
 .ctrl-start:hover    { border-color: var(--green); color: var(--green); }
 .ctrl-stop:hover     { border-color: var(--red); color: var(--red); }
 .ctrl-bedtime:hover  { border-color: var(--amber); color: var(--amber); }
+
+.spawn-block {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.spawn-task {
+  width: 100%;
+  min-height: 56px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+.spawn-task:focus { outline: none; border-color: var(--amber); }
+.spawn-row { gap: 8px; }
+.spawn-model {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 5px 10px;
+  width: 220px;
+}
+.spawn-model:focus { outline: none; border-color: var(--amber); }
+.spawn-warn {
+  font-size: 11px;
+  color: var(--amber, #e6a817);
+}
+.spawn-err {
+  font-size: 11px;
+  color: var(--red);
+}
 
 /* ── Dashboard License ────────────────────────────────────────────── */
 
@@ -455,6 +494,78 @@ a:hover { color: var(--text); }
   transition: width 0.3s;
 }
 .kin-pull-status { font-size: 10px; color: var(--text-dim); }
+
+/* ── Agent bunks ──────────────────────────────────────────────────── */
+
+.bunk-section { margin-bottom: 32px; }
+.bunk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bunk-strip {
+  background: transparent;
+  border: 1px solid var(--border);
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color 0.2s, background 0.2s;
+}
+.bunk-strip:hover { border-color: var(--text-muted); background: var(--surface); }
+.bunk-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.bunk-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+.bunk-working .bunk-dot {
+  background: var(--amber);
+  box-shadow: 0 0 6px var(--amber);
+}
+.bunk-failed .bunk-dot { background: var(--red); }
+.bunk-name {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+}
+.bunk-status {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.1em;
+}
+.bunk-working .bunk-status { color: var(--amber); }
+.bunk-failed .bunk-status { color: var(--red); }
+.bunk-snippet {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-style: italic;
+  line-height: 1.5;
+  border-left: 2px solid var(--border);
+  padding-left: 8px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+.bunk-failed-msg {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.bunk-actions { display: flex; gap: 8px; }
+.bunk-dismiss {
+  cursor: pointer;
+  background: transparent;
+  --kin-color: var(--text-dim);
+}
 
 /* ── Kin detail page ──────────────────────────────────────────────── */
 

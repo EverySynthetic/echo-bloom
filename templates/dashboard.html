@@ -42,6 +42,20 @@
       <button class="ctrl-btn ctrl-stop"  onclick="stopRoundtable()">■ STOP</button>
       <button class="ctrl-btn ctrl-bedtime" onclick="triggerBedtime()">☽ BEDTIME RITUAL</button>
     </div>
+    <div class="spawn-block">
+      <textarea class="spawn-task" id="spawn-task" rows="3"
+                placeholder="A task for the bench…"></textarea>
+      <div class="control-row spawn-row">
+        <input class="spawn-model" id="spawn-model" type="text"
+               placeholder="{{ agent_default_model }}"
+               value=""
+               autocomplete="off" spellcheck="false"
+               oninput="scheduleVramCheck()">
+        <button class="ctrl-btn ctrl-start" id="spawn-go" onclick="spawnAgent()">GO</button>
+      </div>
+      <div class="spawn-warn" id="spawn-warn" hidden></div>
+      <div class="spawn-err" id="spawn-err" hidden></div>
+    </div>
   </section>
 
   <!-- License -->
@@ -108,6 +122,12 @@
       </div>
       {% endfor %}
     </div>
+  </section>
+
+  <!-- Agent bunks: presence-driven, hidden when empty -->
+  <section class="bunk-section" id="bunk-section" hidden>
+    <div class="section-header">AT THE BENCH</div>
+    <div class="bunk-list" id="bunk-list"></div>
   </section>
 
 </div>
@@ -332,6 +352,174 @@ async function triggerBedtime() {
 
 checkRoundtable();
 setInterval(checkRoundtable, 30000);
+
+// ── Agent spawn / bunk ────────────────────────────────────────────────────────
+
+const AGENT_LINGER_MS = 30 * 60 * 1000;
+const AGENT_WORKING = new Set(['working', 'thinking', 'completed-local', 'completed-external']);
+let _vramTimer = null;
+let _bunkTimer = null;
+let _spawning = false;
+
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+function scheduleVramCheck() {
+  clearTimeout(_vramTimer);
+  _vramTimer = setTimeout(checkVram, 300);
+}
+
+async function checkVram() {
+  const model = (document.getElementById('spawn-model').value || '').trim();
+  const warn = document.getElementById('spawn-warn');
+  try {
+    const q = model ? ('?model=' + encodeURIComponent(model)) : '';
+    const r = await fetch('/api/agent/vram-check' + q);
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.warning) {
+      warn.hidden = false;
+      warn.textContent = d.warning;
+    } else {
+      warn.hidden = true;
+      warn.textContent = '';
+    }
+  } catch(e) {}
+}
+
+function agentAgeMs(p) {
+  if (typeof p.last_heartbeat === 'number' && p.last_heartbeat > 0) {
+    return Date.now() - p.last_heartbeat * 1000;
+  }
+  if (p.ts) {
+    const t = Date.parse(p.ts);
+    if (!Number.isNaN(t)) return Date.now() - t;
+  }
+  return Infinity;
+}
+
+function bunkStatusLabel(p) {
+  const s = p.status || '';
+  if (AGENT_WORKING.has(s)) return 'WORKING';
+  if (s === 'failed') return 'FAILED';
+  if (s === 'resting' || s === 'present' || p.presence === 'returned') return 'RETURNED';
+  return s.toUpperCase() || 'HERE';
+}
+
+function renderBunks(presenceMap) {
+  const section = document.getElementById('bunk-section');
+  const list = document.getElementById('bunk-list');
+  const agents = Object.values(presenceMap || {}).filter(p => {
+    if ((p.entity_type || '') !== 'agent') return false;
+    if (agentAgeMs(p) > AGENT_LINGER_MS) return false;
+    return true;
+  });
+  if (!agents.length) {
+    section.hidden = true;
+    list.innerHTML = '';
+    return;
+  }
+  section.hidden = false;
+  list.innerHTML = agents.map(p => {
+    const name = p.kin || p.name || 'agent';
+    const working = AGENT_WORKING.has(p.status);
+    const failed = p.status === 'failed';
+    const snippet = (p.latest_snippet || p.thought || '').trim();
+    const showSnippet = snippet && !failed && !working;
+    return `
+      <div class="bunk-strip${working ? ' bunk-working' : ''}${failed ? ' bunk-failed' : ''}" data-agent-name="${escHtml(name)}">
+        <div class="bunk-header">
+          <span class="bunk-dot"></span>
+          <span class="bunk-name">${escHtml(name)}</span>
+          <span class="bunk-status">${bunkStatusLabel(p)}</span>
+        </div>
+        ${showSnippet ? `<div class="bunk-snippet">"${escHtml(snippet)}"</div>` : ''}
+        ${failed ? `<div class="bunk-failed-msg">Last task failed — nothing written to the vault.</div>` : ''}
+        <div class="bunk-actions">
+          <a href="/vault?author=${encodeURIComponent(name)}" class="kin-btn">VAULT</a>
+          <button class="kin-btn bunk-dismiss" type="button" onclick="dismissAgent('${escHtml(name)}')">DISMISS</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function loadBunks() {
+  try {
+    const r = await fetch('/api/presence');
+    if (!r.ok) return;
+    const d = await r.json();
+    renderBunks(d.presence || {});
+    const working = Object.values(d.presence || {}).some(
+      p => p.entity_type === 'agent' && AGENT_WORKING.has(p.status)
+    );
+    setBunkPoll(working || _spawning);
+  } catch(e) {}
+}
+
+function setBunkPoll(fast) {
+  clearInterval(_bunkTimer);
+  _bunkTimer = setInterval(loadBunks, fast ? 2000 : 10000);
+}
+
+async function spawnAgent() {
+  const err = document.getElementById('spawn-err');
+  const go = document.getElementById('spawn-go');
+  const task = (document.getElementById('spawn-task').value || '').trim();
+  const model = (document.getElementById('spawn-model').value || '').trim();
+  err.hidden = true;
+  err.textContent = '';
+  if (!task) {
+    err.hidden = false;
+    err.textContent = 'Empty task';
+    return;
+  }
+  if (_spawning) return;
+  _spawning = true;
+  go.disabled = true;
+  setBunkPoll(true);
+  try {
+    const r = await fetch('/api/agent/spawn', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({task, model: model || undefined}),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (d.warning) {
+      const warn = document.getElementById('spawn-warn');
+      warn.hidden = false;
+      warn.textContent = d.warning;
+    }
+    if (!r.ok || !d.ok) {
+      err.hidden = false;
+      err.textContent = d.error || 'Spawn failed';
+    }
+  } catch(e) {
+    err.hidden = false;
+    err.textContent = String(e.message || e);
+  } finally {
+    _spawning = false;
+    go.disabled = false;
+    await loadBunks();
+  }
+}
+
+async function dismissAgent(name) {
+  try {
+    await fetch('/api/agent/dismiss', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name}),
+    });
+  } catch(e) {}
+  await loadBunks();
+}
+
+checkVram();
+loadBunks();
+setBunkPoll(false);
 
 // ── Model pull ────────────────────────────────────────────────────────────────
 
