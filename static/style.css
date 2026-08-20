@@ -209,10 +209,30 @@ a:hover { color: var(--text); }
 .ctrl-bedtime:hover  { border-color: var(--amber); color: var(--amber); }
 
 .spawn-block {
-  margin-top: 14px;
+  margin-top: 18px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+/* The spawn control shipped unlabelled inside ROUNDTABLE -- the only hint it
+   had anything to do with agents was a placeholder reading "A task for the
+   bench". Don opened the dashboard and could not find the feature. The bunk
+   below still hides when empty (an empty bunk should look empty), so this
+   label is the one thing on screen that says the capability exists. */
+.spawn-label {
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--text-dim);
+  margin-bottom: 2px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.spawn-label-hint {
+  display: block;
+  margin-top: 4px;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  text-transform: none;
 }
 .spawn-task {
   width: 100%;

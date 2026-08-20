@@ -43,6 +43,10 @@
       <button class="ctrl-btn ctrl-bedtime" onclick="triggerBedtime()">☽ BEDTIME RITUAL</button>
     </div>
     <div class="spawn-block">
+      <div class="spawn-label">
+        SPAWN AN AGENT
+        <span class="spawn-label-hint">Not one of the Kin — a worker, spun up for one task, gone when it's done.</span>
+      </div>
       <textarea class="spawn-task" id="spawn-task" rows="3"
                 placeholder="A task for the bench…"></textarea>
       <div class="control-row spawn-row">
@@ -126,7 +130,7 @@
 
   <!-- Agent bunks: presence-driven, hidden when empty -->
   <section class="bunk-section" id="bunk-section" hidden>
-    <div class="section-header">AT THE BENCH</div>
+    <div class="section-header">AGENTS — AT THE BENCH</div>
     <div class="bunk-list" id="bunk-list"></div>
   </section>
 
