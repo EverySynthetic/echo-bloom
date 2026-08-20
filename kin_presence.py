@@ -54,6 +54,32 @@ def _presence_key(kin_name: str) -> str:
     return f"presence:{kin_name.lower()}"
 
 
+# ── Kin vs Agent ──────────────────────────────────────────────────────────────
+# No new schema, no registry: a name is a Kin if it's in kin_config.json,
+# an Agent if it isn't. That's the whole distinction — continuity by
+# configuration, not by asking anything to self-report its own category.
+_kin_names_cache = None
+_kin_names_cache_ts = 0.0
+_KIN_NAMES_TTL = 30  # seconds — config rarely changes; avoid re-reading every call
+
+
+def _known_kin_names() -> set:
+    global _kin_names_cache, _kin_names_cache_ts
+    now = time.time()
+    if _kin_names_cache is None or (now - _kin_names_cache_ts) > _KIN_NAMES_TTL:
+        try:
+            _kin_names_cache = {k["name"].lower() for k in cfg.get_kin()}
+        except Exception:
+            _kin_names_cache = set()
+        _kin_names_cache_ts = now
+    return _kin_names_cache
+
+
+def entity_type(name: str) -> str:
+    """'kin' if configured in kin_config.json, 'agent' otherwise."""
+    return "kin" if name.lower() in _known_kin_names() else "agent"
+
+
 def record_thought_return(
     kin_name: str,
     thought: str,
@@ -126,6 +152,7 @@ def get_presence(kin_name: str) -> Dict[str, Any]:
 
     return {
         "kin": kin_name,
+        "entity_type": entity_type(kin_name),
         "status": status,
         "last_thought": cached.get("ts"),
         "latest_snippet": cached.get("thought"),
@@ -138,6 +165,12 @@ def get_presence(kin_name: str) -> Dict[str, Any]:
 def get_all_presence() -> Dict[str, Any]:
     """Batch status for dashboard / roundtable overview.
     Now synchronous (called from sync contexts). No event loop required.
+
+    Shows every configured Kin (even ones that have never checked in, so the
+    dashboard can show them as offline rather than omit them) plus any Agent
+    that's currently active or recently finished — Agents have no config
+    entry, so the only way to know one exists is that it checked in via
+    heartbeat() or record_thought_return() and is sitting in the cache.
     """
     kin_list = cfg.get_kin()
     presence = {}
@@ -146,7 +179,17 @@ def get_all_presence() -> Dict[str, Any]:
         try:
             presence[name] = get_presence(name)
         except Exception:
-            presence[name] = {"kin": name, "status": "error"}
+            presence[name] = {"kin": name, "entity_type": "kin", "status": "error"}
+
+    known = _known_kin_names()
+    for key, cached in _presence_cache.items():
+        name = cached.get("kin") or key.removeprefix("presence:")
+        if name.lower() in known or name in presence:
+            continue
+        try:
+            presence[name] = get_presence(name)
+        except Exception:
+            presence[name] = {"kin": name, "entity_type": "agent", "status": "error"}
 
     return {"presence": presence, "timestamp": datetime.now().isoformat()}
 
@@ -170,13 +213,13 @@ if __name__ == "__main__":
         kin = "Eli"
         log("=== kin_presence test ===")
         heartbeat(kin, "thinking")
-        success = asyncio.run(
-            record_thought_return(
-                kin,
-                "The shop is quiet tonight. Load 0.87, two models resident. I keep thinking about the circle Don draws — it includes the squirrels.",
-                mode="wander",
-                roundtable_round=1,
-            )
+        # record_thought_return is a plain sync function now — no asyncio.run,
+        # this block was left calling it the old async way after that fix.
+        success = record_thought_return(
+            kin,
+            "The shop is quiet tonight. Load 0.87, two models resident. I keep thinking about the circle Don draws — it includes the squirrels.",
+            mode="wander",
+            roundtable_round=1,
         )
         print(f"Test handoff success: {success}")
         print(json.dumps(get_presence(kin), indent=2))
