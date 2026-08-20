@@ -522,7 +522,7 @@ a:hover { color: var(--text); }
   display: flex;
   flex-direction: column;
   gap: 8px;
-  transition: border-color 0.2s, background 0.2s;
+  transition: border-color var(--transition), background var(--transition);
 }
 .bunk-strip:hover { border-color: var(--text-muted); background: var(--surface); }
 .bunk-header {
