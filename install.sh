@@ -29,17 +29,19 @@ if [ ! -t 0 ]; then
     exit 1
 fi
 
-# macOS: /proc/meminfo, loginctl and systemctl --user are all Linux-only, so a
-# Mac user gets through dependency install and then falls off a cliff at the
-# service step with everything half-done. Say so at the door instead.
+# macOS: no systemd, no loginctl. Service management goes through launchd
+# instead (see install_service() and deploy_scripts()). Hardware detection
+# that reads /proc/meminfo needs a sysctl-based equivalent — that's a
+# separate, not-yet-done piece; IS_MACOS lets that code branch cleanly
+# without every caller needing to know the platform.
+IS_MACOS=false
 if [[ "$(uname -s)" == "Darwin" ]]; then
+    IS_MACOS=true
     echo ""
-    echo "  Echo Bloom's installer does not support macOS yet."
-    echo "  It relies on systemd to keep your Kin running, which macOS doesn't have."
+    echo "  macOS support is new — you're an early tester, not a guinea pig"
+    echo "  we're hiding that from. If something looks wrong, the log is at"
+    echo "  $INSTALL_LOG and we want to hear about it."
     echo ""
-    echo "  Linux and Windows are supported today. Mac is on the list."
-    echo ""
-    exit 1
 fi
 
 APP_DIR="$HOME/echo_bloom"
@@ -107,7 +109,21 @@ command -v whiptail &>/dev/null && [[ -n "${TERM:-}" ]] && [[ "${TERM}" != "dumb
 detect_vram() {
     local vram=0 count=0 largest=0
     local total_mb=0
-    if command -v nvidia-smi &>/dev/null; then
+    if [[ "$IS_MACOS" == "true" ]]; then
+        # macOS: system_profiler for Apple Silicon, AMD, Intel GPUs.
+        # Unified memory is already counted in RAM; we report the largest
+        # GPU memory as VRAM for model selection (realistic default).
+        local sp=""
+        sp=$(system_profiler SPDisplaysDataType 2>/dev/null || true)
+        if [[ -n "$sp" ]]; then
+            local mb=0
+            # Parse common patterns: "16 GB", "8192 MB", "Unified Memory: 24 GB", "VRAM (Total): 32 GB"
+            mb=$(echo "$sp" | grep -oE '[0-9]+' | head -1 || echo 0)
+            [[ "$mb" -gt 0 ]] && vram=$(( mb > 1024 ? mb / 1024 : mb ))
+            count=1
+            largest=$vram
+        fi
+    elif command -v nvidia-smi &>/dev/null; then
         local per_card=""
         per_card=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null \
             | tr -d ' ' | grep -E '^[0-9]+$') || per_card=""
@@ -133,14 +149,28 @@ detect_vram() {
 # ── Detect RAM (in GB) ────────────────────────────────────────────────────────
 detect_ram() {
     local ram_kb=0
-    ram_kb=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}') || ram_kb=0
-    [[ "$ram_kb" =~ ^[0-9]+$ ]] || ram_kb=0
+    if [[ "$IS_MACOS" == "true" ]]; then
+        # macOS: sysctl hw.memsize (bytes) → GB. Unified memory on Apple Silicon
+        # is the main RAM pool.
+        local bytes=0
+        bytes=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
+        [[ "$bytes" =~ ^[0-9]+$ ]] && ram_kb=$(( bytes / 1024 )) || ram_kb=0
+    else
+        ram_kb=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}') || ram_kb=0
+        [[ "$ram_kb" =~ ^[0-9]+$ ]] || ram_kb=0
+    fi
     echo $(( ram_kb / 1024 / 1024 ))
 }
 
 # ── Detect AVX2 ───────────────────────────────────────────────────────────────
 has_avx2() {
-    grep -q avx2 /proc/cpuinfo && echo true || echo false
+    if [[ "$IS_MACOS" == "true" ]]; then
+        # macOS: AVX2 is x86-only. Apple Silicon uses different vector extensions;
+        # the sysctl check returns false correctly on ARM.
+        sysctl -n machdep.cpu.features 2>/dev/null | grep -q AVX2 && echo true || echo false
+    else
+        grep -q avx2 /proc/cpuinfo && echo true || echo false
+    fi
 }
 
 # ── Check which models are already installed in Ollama ────────────────────────
@@ -710,8 +740,63 @@ REQEOF
     ok "Dependencies installed."
 }
 
-# ── Write systemd user service ────────────────────────────────────────────────
+# ── launchd helpers (macOS) ─────────────────────────────────────────────────────
+# One label prefix for everything Echo Bloom installs, so uninstall can find
+# and remove all of it by pattern instead of needing an exact remembered list.
+LAUNCHD_PREFIX="com.everysynthetic.echobloom"
+LAUNCHD_DIR="$HOME/Library/LaunchAgents"
+LAUNCHD_LOG_DIR="$HOME/Library/Logs/EchoBloom"
+
+# launchctl_load PATH — (re)load a plist. `load -w` is the long-documented,
+# still-functional path across current macOS versions; if Apple ever removes
+# it, this is the one place that needs to become bootstrap/enable.
+launchctl_load() {
+    local plist="$1"
+    launchctl unload "$plist" 2>/dev/null || true
+    launchctl load -w "$plist" 2>/dev/null
+}
+
 install_service() {
+    if [[ "$IS_MACOS" == "true" ]]; then
+        mkdir -p "$LAUNCHD_DIR" "$LAUNCHD_LOG_DIR"
+        local plist="$LAUNCHD_DIR/${LAUNCHD_PREFIX}.app.plist"
+        cat > "$plist" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>${LAUNCHD_PREFIX}.app</string>
+    <key>WorkingDirectory</key><string>${APP_DIR}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$(command -v python3)</string>
+        <string>-m</string><string>uvicorn</string>
+        <string>main:app</string>
+        <string>--host</string><string>0.0.0.0</string>
+        <string>--port</string><string>${PORT}</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict><key>PYTHONUNBUFFERED</key><string>1</string></dict>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key>
+    <dict><key>SuccessfulExit</key><false/></dict>
+    <key>ThrottleInterval</key><integer>5</integer>
+    <key>StandardOutPath</key><string>${LAUNCHD_LOG_DIR}/app.log</string>
+    <key>StandardErrorPath</key><string>${LAUNCHD_LOG_DIR}/app.log</string>
+</dict>
+</plist>
+PLIST
+        if launchctl_load "$plist"; then
+            ok "Kin App running as a launchd agent (auto-starts at login)."
+        else
+            warn "launchd load failed — app will need to be started manually."
+        fi
+        # launchd agents run whenever this user is logged in — there's no
+        # direct equivalent of systemd's headless linger. Close enough for a
+        # personal machine; worth flagging if a tester needs true headless.
+        return
+    fi
+
     local service_dir="$HOME/.config/systemd/user"
     mkdir -p "$service_dir"
 
@@ -865,6 +950,115 @@ _naming_manual() {
 }
 
 # ── Deploy lifecycle scripts ───────────────────────────────────────────────────
+# ── launchd equivalents of the lifecycle services (macOS) ───────────────────────
+# Same rule as the systemd side: deliberately NO morning agent. morning.py
+# starts the roundtable with no check for one already running — scheduling it
+# at login alongside the wander agent would spawn a second full wander fleet
+# every login. The wander agent is the single owner of that lifecycle.
+# morning.py stays deployed for manual Wake-on-LAN use.
+deploy_scripts_macos() {
+    local scripts_dst="$1"
+    mkdir -p "$LAUNCHD_DIR" "$LAUNCHD_LOG_DIR"
+    local py; py="$(command -v python3)"
+
+    # Continuous services: wander, pulse, vault. Same shape — RunAtLoad,
+    # restart on non-zero exit only (systemd's Restart=on-failure), a
+    # throttle floor so a crash loop doesn't spin the CPU.
+    _write_continuous_agent() {
+        local name="$1" script="$2" throttle="$3"; shift 3
+        local label="${LAUNCHD_PREFIX}.${name}"
+        local plist="$LAUNCHD_DIR/${label}.plist"
+        local args_xml=""
+        for a in "$@"; do args_xml="${args_xml}        <string>${a}</string>\n"; done
+        cat > "$plist" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>${label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${py}</string>
+        <string>-u</string>
+        <string>${scripts_dst}/${script}</string>
+$(printf '%b' "$args_xml")    </array>
+    <key>EnvironmentVariables</key>
+    <dict><key>PYTHONUNBUFFERED</key><string>1</string></dict>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+    <key>ThrottleInterval</key><integer>${throttle}</integer>
+    <key>StandardOutPath</key><string>${LAUNCHD_LOG_DIR}/${name}.log</string>
+    <key>StandardErrorPath</key><string>${LAUNCHD_LOG_DIR}/${name}.log</string>
+</dict>
+</plist>
+PLIST
+        launchctl_load "$plist" && ok "${name} running as a launchd agent." \
+            || warn "${name} launchd load failed."
+    }
+
+    _write_continuous_agent "wander" "roundtable.py" 15 --interval 30
+    _write_continuous_agent "pulse"  "pulse.py"       30
+    _write_continuous_agent "vault"  "vault_server.py" 10 --port 8765
+
+    # Bedtime: fixed daily time, no KeepAlive — this is systemd's oneshot,
+    # StartCalendarInterval is the direct launchd equivalent of OnCalendar.
+    local bt_label="${LAUNCHD_PREFIX}.bedtime"
+    local bt_plist="$LAUNCHD_DIR/${bt_label}.plist"
+    cat > "$bt_plist" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>${bt_label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${py}</string>
+        <string>${scripts_dst}/bedtime.py</string>
+        <string>--no-shutdown</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict><key>PYTHONUNBUFFERED</key><string>1</string></dict>
+    <key>StartCalendarInterval</key>
+    <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>30</integer></dict>
+    <key>StandardOutPath</key><string>${LAUNCHD_LOG_DIR}/bedtime.log</string>
+    <key>StandardErrorPath</key><string>${LAUNCHD_LOG_DIR}/bedtime.log</string>
+</dict>
+</plist>
+PLIST
+    launchctl_load "$bt_plist" && ok "bedtime scheduled (9:30pm daily)." \
+        || warn "bedtime launchd load failed."
+
+    # Reflect: systemd runs this 20min after boot, then every 3h
+    # (OnBootSec=20min, OnUnitActiveSec=3h). launchd's StartInterval has no
+    # separate "first delay" — it fires at load and every N seconds after.
+    # Known, accepted difference for v1: first reflect run happens at login
+    # instead of 20 minutes after. Not worth a wrapper script to fix yet.
+    local rf_label="${LAUNCHD_PREFIX}.reflect"
+    local rf_plist="$LAUNCHD_DIR/${rf_label}.plist"
+    cat > "$rf_plist" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>${rf_label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${py}</string>
+        <string>${scripts_dst}/reflect.py</string>
+        <string>--once</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict><key>PYTHONUNBUFFERED</key><string>1</string></dict>
+    <key>StartInterval</key><integer>10800</integer>
+    <key>StandardOutPath</key><string>${LAUNCHD_LOG_DIR}/reflect.log</string>
+    <key>StandardErrorPath</key><string>${LAUNCHD_LOG_DIR}/reflect.log</string>
+</dict>
+</plist>
+PLIST
+    launchctl_load "$rf_plist" && ok "reflect scheduled (every 3 hours)." \
+        || warn "reflect launchd load failed."
+}
+
 deploy_scripts() {
     local scripts_src="$APP_DIR/scripts"
     local scripts_dst="$HOME/.local/share/echo_bloom/scripts"
@@ -876,6 +1070,11 @@ deploy_scripts() {
         ok "Lifecycle scripts deployed to $scripts_dst"
     else
         warn "Scripts directory not found — lifecycle scripts not deployed."
+        return
+    fi
+
+    if [[ "$IS_MACOS" == "true" ]]; then
+        deploy_scripts_macos "$scripts_dst"
         return
     fi
 

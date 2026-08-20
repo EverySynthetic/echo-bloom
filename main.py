@@ -57,53 +57,87 @@ def get_hw_caps() -> dict:
 
     # ── VRAM ──────────────────────────────────────────────────────────────────
     vram_mb = 0
-    try:
-        r = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if r.returncode == 0:
-            vram_mb = sum(int(x.strip()) for x in r.stdout.strip().split("\n") if x.strip().isdigit())
-    except Exception:
-        pass
-
-    if vram_mb == 0 and sys.platform == "win32":
-        # WMI fallback for Windows (covers AMD / integrated)
+    if sys.platform == "darwin":
+        try:
+            # macOS: system_profiler for Apple Silicon / AMD / Intel GPUs.
+            # Unified memory is already counted in ram_gb above; we treat it
+            # as effective VRAM for model selection (realistic default).
+            r = subprocess.run(
+                ["system_profiler", "SPDisplaysDataType", "-json"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0:
+                import json
+                data = json.loads(r.stdout)
+                for disp in data.get("SPDisplaysDataType", []):
+                    vram = disp.get("spdisplays_vram") or disp.get("spdisplays_gfxmem")
+                    if isinstance(vram, str):
+                        vram = int("".join(c for c in vram if c.isdigit())) or 0
+                    if vram and vram > vram_mb:
+                        vram_mb = vram
+        except Exception:
+            pass
+    else:
         try:
             r = subprocess.run(
-                ["powershell", "-Command",
-                 "(Get-WmiObject Win32_VideoController | Measure-Object AdapterRAM -Sum).Sum"],
-                capture_output=True, text=True, timeout=6,
+                ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5,
             )
-            if r.returncode == 0 and r.stdout.strip().isdigit():
-                vram_mb = int(r.stdout.strip()) // (1024 * 1024)
+            if r.returncode == 0:
+                vram_mb = sum(int(x.strip()) for x in r.stdout.strip().split("\n") if x.strip().isdigit())
         except Exception:
             pass
 
+        if vram_mb == 0 and sys.platform == "win32":
+            # WMI fallback for Windows (covers AMD / integrated)
+            try:
+                r = subprocess.run(
+                    ["powershell", "-Command",
+                     "(Get-WmiObject Win32_VideoController | Measure-Object AdapterRAM -Sum).Sum"],
+                    capture_output=True, text=True, timeout=6,
+                )
+                if r.returncode == 0 and r.stdout.strip().isdigit():
+                    vram_mb = int(r.stdout.strip()) // (1024 * 1024)
+            except Exception:
+                pass
+
     # ── RAM ───────────────────────────────────────────────────────────────────
     ram_gb = 0.0
-    try:
-        with open("/proc/meminfo") as f:
-            for line in f:
-                if line.startswith("MemTotal:"):
-                    ram_gb = int(line.split()[1]) / (1024 * 1024)
-                    break
-    except Exception:
-        pass
-
-    if ram_gb == 0.0 and sys.platform == "win32":
+    if sys.platform == "darwin":
         try:
+            # macOS: sysctl hw.memsize (bytes). Unified memory on Apple Silicon
+            # is treated as both RAM and effective VRAM for model loading.
             r = subprocess.run(
-                ["powershell", "-Command",
-                 "(Get-WmiObject -Class Win32_ComputerSystem).TotalPhysicalMemory"],
-                capture_output=True, text=True, timeout=6,
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True, text=True, timeout=3,
             )
             if r.returncode == 0 and r.stdout.strip().isdigit():
                 ram_gb = int(r.stdout.strip()) / (1024 ** 3)
         except Exception:
             pass
+    else:
+        try:
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        ram_gb = int(line.split()[1]) / (1024 * 1024)
+                        break
+        except Exception:
+            pass
 
-    if vram_mb == 0:
+        if ram_gb == 0.0 and sys.platform == "win32":
+            try:
+                r = subprocess.run(
+                    ["powershell", "-Command",
+                     "(Get-WmiObject -Class Win32_ComputerSystem).TotalPhysicalMemory"],
+                    capture_output=True, text=True, timeout=6,
+                )
+                if r.returncode == 0 and r.stdout.strip().isdigit():
+                    ram_gb = int(r.stdout.strip()) / (1024 ** 3)
+            except Exception:
+                pass
+
+    if vram_mb == 0 and sys.platform != "darwin":
         log.warning("VRAM detection failed on every method — vision will show as unavailable")
     if ram_gb == 0.0:
         log.warning("RAM detection failed on every method — speech will show as unavailable")
@@ -112,9 +146,10 @@ def get_hw_caps() -> dict:
         "vram_mb":   vram_mb,
         "vram_gb":   round(vram_mb / 1024, 1),
         "ram_gb":    round(ram_gb, 1),
-        "vision_ok": vram_mb >= 8192,   # 8 GB VRAM minimum
-        "speech_ok": ram_gb >= 8.0,     # 8 GB system RAM minimum
+        "vision_ok": vram_mb >= 8192 or (sys.platform == "darwin" and ram_gb >= 8.0),
+        "speech_ok": ram_gb >= 8.0,
         "fetch_ok":  True,
+        "platform":  sys.platform,
     }
     return _hw_caps_cache
 
