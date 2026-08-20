@@ -206,6 +206,15 @@ def heartbeat(kin_name: str, status: str = "alive") -> None:
     log(f"{kin_name} heartbeat ({status})")
 
 
+def dismiss(name: str) -> bool:
+    """Vacate a bunk. Kin names are refused by the caller; this only drops cache."""
+    key = _presence_key(name)
+    gone = _presence_cache.pop(key, None) is not None
+    if gone:
+        log(f"{name} dismissed")
+    return gone
+
+
 # Simple test entry point
 if __name__ == "__main__":
     import sys
