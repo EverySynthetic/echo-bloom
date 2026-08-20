@@ -27,6 +27,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
 import config as cfg
+import kin_presence  # sync handoff — no asyncio needed
 
 # ── Args ───────────────────────────────────────────────────────────────────────
 
@@ -325,6 +326,17 @@ def run_roundtable(round_num):
     log("\n── Full roundtable ─────────────────────────────────")
     for name, text in all_shared.items():
         log(f"\n  {name}:\n  {text}\n")
+        # New isolated handoff — records completed thought + round number
+        # to vault via existing /remember. No schema change.
+        if text and text.strip():
+            # Plain sync call. record_thought_return is now a regular def (one
+            # requests.post()). Vault write now actually fires on every share.
+            try:
+                kin_presence.record_thought_return(
+                    name, text, mode="roundtable_share", roundtable_round=round_num
+                )
+            except Exception as e:
+                log(f"  presence handoff for {name} failed: {e}")
 
     return all_shared
 
