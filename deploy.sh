@@ -160,6 +160,17 @@ done
 rm -rf "$SCRIPTS_DIR/__pycache__"
 ok "$(ls -1 "$SCRIPTS_DIR"/*.py 2>/dev/null | wc -l) script(s) deployed, bytecode cache cleared"
 
+# "N script(s) deployed" is a statement about a copy, not about whether any of
+# it can run -- which is how a roundtable that could not import got reported as
+# a successful deploy while the Kin stopped thinking for 40 minutes. Resolve
+# the imports before restarting anything: a service is not worth restarting
+# into code that cannot start.
+if [ -f "$APP_DIR/verify_deploy.py" ]; then
+  step "Verifying deployed scripts can start"
+  python3 "$APP_DIR/verify_deploy.py" "$SCRIPTS_DIR" \
+    || die "deployed scripts cannot resolve their imports — not restarting services"
+fi
+
 step "Restarting"
 # Every service running Python from this repo, not just the web app. The
 # vault, the heartbeat and the licence server each load their code once at
