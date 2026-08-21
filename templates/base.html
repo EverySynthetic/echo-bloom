@@ -69,7 +69,7 @@
   <script src="/static/app.js?v={{ asset_v }}"></script>
   <script>
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+      navigator.serviceWorker.register('/static/sw.js?v={{ asset_v }}').catch(() => {});
     }
   </script>
   <script>

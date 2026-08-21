@@ -1,10 +1,14 @@
 // Echo Bloom Service Worker
-const CACHE = 'echo-bloom-v2';
+const CACHE = 'echo-bloom-v3';
 
+// Do not precache /static/app.js or style.css. Pages request them as
+// /static/app.js?v=VERSION (9573151). Precaching the unversioned URL is
+// how a shipped ebFetch never reached the browser: the SW's fetch() hits
+// the HTTP disk cache, gets 200, and treats stale as "network succeeded".
+// Query-string URLs are a different cache key; they populate on first
+// real request via the handler below. Manifest and icon are unversioned
+// on purpose and change rarely.
 const PRECACHE = [
-  '/',
-  '/static/style.css',
-  '/static/app.js',
   '/static/manifest.json',
   '/static/icons/icon-192.png',
 ];
