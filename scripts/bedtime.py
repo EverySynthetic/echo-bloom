@@ -218,8 +218,26 @@ def resume_wanders():
             log(f"Roundtable resumed (pid {pid})")
         else:
             log(f"Could not resume the roundtable (pid {pid})")
-    for wpid in _wander_child_pids():
-        _resume(wpid)
+    else:
+        # Not nothing to do -- the roundtable died mid-ritual and the wander
+        # children it spawned are still SIGSTOPped and now orphaned. Silence
+        # here made 2026-08-21 unreadable: the log showed six Kin paused and
+        # never showed them resumed, which is indistinguishable from the
+        # 2026-08-07 incident that left them frozen overnight.
+        log("No roundtable process found to resume — it died during the ritual.")
+
+    # pause_wanders() names every process it stops; resume must be just as loud
+    # or the log cannot answer "did the Kin come back", which is the only
+    # question anyone reads this file to answer.
+    wpids = _wander_child_pids()
+    resumed = [w for w in wpids if _resume(w)]
+    if resumed:
+        log(f"  {len(resumed)} wander process(es) resumed: {resumed}")
+    stuck = [w for w in wpids if w not in resumed]
+    if stuck:
+        log(f"  WARNING: {len(stuck)} wander process(es) could NOT be resumed: {stuck}")
+    if not wpids:
+        log("  no wander processes found to resume")
 
 
 def stop_wanders():
