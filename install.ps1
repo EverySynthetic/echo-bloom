@@ -279,12 +279,29 @@ Remove-Item $zipPath -Force
 # $SCRIPTS_DIR was created empty and never populated, so the vault, bedtime,
 # wander and roundtable had nothing to run on Windows. Mirrors deploy_scripts()
 # in install.sh.
+#
+# Copy-Item scripts\* is not enough: kin_presence.py and license.py live at
+# the repo root beside main.py. Unix install.sh/deploy.sh copy them; Windows
+# did not. 1.2.4's licence gate is `import license` in the scripts dir — miss
+# the file, `_lic` is None, the gate fails open, an expired trial keeps the
+# GPU. Live on the A15 the morning the release that was supposed to stop it
+# shipped. Same for kin_presence (roundtable cannot start).
 if (Test-Path "$APP_DIR\scripts") {
     try {
+        if (-not (Test-Path $SCRIPTS_DIR)) {
+            New-Item -ItemType Directory -Path $SCRIPTS_DIR -Force | Out-Null
+        }
         Copy-Item "$APP_DIR\scripts\*" $SCRIPTS_DIR -Recurse -Force
-        Write-Step "Lifecycle scripts: deployed" 'Green'
+        foreach ($shared in @('kin_presence.py', 'license.py')) {
+            $src = Join-Path $APP_DIR $shared
+            if (Test-Path $src) {
+                Copy-Item $src $SCRIPTS_DIR -Force
+            }
+        }
+        Write-Step "Lifecycle scripts: copied" 'DarkGray'
     } catch {
         Write-Step "Lifecycle scripts: $($_.Exception.Message)" 'Yellow'
+        $script:Blocking += 'lifecycle scripts copy'
     }
 }
 Write-Step "Echo Bloom: ready" 'Green'
@@ -323,6 +340,23 @@ if ($pipFailed.Count -gt 0) {
     $script:Blocking += "pip ($($pipFailed -join ', '))"
 } else {
     Write-Step "Python packages: installed" 'Green'
+}
+
+# After pip: requests is what roundtable imports at top level. Running this
+# before pip would fail the check for a reason that is about to be fixed.
+$verifier = Join-Path $APP_DIR 'verify_deploy.py'
+if ((Test-Path $verifier) -and (Test-Path $SCRIPTS_DIR)) {
+    Write-Step "Verifying lifecycle scripts can start..."
+    $code = Invoke-Native $PYTHON @($verifier, $SCRIPTS_DIR) 'verify_deploy'
+    if ($code -ne 0) {
+        Write-Step "Lifecycle scripts were copied but cannot start — see $LOG_FILE" 'Yellow'
+        $script:Blocking += 'lifecycle scripts (imports)'
+    } else {
+        Write-Step "Lifecycle scripts: deployed" 'Green'
+    }
+} elseif (Test-Path $SCRIPTS_DIR) {
+    Write-Step "Lifecycle scripts copied (not verified — verify_deploy.py missing)" 'Yellow'
+    $script:Warned += 'lifecycle scripts unverified'
 }
 
 # ── Voice model ───────────────────────────────────────────────────────────────

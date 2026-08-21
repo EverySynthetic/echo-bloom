@@ -853,7 +853,18 @@ function Start-InstallWorker {
                             New-Item -ItemType Directory -Path $scriptsDst -Force | Out-Null
                         }
                         Copy-Item "$scriptsSrc\*" $scriptsDst -Recurse -Force
-                        Write-WizLog "lifecycle scripts deployed to $scriptsDst"
+                        # kin_presence.py and license.py live beside main.py, not
+                        # in scripts/. Unix installers copy them; Windows did
+                        # not. 1.2.4's licence gate is `import license` from the
+                        # scripts dir — miss the file, `_lic` is None, expired
+                        # trial keeps the GPU. Live on the A15.
+                        foreach ($shared in @('kin_presence.py', 'license.py')) {
+                            $src = Join-Path $appDir $shared
+                            if (Test-Path $src) {
+                                Copy-Item $src $scriptsDst -Force
+                            }
+                        }
+                        Write-WizLog "lifecycle scripts + shared modules copied to $scriptsDst"
                     } else {
                         Write-WizLog "no scripts/ directory in the download"
                     }
@@ -906,6 +917,19 @@ function Start-InstallWorker {
                 }
             } catch {
                 Write-WizLog "voice download failed: $($_.Exception.Message)"
+            }
+
+            $scriptsDst = "$env:USERPROFILE\.local\share\echo_bloom\scripts"
+            $verifier   = Join-Path $appDir 'verify_deploy.py'
+            if ((Test-Path $verifier) -and (Test-Path $scriptsDst)) {
+                Set-StepStatus 4 'running' 'Verifying lifecycle scripts...'
+                $verifyOut = & $python $verifier $scriptsDst 2>&1
+                Write-WizLog "verify_deploy exit=$LASTEXITCODE $verifyOut"
+                if ($LASTEXITCODE -ne 0) {
+                    $failed += 'verify_deploy'
+                }
+            } else {
+                Write-WizLog "verify_deploy.py not in the download — scripts copied, not verified"
             }
 
             if ($failed.Count -gt 0) {
