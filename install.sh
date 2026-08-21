@@ -1122,7 +1122,10 @@ Description=Echo Bloom — Bedtime (9:30pm daily)
 
 [Timer]
 OnCalendar=*-*-* 21:30:00
-Persistent=true
+# NOT Persistent. This ritual is about a time of day, so a missed 21:30 must
+# not fire as a boot catch-up -- that pauses the wanders and sends the goodnight
+# note at whatever hour the machine happens to come back.
+Persistent=false
 
 [Install]
 WantedBy=timers.target
