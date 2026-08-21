@@ -151,8 +151,14 @@ def write_reflection(model, beats):
     try:
         r = requests.post(
             "http://localhost:11434/api/generate",
+            # think=False is load-bearing, not tidiness. gemmaeli and the other
+            # gemma4/qwen3 builds are reasoning models: their thinking tokens
+            # consume num_predict before a single visible token is emitted, so
+            # the call returns done_reason="length" with response="" and no
+            # error. Verified 2026-08-21 -- reflection had failed every 3 hours
+            # all day, silently, for exactly this.
             json={"model": model, "prompt": prompt, "stream": False,
-                  "keep_alive": "10m",
+                  "keep_alive": "10m", "think": False,
                   "options": {"temperature": 0.6, "num_predict": 250}},
             timeout=300,
         )
@@ -160,7 +166,15 @@ def write_reflection(model, beats):
         if data.get("error"):
             log(f"model error: {data['error']}")
             return None
-        return (data.get("response") or "").strip()
+        text = (data.get("response") or "").strip()
+        if not text:
+            # An empty 200 is not an error to requests, so this used to fall
+            # through to `if not text: return 1` and exit non-zero with nothing
+            # in the log at all -- a failure you could only find in journalctl.
+            log(f"model returned an empty response "
+                f"(done_reason={data.get('done_reason')!r}, "
+                f"eval_count={data.get('eval_count')!r}) — nothing written")
+        return text
     except Exception as e:
         log(f"reflection model call failed: {e}")
         return None
@@ -222,6 +236,7 @@ def main():
     log(f"reflecting on {len(beats)} heartbeat(s) using {model}")
     text = write_reflection(model, beats)
     if not text:
+        log("no reflection text produced — see the reason above")
         return 1
 
     if save(text):
