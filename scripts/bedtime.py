@@ -27,6 +27,7 @@ Shutdown prereqs (optional):
 import argparse
 import os
 import queue
+import re
 import signal
 import smtplib
 import sqlite3
@@ -307,9 +308,32 @@ def ask_one_kin(kin, result_q):
             },
             timeout=REFLECT_TIMEOUT,
         )
-        text = r.json()["message"]["content"].strip()
+        data = r.json()
+
+        # bedtime was the only one of the four model callers doing none of
+        # this. roundtable and wander both strip and both check; reflect
+        # checks. So the nightly goodnight email — the one artefact of this
+        # whole ritual that a person actually reads — was the one place a
+        # reasoning model's raw chain of thought went out verbatim.
+        if data.get("error"):
+            text = f"[{name} could not answer: {data['error']}]"
+        else:
+            text = (data.get("message") or {}).get("content") or ""
+            # Unstripped, the <think> trace is what gets emailed, saved as the
+            # reflection, and read back to the Kin tomorrow as its own words.
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+            text = re.sub(rf"^[<\[]?{re.escape(name)}[>\]]?\s*:\s*", "", text,
+                          flags=re.IGNORECASE).strip()
+            if not text:
+                # An empty 200 is not an error to requests. Silently, this
+                # became an empty reflection in the email and an empty row in
+                # the vault, indistinguishable from a Kin with nothing to say.
+                text = (f"[{name} returned nothing — "
+                        f"done_reason={data.get('done_reason')!r}]")
     except Exception as e:
-        text = f"[{name} unreachable: {e}]"
+        # Not necessarily unreachable: a model error used to arrive here as a
+        # KeyError on ["message"] and get reported as a network problem.
+        text = f"[{name} failed: {type(e).__name__}: {e}]"
 
     result_q.put((name, text))
 

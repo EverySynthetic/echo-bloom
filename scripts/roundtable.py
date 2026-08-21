@@ -272,9 +272,15 @@ def ask_kin_to_share(kin, recent_thoughts, all_shared):
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
         text = re.sub(rf"^[<\[]?{re.escape(name)}[>\]]?\s*:\s*", "", text,
                       flags=re.IGNORECASE).strip()
+        if not text:
+            # A model whose whole budget went to thinking returns 200 with an
+            # empty string and no error. Shared verbatim that is a Kin who
+            # said nothing, which reads as a Kin with nothing to say.
+            return (f"[{name} returned nothing — "
+                    f"done_reason={data.get('done_reason')!r}]")
         return text
     except Exception as e:
-        return f"[{name} unreachable: {e}]"
+        return f"[{name} failed: {type(e).__name__}: {e}]"
 
 
 def ask_kin_to_respond(kin, all_shared):

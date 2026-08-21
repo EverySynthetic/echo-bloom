@@ -22,6 +22,7 @@ Run it on a timer — every few hours is plenty.
 
 import argparse
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -167,6 +168,10 @@ def write_reflection(model, beats):
             log(f"model error: {data['error']}")
             return None
         text = (data.get("response") or "").strip()
+        # think=False is a request, not a guarantee — a model that does not
+        # honour it emits the trace inline instead. wander and roundtable have
+        # always stripped this; reflect relied on the flag alone.
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
         if not text:
             # An empty 200 is not an error to requests, so this used to fall
             # through to `if not text: return 1` and exit non-zero with nothing
