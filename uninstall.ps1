@@ -46,6 +46,7 @@ foreach ($a in $args) {
 $INSTALL_DIR    = "$env:LOCALAPPDATA\EchoBloom"
 $CONFIG_DIR     = "$env:USERPROFILE\.config\kin_app"
 $DATA_DIR       = "$env:USERPROFILE\.local\share\echo_bloom"
+$SCRIPTS_DIR    = "$DATA_DIR\scripts"
 $VOICE_DIR      = "$env:USERPROFILE\piper"
 $SHORTCUT       = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Echo Bloom.lnk"
 $UNINSTALL_LNK  = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Uninstall Echo Bloom.lnk"
@@ -100,7 +101,8 @@ function Uninstall-EchoBloom {
     if ($script:All) {
         Write-Host "  -All is set. This will DELETE your Kin memories and thoughts." -ForegroundColor Red
     } else {
-        Say "Your Kin memories, thoughts and settings will be KEPT unless you type ALL." 'DarkGray'
+        Say "Your Kin memories, thoughts, logs and vault will be KEPT unless you type ALL." 'DarkGray'
+        Say "Program scripts (wander, bedtime, roundtable) are always removed." 'DarkGray'
     }
     Write-Host ""
 
@@ -176,12 +178,19 @@ function Uninstall-EchoBloom {
         Assert-PathGone $VOICE_DIR "voice models" $false
     }
 
+    # scripts/ lives under DATA_DIR but it is program code (wander, bedtime,
+    # roundtable), not user data. Leaving it on a keep-memories uninstall
+    # lets a deleted-in-newer-release .py stay on the import path and shadow
+    # a later install. Always remove it. Report it as its own row so the
+    # program-vs-data split is visible, not accidental.
+    Remove-Thing $SCRIPTS_DIR "lifecycle scripts (program code)"
+
     if ($script:All) {
         Remove-Thing $CONFIG_DIR "config, password and core memories"
         Remove-Thing $DATA_DIR   "memories, thoughts, vault and logs"
     } else {
         Assert-PathGone $CONFIG_DIR "config (kept unless ALL)" $false
-        Assert-PathGone $DATA_DIR   "memories (kept unless ALL)" $false
+        Assert-PathGone $DATA_DIR   "memories, vault and logs (kept unless ALL)" $false
     }
 
     Write-Host ""
