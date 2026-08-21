@@ -588,49 +588,54 @@ ensure_ollama_running() {
     fi
 }
 
-# ── Warmup bar: 30s wait + seeds ~/.ollama/id_ed25519 via ollama list ─────────
+# ── Warmup: seed ~/.ollama/id_ed25519 if missing, then wait until Ollama
+# answers. Used to be a 30-second sleep that always printed 100% whether or
+# not anything was listening. The bar now completes when /api/version responds,
+# or warns at the timeout if it never did.
 _ollama_warmup() {
     local total=30
     local width=40
-    info "Letting Ollama initialize (30 sec)..."
 
-    # Kick off key generation in background — ollama list doesn't hit the
-    # registry so it doesn't create the key; openssl generates the PKCS8
-    # ed25519 key that Ollama's Go code expects at ~/.ollama/id_ed25519.
-    # _list_pid must only be set when we actually backgrounded openssl. On a
-    # re-run the key already exists, nothing is launched, and $! still holds
-    # the PID of the tee process substitution from the top of this script —
-    # waiting on that blocks forever at 100%.
-    local _list_pid=""
+    local _key_pid=""
     if [[ ! -f "$HOME/.ollama/id_ed25519" ]]; then
         mkdir -p "$HOME/.ollama"
         openssl genpkey -algorithm ed25519 -out "$HOME/.ollama/id_ed25519" 2>/dev/null &
-        _list_pid=$!
+        _key_pid=$!
     fi
 
-    local i j pos jitter base bar pct
-    for ((i=0; i<total; i++)); do
-        base=$(( (i * (width - 1)) / total ))
-        jitter=$(( (RANDOM % 5) - 2 ))
-        pos=$(( base + jitter ))
-        [[ $pos -lt 0 ]] && pos=0
-        [[ $pos -gt $((width - 1)) ]] && pos=$((width - 1))
+    if curl -s --max-time 1 http://localhost:11434/api/version &>/dev/null; then
+        [[ -n "$_key_pid" ]] && { wait "$_key_pid" 2>/dev/null || true; }
+        ok "Ollama is answering."
+        return
+    fi
 
+    info "Waiting for Ollama to answer..."
+    local i j bar pct ready=false
+    for ((i=1; i<=total; i++)); do
+        if curl -s --max-time 1 http://localhost:11434/api/version &>/dev/null; then
+            ready=true
+            i=$total
+        fi
         bar=""
-        for ((j=0; j<pos; j++));        do bar+="█"; done
-        for ((j=pos; j<width; j++));    do bar+="░"; done
-
-        pct=$(( (pos * 100) / width ))
+        pct=$(( (i * 100) / total ))
+        local filled=$(( (i * width) / total ))
+        for ((j=0; j<filled; j++)); do bar+="█"; done
+        for ((j=filled; j<width; j++)); do bar+="░"; done
         tty_out "\r  [%s] %3d%%" "$bar" "$pct"
+        $ready && break
         sleep 1
     done
-
-    [[ -n "$_list_pid" ]] && { wait "$_list_pid" 2>/dev/null || true; }
-
-    bar=""
-    for ((j=0; j<width; j++)); do bar+="█"; done
-    tty_out "\r  [%s] 100%%\n\n" "$bar"
+    tty_out "\r  [%s] %3d%%\n" "$bar" "$pct"
     $REAL_TTY || echo
+
+    [[ -n "$_key_pid" ]] && { wait "$_key_pid" 2>/dev/null || true; }
+
+    if $ready; then
+        ok "Ollama is answering."
+    else
+        warn "Ollama did not answer after ${total}s — the model pull may fail."
+        echo "  Start it in another terminal: ollama serve"
+    fi
 }
 
 # ── Pull selected model (skip if already installed) ───────────────────────────
@@ -1350,7 +1355,52 @@ except Exception:
     print('')" "$config_dir/kin_config.json" 2>/dev/null || true)
 
         if [[ -z "$_cur_model" ]]; then
-            ok "Kin config already exists — leaving it alone."
+            # File exists but no Kin model is set (empty kin list, or a
+            # half-written config). This run just named a Kin — write it
+            # without wiping anything else in the file. The old "leaving it
+            # alone" path discarded the ritual and reported [ok].
+            warn "A config file exists but no Kin model is set — writing this run's Kin."
+            python3 - "$config_dir/kin_config.json" "$kin_name" "$model" "$kin_pronoun" "$kin_desc" << 'PYEOF' \
+                || die "Could not write kin_config.json"
+import json, os, sys, tempfile
+path, kin_name, model, pronoun, desc = sys.argv[1:6]
+try:
+    cfg = json.load(open(path))
+except Exception:
+    cfg = {}
+kin_entry = {"name": kin_name, "host": "http://localhost:11434",
+             "model": model, "node": "Local", "color": "#4fc3f7",
+             "pronoun": pronoun, "db": "", "space": ""}
+desc = (desc or "").strip()
+if desc:
+    kin_entry["description"] = desc
+    kin_entry["core_memories"] = [desc]
+kin = cfg.get("kin") or []
+if kin:
+    k0 = kin[0]
+    if not k0.get("model"):
+        k0["model"] = model
+    if not k0.get("name"):
+        k0["name"] = kin_name
+    if pronoun and not k0.get("pronoun"):
+        k0["pronoun"] = pronoun
+    if desc and not k0.get("core_memories"):
+        k0["description"] = desc
+        k0["core_memories"] = [desc]
+    cfg["kin"] = kin
+else:
+    cfg["kin"] = [kin_entry]
+if not cfg.get("nodes"):
+    cfg["nodes"] = [{"name": "Local", "ip": "localhost",
+                     "ollama_port": 11434, "role": "primary"}]
+if "vault_url" not in cfg:
+    cfg["vault_url"] = "http://localhost:8765"
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".")
+with os.fdopen(fd, "w") as f:
+    json.dump(cfg, f, indent=2)
+os.replace(tmp, path)
+PYEOF
+            ok "Config updated: ${kin_name} on ${model}."
             return
         fi
         if [[ "$_cur_model" == "$model" ]]; then
@@ -1787,7 +1837,21 @@ seed_config "$SELECTED_MODEL" "$RITUAL_NAME" "$RITUAL_PRONOUN" "$RITUAL_DESC"
 if command -v systemctl &>/dev/null; then
     systemctl --user restart echo_bloom_pulse  2>/dev/null || true
     if systemctl --user restart echo_bloom_wander 2>/dev/null; then
-        ok "Wandering started — ${RITUAL_NAME} will think between visits."
+        _wander_up=false
+        for _w in 1 2 3 4 5; do
+            if systemctl --user is-active --quiet echo_bloom_wander; then
+                _wander_up=true
+                break
+            fi
+            sleep 1
+        done
+        if $_wander_up; then
+            ok "Wandering started — ${RITUAL_NAME} will think between visits."
+        else
+            warn "Wander service restarted but is not active."
+            echo "  Check: systemctl --user status echo_bloom_wander --no-pager"
+            echo "  Start it by hand: systemctl --user start echo_bloom_wander"
+        fi
     else
         warn "Could not start wandering automatically."
         echo "  Start it by hand: systemctl --user start echo_bloom_wander"

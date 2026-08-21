@@ -42,6 +42,7 @@
       <button class="ctrl-btn ctrl-stop"  onclick="stopRoundtable()">■ STOP</button>
       <button class="ctrl-btn ctrl-bedtime" onclick="triggerBedtime()">☽ BEDTIME RITUAL</button>
     </div>
+    <div id="rt-action-msg" class="spawn-err" hidden></div>
     <div class="spawn-block">
       <div class="spawn-label">
         SPAWN AN AGENT
@@ -50,12 +51,11 @@
       <textarea class="spawn-task" id="spawn-task" rows="3"
                 placeholder="A task for the bench…"></textarea>
       <div class="control-row spawn-row">
-        <input class="spawn-model" id="spawn-model" type="text"
-               placeholder="{{ agent_default_model }}"
-               value=""
-               autocomplete="off" spellcheck="false"
-               oninput="scheduleVramCheck()">
+        <select class="spawn-model" id="spawn-model" onchange="scheduleVramCheck()">
+          <option value="">Auto — best installed</option>
+        </select>
         <button class="ctrl-btn ctrl-start" id="spawn-go" onclick="spawnAgent()">GO</button>
+        <button class="ctrl-btn" type="button" id="spawn-pull" onclick="pullSpawnSuggested()" hidden>PULL {{ agent_default_model }}</button>
       </div>
       <div class="spawn-warn" id="spawn-warn" hidden></div>
       <div class="spawn-err" id="spawn-err" hidden></div>
@@ -145,11 +145,10 @@ async function loadRemote() {
   const body = document.getElementById('remote-body');
   body.innerHTML = '<span class="remote-checking">checking...</span>';
   try {
-    const r = await fetch('/api/remote/status');
-    const d = await r.json();
+    const d = await ebFetch('/api/remote/status');
     renderRemote(d);
   } catch(e) {
-    body.innerHTML = '<span class="remote-checking">could not check status</span>';
+    body.innerHTML = '<span class="remote-checking">' + escHtml(e.message) + '</span>';
   }
 }
 
@@ -220,6 +219,7 @@ async function startTunnel() {
   body.innerHTML = '<span class="remote-checking">Starting tunnel — this takes about 15 seconds...</span>';
   try {
     const r  = await fetch('/api/remote/start-tunnel', {method: 'POST'});
+    ebCheck(r);
     const d  = await r.json();
     if (d.ok) {
       renderRemote({cloudflare: d.url, tailscale: null});
@@ -238,10 +238,12 @@ loadRemote();
 
 async function loadLicense() {
   try {
-    const r = await fetch('/api/license/status');
-    const d = await r.json();
+    const d = await ebFetch('/api/license/status');
     renderLicense(d);
-  } catch(e) {}
+  } catch(e) {
+    const body = document.getElementById('dash-license-body');
+    if (body) body.innerHTML = '<span class="dash-lic-status dash-lic-warn">' + escHtml(e.message) + '</span>';
+  }
 }
 
 function renderLicense(d) {
@@ -310,6 +312,7 @@ async function activateDashKey(e) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({key}),
     });
+    ebCheck(r);
     const d = await r.json();
     if (d.ok) {
       msg.textContent = d.message;
@@ -329,29 +332,59 @@ loadLicense();
 
 // ── Roundtable ───────────────────────────────────────────────────────────────
 
+function setRtAction(msg, isErr) {
+  const el = document.getElementById('rt-action-msg');
+  if (!el) return;
+  if (!msg) { el.hidden = true; el.textContent = ''; return; }
+  el.hidden = false;
+  el.textContent = msg;
+  el.className = isErr ? 'spawn-err' : 'spawn-warn';
+}
+
 async function checkRoundtable() {
   try {
-    const r = await fetch('/api/roundtable/status');
-    const d = await r.json();
+    const d = await ebFetch('/api/roundtable/status');
     const el = document.getElementById('rt-status');
     el.textContent = d.running ? `● RUNNING  (pid ${d.pid})` : '○ STOPPED';
     el.className   = 'roundtable-status ' + (d.running ? 'rt-running' : 'rt-stopped');
-  } catch(e) {}
+  } catch(e) {
+    const el = document.getElementById('rt-status');
+    if (el) {
+      el.textContent = e.message;
+      el.className   = 'roundtable-status rt-stopped';
+    }
+  }
 }
 
 async function startRoundtable() {
-  await fetch('/api/roundtable/start', {method:'POST'});
-  setTimeout(checkRoundtable, 1000);
+  setRtAction('');
+  try {
+    await ebFetch('/api/roundtable/start', {method:'POST'});
+    await checkRoundtable();
+  } catch(e) {
+    setRtAction(e.message, true);
+  }
 }
 
 async function stopRoundtable() {
-  await fetch('/api/roundtable/stop', {method:'POST'});
-  setTimeout(checkRoundtable, 1000);
+  setRtAction('');
+  try {
+    await ebFetch('/api/roundtable/stop', {method:'POST'});
+    await checkRoundtable();
+  } catch(e) {
+    setRtAction(e.message, true);
+  }
 }
 
 async function triggerBedtime() {
   if (!confirm('Start bedtime ritual? (ritual only, no shutdown)')) return;
-  await fetch('/api/bedtime', {method:'POST'});
+  setRtAction('Starting bedtime…');
+  try {
+    const d = await ebFetch('/api/bedtime', {method:'POST'});
+    setRtAction(d.message || d.status || 'Bedtime ritual started.', false);
+  } catch(e) {
+    setRtAction(e.message, true);
+  }
 }
 
 checkRoundtable();
@@ -381,9 +414,7 @@ async function checkVram() {
   const warn = document.getElementById('spawn-warn');
   try {
     const q = model ? ('?model=' + encodeURIComponent(model)) : '';
-    const r = await fetch('/api/agent/vram-check' + q);
-    if (!r.ok) return;
-    const d = await r.json();
+    const d = await ebFetch('/api/agent/vram-check' + q);
     if (d.warning) {
       warn.hidden = false;
       warn.textContent = d.warning;
@@ -391,7 +422,10 @@ async function checkVram() {
       warn.hidden = true;
       warn.textContent = '';
     }
-  } catch(e) {}
+  } catch(e) {
+    warn.hidden = false;
+    warn.textContent = e.message;
+  }
 }
 
 function agentAgeMs(p) {
@@ -452,9 +486,7 @@ function renderBunks(presenceMap) {
 
 async function loadBunks() {
   try {
-    const r = await fetch('/api/presence');
-    if (!r.ok) return;
-    const d = await r.json();
+    const d = await ebFetch('/api/presence');
     renderBunks(d.presence || {});
     const working = Object.values(d.presence || {}).some(
       p => p.entity_type === 'agent' && AGENT_WORKING.has(p.status)
@@ -490,15 +522,20 @@ async function spawnAgent() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({task, model: model || undefined}),
     });
+    ebCheck(r);
     const d = await r.json().catch(() => ({}));
     if (d.warning) {
       const warn = document.getElementById('spawn-warn');
       warn.hidden = false;
       warn.textContent = d.warning;
     }
-    if (!r.ok || !d.ok) {
+    if (!d.ok) {
       err.hidden = false;
       err.textContent = d.error || 'Spawn failed';
+      if (/ollama pull|not installed/i.test(d.error || '')) {
+        const pullBtn = document.getElementById('spawn-pull');
+        if (pullBtn) pullBtn.hidden = false;
+      }
     }
   } catch(e) {
     err.hidden = false;
@@ -512,17 +549,105 @@ async function spawnAgent() {
 
 async function dismissAgent(name) {
   try {
-    await fetch('/api/agent/dismiss', {
+    await ebFetch('/api/agent/dismiss', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({name}),
     });
-  } catch(e) {}
+  } catch(e) {
+    const err = document.getElementById('spawn-err');
+    if (err) { err.hidden = false; err.textContent = e.message; }
+  }
   await loadBunks();
+}
+
+async function loadSpawnModels() {
+  const sel = document.getElementById('spawn-model');
+  const err = document.getElementById('spawn-err');
+  const pullBtn = document.getElementById('spawn-pull');
+  if (!sel) return;
+  try {
+    const d = await ebFetch('/api/onboard/models', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({host: 'http://localhost:11434'}),
+    });
+    const models = (d.ok && d.models) ? d.models : [];
+    const current = sel.value;
+    sel.innerHTML = '<option value="">Auto — best installed</option>';
+    models.forEach(m => {
+      const o = document.createElement('option');
+      o.value = m;
+      o.textContent = m;
+      sel.appendChild(o);
+    });
+    if (current && models.indexOf(current) !== -1) sel.value = current;
+    if (!models.length) {
+      if (err) {
+        err.hidden = false;
+        err.textContent = 'No local models installed. Pull one before spawning — the agent will not invent a fallback.';
+      }
+      if (pullBtn) pullBtn.hidden = false;
+      const go = document.getElementById('spawn-go');
+      if (go) go.disabled = true;
+    } else {
+      if (pullBtn) pullBtn.hidden = true;
+      const go = document.getElementById('spawn-go');
+      if (go) go.disabled = false;
+    }
+  } catch(e) {
+    if (err) { err.hidden = false; err.textContent = e.message; }
+  }
+}
+
+async function pullSpawnSuggested() {
+  const btn = document.getElementById('spawn-pull');
+  const err = document.getElementById('spawn-err');
+  const status = err;
+  const model = (btn && btn.textContent.replace(/^PULL\s+/, '').trim()) || '{{ agent_default_model }}';
+  if (btn) { btn.disabled = true; btn.textContent = 'PULLING…'; }
+  try {
+    const r = await fetch('/api/pull-model', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({host: 'http://localhost:11434', model}),
+    });
+    ebCheck(r);
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const d = JSON.parse(line.slice(6));
+          if (d.error) throw new Error(d.error);
+          if (d.status === 'done') {
+            if (status) { status.hidden = false; status.textContent = model + ' ready.'; status.className = 'spawn-warn'; }
+            await loadSpawnModels();
+            return;
+          }
+        } catch(e) {
+          if (e instanceof Error && e.message && !e.message.startsWith('Unexpected')) throw e;
+        }
+      }
+    }
+    if (status) { status.hidden = false; status.textContent = 'Pull stopped before finishing — retry.'; status.className = 'spawn-err'; }
+  } catch(e) {
+    if (status) { status.hidden = false; status.textContent = e.message; status.className = 'spawn-err'; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'PULL ' + model; }
+  }
 }
 
 checkVram();
 loadBunks();
+loadSpawnModels();
 setBunkPoll(false);
 
 // ── Model pull ────────────────────────────────────────────────────────────────
@@ -585,7 +710,9 @@ async function pullModel(btn) {
         } catch(e) {}
       }
     }
-    setTimeout(() => location.reload(), 500);
+    status.textContent = 'Pull stopped before finishing — retry.';
+    btn.disabled = false;
+    btn.textContent = 'RETRY';
   } catch(e) {
     status.textContent = 'Failed: ' + e.message;
     btn.disabled = false;

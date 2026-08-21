@@ -1,5 +1,5 @@
 // Echo Bloom Service Worker
-const CACHE = 'echo-bloom-v1';
+const CACHE = 'echo-bloom-v2';
 
 const PRECACHE = [
   '/',

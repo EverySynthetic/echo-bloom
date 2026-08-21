@@ -43,8 +43,9 @@ $form.StartPosition   = [System.Windows.Forms.FormStartPosition]::CenterScreen
 $form.Font            = $F_MD
 # The Cloudflare tunnel step (page 5) waits up to 30s for a URL — long enough
 # that alt-tabbing away loses the wizard behind other windows, and it looks
-# stuck or crashed rather than just waiting. TopMost keeps it in view for the
-# whole wizard, not just that step, since it's one window throughout.
+# stuck or crashed rather than just waiting. TopMost only for pages 1-3.
+# Pages 4 and 5 open a browser (the app, Stripe checkout); TopMost on those
+# covers the thing the user needs to click.
 $form.TopMost         = $true
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -346,6 +347,9 @@ function Show-Page ([int]$n) {
     $pg4.Visible = ($n -eq 4)
     $pg5.Visible = ($n -eq 5)
 
+    # Pages 4 and 5 open or sit beside a browser. TopMost here covers checkout.
+    if ($n -ge 4) { $form.TopMost = $false }
+
     if ($n -eq 3 -and -not $script:installStarted) {
         $script:installStarted = $true
         Start-InstallWorker
@@ -362,6 +366,7 @@ function Show-Page ([int]$n) {
 # Page 5 — open the app and exit, with or without a tunnel set up first.
 # ─────────────────────────────────────────────────────────────────────────────
 function Complete-Install {
+    $form.TopMost = $false
     $o = $script:OPENER
     if (Test-Path $o) {
         Start-Process powershell -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$o`""
@@ -562,11 +567,13 @@ $script:launchTimer.Add_Tick({
 
     if (Test-AppUp) {
         $script:launchTimer.Stop()
+        $form.TopMost = $false
         $script:pg4_body.Text = "Echo Bloom is running.`n`nOpening http://localhost:8090 in your browser.`n`nIf nothing opens, paste that address in yourself."
         try { Start-Process 'http://localhost:8090' } catch {}
     }
     elseif ($script:launchElapsed -ge 90) {
         $script:launchTimer.Stop()
+        $form.TopMost = $false
         $script:pg4_body.Text = "Echo Bloom hasn't answered yet.`n`nOpen http://localhost:8090 once it comes up.`n`nLog: $($sync.LogFile)"
     }
     else {
@@ -877,7 +884,9 @@ function Start-InstallWorker {
             foreach ($pkg in $pkgs) {
                 Set-StepStatus 4 'running' "pip install $pkg..."
                 try {
-                    & $python -m pip install $pkg --quiet --disable-pip-version-check 2>&1 | Out-Null
+                    # No pipeline: 5.1 LASTEXITCODE after `| Out-Null` is not
+                    # reliably pip's. Same as headless install.ps1.
+                    $null = & $python -m pip install $pkg --disable-pip-version-check 2>&1
                     if ($LASTEXITCODE -ne 0) { $failed += $pkg }
                 } catch {
                     $failed += $pkg
@@ -912,14 +921,19 @@ function Start-InstallWorker {
             try {
                 New-Item -ItemType Directory -Force -Path $ebDir | Out-Null
 
-                Set-StepStatus 5 'running' 'Downloading browser opener...'
-                try {
-                    Invoke-WebRequest `
-                        'https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/open_echo_bloom.ps1' `
-                        -OutFile $opener -UseBasicParsing
-                } catch {
-                    [System.IO.File]::WriteAllText($opener, "Start-Process 'http://localhost:8090'",
-                        (New-Object System.Text.UTF8Encoding($false)))
+                Set-StepStatus 5 'running' 'Installing browser opener...'
+                $bundledOpener = Join-Path $appDir 'open_echo_bloom.ps1'
+                if (Test-Path $bundledOpener) {
+                    Copy-Item $bundledOpener $opener -Force
+                } else {
+                    try {
+                        Invoke-WebRequest `
+                            'https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/open_echo_bloom.ps1' `
+                            -OutFile $opener -UseBasicParsing
+                    } catch {
+                        [System.IO.File]::WriteAllText($opener, "Start-Process 'http://localhost:8090'",
+                            (New-Object System.Text.UTF8Encoding($false)))
+                    }
                 }
 
                 $pyFull = try { (Get-Command $python -ErrorAction Stop).Source } catch { $python }

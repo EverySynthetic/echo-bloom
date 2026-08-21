@@ -207,12 +207,11 @@ let _previewTimer = null;
 
 async function loadModels() {
   try {
-    const r = await fetch('/api/onboard/models', {
+    const data = await ebFetch('/api/onboard/models', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({host: KIN_HOST})
     });
-    const data = await r.json();
     const sel = document.getElementById('f-base-model');
     if (data.ok && data.models.length) {
       sel.innerHTML = data.models.map(m =>
@@ -252,12 +251,11 @@ function updatePreview() {
     const data = formData();
     if (!data.base_model) return;
     try {
-      const r = await fetch(`/api/kin/${encodeURIComponent(KIN_NAME)}/modelfile/preview`, {
+      const res = await ebFetch(`/api/kin/${encodeURIComponent(KIN_NAME)}/modelfile/preview`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(data)
       });
-      const res = await r.json();
       if (res.ok) {
         document.getElementById('formation-preview').textContent = res.modelfile;
       }

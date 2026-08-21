@@ -152,6 +152,7 @@ async function activateKey(e) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({key}),
     });
+    ebCheck(r);
     const d = await r.json();
     if (d.ok) {
       status.textContent = d.message || 'Licensed. Welcome back.';

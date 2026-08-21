@@ -123,8 +123,7 @@ function setMode(m) {
 async function loadMeta() {
   if (metaLoaded) return;
   try {
-    const r = await fetch('/api/vault/meta');
-    const d = await r.json();
+    const d = await ebFetch('/api/vault/meta');
     const ls = document.getElementById('filter-layer');
     const as_ = document.getElementById('filter-author');
     for (const l of d.layers) {
@@ -172,8 +171,7 @@ async function loadFeed() {
       if (author)       cp.set('author',        author);
       if (search)       cp.set('search',        search);
       if (excludeLayer) cp.set('exclude_layer', excludeLayer);
-      const cr = await fetch(`/api/vault/count?${cp}`);
-      const cd = await cr.json();
+      const cd = await ebFetch(`/api/vault/count?${cp}`);
       const t = cd.total || 0;
       offset = Math.max(0, t - LIMIT);
     } catch(e) { offset = 0; }
@@ -186,8 +184,7 @@ async function loadFeed() {
   if (excludeLayer) params.set('exclude_layer', excludeLayer);
 
   try {
-    const r = await fetch(`/api/vault?${params}`);
-    const d = await r.json();
+    const d = await ebFetch(`/api/vault?${params}`);
     if (d.error === 'vault_offline') {
       await showVaultOffline(d.vault_url);
       return;
@@ -198,8 +195,31 @@ async function loadFeed() {
     document.getElementById('vault-subtitle').textContent =
       `${total.toLocaleString()} memories`;
   } catch(e) {
-    document.getElementById('vault-entries').innerHTML = `<div class="vault-empty">Error: ${e.message}</div>`;
+    if (e.status === 401 || e.status === 402) { showVaultLicenceGate(e.status); return; }
+    document.getElementById('vault-entries').innerHTML = `<div class="vault-empty">Error: ${escHtml(e.message)}</div>`;
   }
+}
+
+function showVaultLicenceGate(status) {
+  document.getElementById('vault-subtitle').textContent =
+    status === 402 ? 'trial ended' : 'session expired';
+  document.getElementById('vault-pagination').style.display = 'none';
+  const title = status === 402 ? 'TRIAL ENDED' : 'SESSION EXPIRED';
+  const body = status === 402
+    ? 'Your memories are still on this machine. They are not gone. Enter a licence key to read them again.'
+    : 'Your session expired. Reload the page and log in to see the vault.';
+  const href = status === 402 ? '/license' : '/login';
+  const label = status === 402 ? 'LICENSE PAGE' : 'LOG IN';
+  document.getElementById('vault-entries').innerHTML = `
+    <div class="vault-offline-banner">
+      <div class="vault-offline-icon">\u25ce</div>
+      <div class="vault-offline-title">${title}</div>
+      <div class="vault-offline-body">
+        ${body}
+        <br><br>
+        <a class="vault-start-btn" href="${href}">${label}</a>
+      </div>
+    </div>`;
 }
 
 async function showVaultOffline(url) {
@@ -302,14 +322,14 @@ async function runSemantic() {
   if (!q) return;
   document.getElementById('vault-entries').innerHTML = '<div class="vault-loading">searching memory…</div>';
   try {
-    const r = await fetch(`/api/vault/semantic?q=${encodeURIComponent(q)}&limit=12`);
-    const d = await r.json();
+    const d = await ebFetch(`/api/vault/semantic?q=${encodeURIComponent(q)}&limit=12`);
     if (d.error) throw new Error(d.error);
     document.getElementById('vault-subtitle').textContent =
       `${d.results.length} results for "${q}"`;
     renderEntries(d.results, true);
   } catch(e) {
-    document.getElementById('vault-entries').innerHTML = `<div class="vault-empty">Error: ${e.message}</div>`;
+    if (e.status === 401 || e.status === 402) { showVaultLicenceGate(e.status); return; }
+    document.getElementById('vault-entries').innerHTML = `<div class="vault-empty">Error: ${escHtml(e.message)}</div>`;
   }
 }
 
@@ -407,8 +427,7 @@ function toggleExpand(id, btn) {
 async function loadCoreFlags() {
   for (const name of KIN_NAMES) {
     try {
-      const r = await fetch(`/api/kin/${encodeURIComponent(name)}/core-memories`);
-      const d = await r.json();
+      const d = await ebFetch(`/api/kin/${encodeURIComponent(name)}/core-memories`);
       for (const m of (d.core_memories || [])) {
         _coreFlagged.add(name + '::' + m.trim());
       }
@@ -422,7 +441,7 @@ async function flagCore(kin_name, content, btn) {
   if (already) {
     // unflag
     try {
-      await fetch('/api/vault/core', {
+      await ebFetch('/api/vault/core', {
         method: 'DELETE',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({kin_name, content}),
@@ -441,6 +460,7 @@ async function flagCore(kin_name, content, btn) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({kin_name, content}),
     });
+    ebCheck(r);
     const d = await r.json();
     if (d.ok) {
       _coreFlagged.add(key);
@@ -481,6 +501,7 @@ async function doIngest() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
     });
+    ebCheck(r);
     const d = await r.json();
     if (d.ok) {
       // vault_chunks (this app's own embedded search, works everywhere) and

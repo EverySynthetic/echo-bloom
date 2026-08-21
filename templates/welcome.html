@@ -79,6 +79,7 @@ async function checkOllama() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ip: '127.0.0.1', port: 11434}),
     });
+    if (!r.ok) throw new Error('Could not reach the app');
     const d = await r.json();
 
     if (d.ok) {

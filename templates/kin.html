@@ -265,6 +265,7 @@ async function doFetch() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({url}),
     });
+    ebCheck(r);
     const d = await r.json();
     if (d.ok) {
       const input = document.getElementById('chat-input');
@@ -308,6 +309,7 @@ async function captureVision() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({image: b64}),
     });
+    ebCheck(r);
     const d = await r.json();
     if (d.ok) {
       const input = document.getElementById('chat-input');
@@ -350,15 +352,19 @@ async function initRecording() {
         headers: {'Content-Type': recordingMime},
         body: blob,
       });
+      ebCheck(r);
       const d = await r.json();
+      const input = document.getElementById('chat-input');
       if (d.ok && d.text) {
-        const input = document.getElementById('chat-input');
         input.value = (input.value ? input.value + ' ' : '') + d.text;
         input.focus();
-      } else if (!d.ok) {
-        console.warn('Transcription failed:', d.error);
+      } else {
+        input.placeholder = d.error || 'Transcription failed — try again';
       }
-    } catch(err) { console.warn('Transcription error:', err); }
+    } catch(err) {
+      const input = document.getElementById('chat-input');
+      if (input) input.placeholder = err.message || 'Transcription failed — try again';
+    }
     finally { btn.textContent = '◎'; btn.classList.remove('tool-active'); }
   };
 }
@@ -371,8 +377,7 @@ let _pendingSpeechAction = null;
 async function checkSpeech() {
   if (_speechStatus) return _speechStatus;
   try {
-    const r = await fetch('/api/speech/status');
-    _speechStatus = await r.json();
+    _speechStatus = await ebFetch('/api/speech/status');
   } catch(e) {
     _speechStatus = {stt_ok: false, piper_ok: false, voice_ok: false};
   }
@@ -393,8 +398,7 @@ async function openVoicePicker() {
   panel.style.display = 'block';
   list.innerHTML = '<div class="voice-picker-loading">Loading…</div>';
   try {
-    const r = await fetch('/api/speech/voices');
-    const d = await r.json();
+    const d = await ebFetch('/api/speech/voices');
     list.innerHTML = '';
     for (const v of d.voices) {
       const btn = document.createElement('button');
@@ -488,11 +492,19 @@ if (micBtn) {
   // become a scroll gesture, which never fires a synthetic mouseup — the
   // recorder stays on with no way to stop it short of reloading the page.
   // pointercancel/pointerleave are the events that fire when that happens.
+  //
+  // The handler is async (permission prompt / recorder init). If the pointer
+  // is released during those awaits, stopRecording used to no-op because
+  // isRecording was still false, then start() ran anyway. Flag the abort.
+  let _micAbort = false;
   micBtn.addEventListener('pointerdown', async (e) => {
     e.preventDefault();
+    _micAbort = false;
+    try { micBtn.setPointerCapture(e.pointerId); } catch (err) {}
     const ok = await ensureSpeech(null);
-    if (!ok) return;
+    if (!ok || _micAbort) return;
     if (!mediaRecorder) await initRecording();
+    if (_micAbort) return;
     audioChunks = [];
     mediaRecorder.start();
     isRecording = true;
@@ -500,9 +512,13 @@ if (micBtn) {
     micBtn.textContent = '●';
   });
   const stopRecording = () => {
+    _micAbort = true;
     if (isRecording && mediaRecorder && mediaRecorder.state !== 'inactive') {
       mediaRecorder.stop();
       isRecording = false;
+    } else {
+      micBtn.classList.remove('tool-active');
+      micBtn.textContent = '◎';
     }
   };
   micBtn.addEventListener('pointerup', stopRecording);
@@ -659,6 +675,8 @@ async function loadVoiceSelect() {
       fetch('/api/speech/voices/installed'),
       fetch(`/api/kin/${KIN_PATH}/voice`),
     ]);
+    ebCheck(instR);
+    ebCheck(kinR);
     const instD = await instR.json();
     const kinD  = await kinR.json();
     const voices = instD.voices || [];
@@ -676,21 +694,23 @@ async function loadVoiceSelect() {
 
 async function setKinVoice(voiceFile) {
   if (!voiceFile) return;
+  const sel = document.getElementById('voice-select');
   try {
-    await fetch(`/api/kin/${KIN_PATH}/voice`, {
+    await ebFetch(`/api/kin/${KIN_PATH}/voice`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({voice: voiceFile}),
     });
-  } catch(e) { console.warn('setKinVoice failed:', e); }
+  } catch(e) {
+    if (sel) sel.title = e.message;
+  }
 }
 
 // ── Thoughts sidebar ──────────────────────────────────────────────────────────
 
 async function loadThoughts() {
   try {
-    const r = await fetch(`/api/kin/${KIN_PATH}/thoughts?limit=15`);
-    const d = await r.json();
+    const d = await ebFetch(`/api/kin/${KIN_PATH}/thoughts?limit=15`);
     const el = document.getElementById('thoughts-list');
     el.innerHTML = '';
     for (const t of d.thoughts) {

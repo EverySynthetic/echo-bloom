@@ -25,7 +25,7 @@
      bars, where slow is the point. */
   --radius:     4px;   /* cards, panels, surfaces */
   --radius-sm:  3px;   /* buttons, inputs, chips */
-  --transition: var(--transition); /* interactive state change */
+  --transition: 0.15s ease; /* interactive state change */
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -719,6 +719,7 @@ a:hover { color: var(--text); }
   padding: 0;
   line-height: 1;
 }
+.tool-btn.tool-mic    { touch-action: none; }
 .tool-btn:hover       { color: var(--kin-color); border-color: var(--kin-color); }
 .tool-btn.tool-active { color: var(--green); border-color: var(--green); }
 .tool-btn.tool-disabled {

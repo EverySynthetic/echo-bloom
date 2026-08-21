@@ -4,6 +4,7 @@
 {% block content %}
 <div class="onboard-page">
 
+  <div id="onboard-save-warn" class="spawn-err" hidden style="margin-bottom:12px"></div>
   <div class="onboard-header">
     <div class="onboard-title">SETUP</div>
     <div class="onboard-steps">
@@ -230,13 +231,20 @@ function setStatus(id, msg, ok) {
 // ── Auto-save (every time nodes or kin change) ────────────────────────────────
 
 async function autosave() {
+  const warn = document.getElementById('onboard-save-warn');
   try {
-    await fetch('/api/onboard/autosave', {
+    await ebFetch('/api/onboard/autosave', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({nodes, kin}),
     });
-  } catch(e) { /* silent — don't interrupt the user */ }
+    if (warn) { warn.hidden = true; warn.textContent = ''; }
+  } catch(e) {
+    if (warn) {
+      warn.hidden = false;
+      warn.textContent = 'Autosave failed — ' + e.message;
+    }
+  }
 }
 
 // ── Network scan ──────────────────────────────────────────────────────────────
@@ -249,9 +257,7 @@ async function scanNetwork() {
   document.getElementById('scan-results').style.display = 'none';
 
   try {
-    const r = await fetch('/api/onboard/scan', {method: 'POST'});
-    if (r.status === 401) { setStatus('scan-status', 'session expired — refresh the page', false); return; }
-    const d = await r.json();
+    const d = await ebFetch('/api/onboard/scan', {method: 'POST'});
 
     if (!d.found || !d.found.length) {
       setStatus('scan-status', "we didn't find anything — try adding manually below", false);
@@ -301,12 +307,10 @@ async function testNode() {
   if (!ip) { setStatus('node-status', 'enter an IP address first', false); return; }
   setStatus('node-status', 'connecting…', null);
   try {
-    const r = await fetch('/api/onboard/test-node', {
+    const d = await ebFetch('/api/onboard/test-node', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ip, port: parseInt(port)}),
     });
-    if (r.status === 401) { setStatus('node-status', 'session expired — refresh the page', false); return; }
-    const d = await r.json();
     if (d.ok) {
       setStatus('node-status', '● connected — looks good', true);
     } else {
@@ -354,11 +358,10 @@ async function checkNodeDot(node, i) {
   const dot = document.getElementById(`ndot-${i}`);
   if (!dot) return;
   try {
-    const r = await fetch('/api/onboard/test-node', {
+    const d = await ebFetch('/api/onboard/test-node', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ip: node.ip, port: node.ollama_port || 11434}),
     });
-    const d = await r.json();
     if (dot) {
       dot.className = d.ok ? 'oli-dot oli-dot-up' : 'oli-dot oli-dot-down';
     }
@@ -439,8 +442,7 @@ let _showOverflow = false;
 async function getVram() {
   if (_vram >= 0) return _vram;
   try {
-    const r = await fetch('/api/onboard/vram');
-    const d = await r.json();
+    const d = await ebFetch('/api/onboard/vram');
     _vram = d.vram || 0;
   } catch(e) { _vram = 0; }
   return _vram;
@@ -587,6 +589,7 @@ async function runNamingRitual() {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({host, model}),
     });
+    ebCheck(r);
     const d = await r.json();
     if (!d.ok) {
       out.textContent = "They couldn't finish the ritual: " + (d.error || 'unknown error') +
@@ -640,11 +643,10 @@ async function loadModels(hostOverride) {
   if (!host) { setStatus('kin-status', 'pick a node first', false); return false; }
   setStatus('kin-status', 'checking for models…', null);
   try {
-    const r = await fetch('/api/onboard/models', {
+    const d = await ebFetch('/api/onboard/models', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({host}),
     });
-    const d = await r.json();
     const sel      = document.getElementById('kin-model-select');
     const noModels = document.getElementById('kin-no-models');
     if (d.ok && d.models.length) {
@@ -730,8 +732,7 @@ async function scanVault() {
   setStatus('vault-scan-status', 'scanning…', null);
   document.getElementById('vault-scan-results').innerHTML = '';
   try {
-    const r = await fetch('/api/onboard/scan-vault', {method:'POST'});
-    const d = await r.json();
+    const d = await ebFetch('/api/onboard/scan-vault', {method:'POST'});
     renderVaultResults(d.found || []);
   } catch(e) {
     setStatus('vault-scan-status', `scan error: ${e.message}`, false);
@@ -782,11 +783,10 @@ async function testVaultManual() {
   setStatus('vault-status', 'connecting…', null);
   try {
     const parsed = new URL(url);
-    const r = await fetch('/api/onboard/test-node', {
+    const d = await ebFetch('/api/onboard/test-node', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ip: parsed.hostname, port: parseInt(parsed.port) || 8765}),
     });
-    const d = await r.json();
     if (d.ok) { selectedVaultUrl = url; }
     setStatus('vault-status', d.ok ? '● vault reachable' : `✗ ${d.error || 'unreachable'}`, d.ok);
   } catch(e) { setStatus('vault-status', `error: ${e.message}`, false); }
@@ -803,11 +803,10 @@ async function saveAll() {
   const manualUrl = document.getElementById('vault-url').value.trim();
   const vaultUrl = manualUrl || selectedVaultUrl || 'http://localhost:8765';
   try {
-    const r = await fetch('/api/onboard/save', {
+    const d = await ebFetch('/api/onboard/save', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({nodes, kin, vault_url: vaultUrl}),
     });
-    const d = await r.json();
     if (d.ok) goStep(4);
     else setStatus('vault-status', 'save failed — try again', false);
   } catch(e) { setStatus('vault-status', `error: ${e.message}`, false); }

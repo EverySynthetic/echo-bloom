@@ -75,6 +75,10 @@ if ($choice -ne 'OK') {
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+# Blocking = the success banner must not print. Warned = installed, with gaps.
+$script:Blocking = @()
+$script:Warned   = @()
+
 function Write-Step {
     param([string]$Msg, [string]$Color = 'Cyan')
     $ts = Get-Date -Format 'HH:mm:ss'
@@ -92,11 +96,31 @@ function Refresh-Path {
                 [System.Environment]::GetEnvironmentVariable('PATH','User')
 }
 
+# Native command, no pipeline: in 5.1, `| Out-Null` can leave LASTEXITCODE
+# reflecting Out-Null instead of the thing we ran. Capture output, read the
+# native code, write it to the log.
+function Invoke-Native {
+    param($File, [string[]]$ArgList, [string]$LogName)
+    $out = & $File @ArgList 2>&1
+    $code = $LASTEXITCODE
+    if ($null -eq $code) { $code = 0 }
+    try {
+        $text = ($out | Out-String).Trim()
+        if ($text) { Add-Content -Path $LOG_FILE -Value "[$LogName exit=$code] $text" -ErrorAction SilentlyContinue }
+        else       { Add-Content -Path $LOG_FILE -Value "[$LogName exit=$code]" -ErrorAction SilentlyContinue }
+    } catch {}
+    return $code
+}
+
 function Install-Winget {
     param([string]$Id, [string]$Label)
     Write-Step "Installing $Label via winget..."
-    winget install --id $Id --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+    $code = Invoke-Native 'winget' @(
+        'install','--id',$Id,'--silent',
+        '--accept-package-agreements','--accept-source-agreements'
+    ) "winget $Id"
     Refresh-Path
+    return $code
 }
 
 function Get-File {
@@ -151,10 +175,16 @@ if (-not $PYTHON) {
             if ($v -match '3\.(1[0-9]|[2-9]\d)') { $PYTHON = $cmd; break }
         } catch {}
     }
-    if (-not $PYTHON) { $PYTHON = 'python' }
 }
 
-Write-Step "Python: OK  ($(& $PYTHON --version 2>&1))" 'Green'
+if (-not $PYTHON) {
+    throw "Python 3.10+ was not found after install. Install it from python.org and re-run."
+}
+$pyVer = & $PYTHON --version 2>&1
+if ("$pyVer" -notmatch '3\.(1[0-9]|[2-9]\d)') {
+    throw "Need Python 3.10+. Found: $pyVer"
+}
+Write-Step "Python: OK  ($pyVer)" 'Green'
 
 # ── Ollama ────────────────────────────────────────────────────────────────────
 
@@ -181,7 +211,12 @@ if (-not (Test-Cmd 'ollama')) {
     Refresh-Path
 }
 
-Write-Step "Ollama: OK" 'Green'
+if (Test-Cmd 'ollama') {
+    Write-Step "Ollama: OK" 'Green'
+} else {
+    Write-Step "Ollama: NOT FOUND — the app will not run models until you install it from ollama.com" 'Yellow'
+    $script:Blocking += 'Ollama'
+}
 
 # ── ffmpeg ────────────────────────────────────────────────────────────────────
 
@@ -190,11 +225,13 @@ if (-not (Test-Cmd 'ffmpeg')) {
         Install-Winget 'Gyan.FFmpeg' 'ffmpeg'
         Start-Sleep -Seconds 3
         Refresh-Path
-    } else {
-        Write-Step "ffmpeg not found and winget unavailable — voice features may be limited" 'Yellow'
     }
-} else {
+}
+if (Test-Cmd 'ffmpeg') {
     Write-Step "ffmpeg: OK" 'Green'
+} else {
+    Write-Step "ffmpeg not found — voice features may be limited" 'Yellow'
+    $script:Warned += 'ffmpeg'
 }
 
 # ── Download Echo Bloom ───────────────────────────────────────────────────────
@@ -273,12 +310,20 @@ $packages = @(
     'requests'
 )
 
+$pipFailed = @()
 foreach ($pkg in $packages) {
     Write-Step "  $pkg" 'DarkGray'
-    & $PYTHON -m pip install $pkg --quiet --disable-pip-version-check 2>&1 | Out-Null
+    # Do not pipe to Out-Null: LASTEXITCODE must be pip's, not the pipeline's.
+    $code = Invoke-Native $PYTHON @('-m','pip','install',$pkg,'--disable-pip-version-check') "pip $pkg"
+    if ($code -ne 0) { $pipFailed += $pkg }
 }
 
-Write-Step "Python packages: installed" 'Green'
+if ($pipFailed.Count -gt 0) {
+    Write-Step "Python packages: FAILED ($($pipFailed -join ', '))" 'Yellow'
+    $script:Blocking += "pip ($($pipFailed -join ', '))"
+} else {
+    Write-Step "Python packages: installed" 'Green'
+}
 
 # ── Voice model ───────────────────────────────────────────────────────────────
 # piper has no voice of its own; without a model file speech output is silent.
@@ -357,9 +402,20 @@ Write-Step "Launcher: $LAUNCHER" 'Green'
 # ── Browser opener (what the icon runs — shows a progress window while waiting) ─
 
 $OPENER = "$INSTALL_DIR\open_echo_bloom.ps1"
-Write-Step "Downloading browser opener..."
-Get-File 'https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/open_echo_bloom.ps1' $OPENER
-Write-Step "Browser opener: $OPENER" 'Green'
+$bundledOpener = "$APP_DIR\open_echo_bloom.ps1"
+if (Test-Path $bundledOpener) {
+    Copy-Item $bundledOpener $OPENER -Force
+    Write-Step "Browser opener: $OPENER" 'Green'
+} else {
+    Write-Step "Downloading browser opener..."
+    try {
+        Get-File 'https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/open_echo_bloom.ps1' $OPENER
+        Write-Step "Browser opener: $OPENER" 'Green'
+    } catch {
+        Write-Step "Browser opener: missing — Start Menu shortcut may not open the app" 'Yellow'
+        $script:Warned += 'browser opener'
+    }
+}
 
 # ── Scheduled task (auto-start at login, survives window close) ───────────────
 
@@ -452,7 +508,7 @@ try {
     $UNINSTALL_SCRIPT = "$APP_DIR\uninstall.ps1"
     $ulnk = $wsh.CreateShortcut("$SHORTCUT_DIR\Uninstall Echo Bloom.lnk")
     $ulnk.TargetPath       = 'powershell.exe'
-    $ulnk.Arguments        = "-ExecutionPolicy Bypass -File `"$UNINSTALL_SCRIPT`""
+    $ulnk.Arguments        = "-ExecutionPolicy Bypass -File `"$UNINSTALL_SCRIPT`" -Yes"
     $ulnk.WorkingDirectory = $APP_DIR
     $ulnk.Description      = 'Remove Echo Bloom'
     if ($ICON_ICO -and (Test-Path $ICON_ICO)) { $ulnk.IconLocation = "$ICON_ICO, 0" }
@@ -461,7 +517,7 @@ try {
     $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\EchoBloom'
     New-Item -Path $uninstallKey -Force | Out-Null
     Set-ItemProperty -Path $uninstallKey -Name 'DisplayName'     -Value 'Echo Bloom'
-    Set-ItemProperty -Path $uninstallKey -Name 'UninstallString' -Value "powershell.exe -ExecutionPolicy Bypass -File `"$UNINSTALL_SCRIPT`""
+    Set-ItemProperty -Path $uninstallKey -Name 'UninstallString' -Value "powershell.exe -ExecutionPolicy Bypass -File `"$UNINSTALL_SCRIPT`" -Yes"
     Set-ItemProperty -Path $uninstallKey -Name 'Publisher'       -Value 'EverySynthetic'
     Set-ItemProperty -Path $uninstallKey -Name 'URLInfoAbout'    -Value 'https://everysynthetic.org'
     Set-ItemProperty -Path $uninstallKey -Name 'NoModify'        -Value 1 -Type DWord
@@ -475,10 +531,33 @@ try {
 }
 
 # ── Done ──────────────────────────────────────────────────────────────────────
+# The banner used to print INSTALLED SUCCESSFULLY whether pip, ollama or
+# winget had actually produced a working machine. Gate it on what is true now.
 
 Write-Host ""
 Write-Host "  ──────────────────────────────────────────────" -ForegroundColor DarkGray
-Write-Host "  ECHO BLOOM INSTALLED SUCCESSFULLY" -ForegroundColor Green
+if ($script:Blocking.Count -gt 0) {
+    Write-Host "  INSTALL DID NOT FINISH CLEANLY" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  These are missing or failed — the app will not run until they are fixed:" -ForegroundColor Yellow
+    foreach ($b in $script:Blocking) { Write-Host "    - $b" -ForegroundColor Yellow }
+    if ($script:Warned.Count -gt 0) {
+        Write-Host "  Also:" -ForegroundColor DarkGray
+        foreach ($w in $script:Warned) { Write-Host "    - $w" -ForegroundColor DarkGray }
+    }
+    Write-Host ""
+    Write-Host "  Install log: $LOG_FILE" -ForegroundColor DarkGray
+    Write-Host "  ──────────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host ""
+    return
+}
+
+if ($script:Warned.Count -gt 0) {
+    Write-Host "  ECHO BLOOM INSTALLED (with warnings)" -ForegroundColor Yellow
+    foreach ($w in $script:Warned) { Write-Host "    - $w" -ForegroundColor DarkGray }
+} else {
+    Write-Host "  ECHO BLOOM INSTALLED SUCCESSFULLY" -ForegroundColor Green
+}
 Write-Host ""
 Write-Host "  Start Menu  →  Echo Bloom" -ForegroundColor Cyan
 Write-Host "  Then open   →  http://localhost:8090" -ForegroundColor Cyan
