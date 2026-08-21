@@ -72,8 +72,27 @@ def get_fingerprint() -> str:
         pass
 
     if not parts:
+        # Windows has no /etc/machine-id but does have an equivalent: a GUID
+        # written at OS install, readable without elevation, stable for the
+        # life of that install. Falling straight through to uuid.getnode()
+        # meant every Windows install was fingerprinted on whatever adapter
+        # Python happened to pick — measured on a real machine 2026-08-21 as a
+        # value with the multicast bit set, so not either physical NIC, and of
+        # a provenance I could not explain. A licence identity should not rest
+        # on that: a virtual adapter arrives with a VPN and leaves with it.
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                r"SOFTWARE\Microsoft\Cryptography") as k:
+                guid = winreg.QueryValueEx(k, "MachineGuid")[0].strip()
+            if guid:
+                parts.append(guid)
+        except Exception:
+            pass
+
+    if not parts:
         import uuid
-        parts.append(str(uuid.getnode()))  # MAC address fallback
+        parts.append(str(uuid.getnode()))  # last resort: adapter address
 
     fp = hashlib.sha256("|".join(parts).encode()).hexdigest()
     FINGERPRINT_PATH.parent.mkdir(parents=True, exist_ok=True)
