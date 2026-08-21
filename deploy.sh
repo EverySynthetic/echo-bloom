@@ -150,6 +150,13 @@ ok "now at $(git rev-parse --short HEAD)"
 step "Deploying lifecycle scripts"
 mkdir -p "$SCRIPTS_DIR" || die "cannot create $SCRIPTS_DIR"
 cp "$APP_DIR"/scripts/*.py "$SCRIPTS_DIR"/ || die "copy failed"
+# scripts/roundtable.py imports kin_presence, which lives at the repo root
+# next to main.py (its other importer). Copying only scripts/*.py left the
+# module out of the deploy: roundtable crash-looped on ModuleNotFoundError
+# 155 times in 40 minutes on 2026-08-21, with the Kin frozen the whole time.
+for shared in kin_presence.py; do
+  [ -f "$APP_DIR/$shared" ] && { cp "$APP_DIR/$shared" "$SCRIPTS_DIR"/ || die "copy failed: $shared"; }
+done
 rm -rf "$SCRIPTS_DIR/__pycache__"
 ok "$(ls -1 "$SCRIPTS_DIR"/*.py 2>/dev/null | wc -l) script(s) deployed, bytecode cache cleared"
 
