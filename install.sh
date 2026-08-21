@@ -1078,7 +1078,25 @@ deploy_scripts() {
             fi
         done
         chmod +x "$scripts_dst"/*.py 2>/dev/null || true
-        ok "Lifecycle scripts deployed to $scripts_dst"
+
+        # "deployed" used to print whether or not any of it could run, which is
+        # exactly how a roundtable that could not import its own module got
+        # reported as a successful install. deploy.sh gained this check on
+        # 2026-08-21; the customer install path -- the one that matters -- did
+        # not get it until now. Resolve the imports before claiming anything.
+        if [[ -f "$APP_DIR/verify_deploy.py" ]] && command -v python3 &>/dev/null; then
+            local _vd
+            if _vd="$(python3 "$APP_DIR/verify_deploy.py" "$scripts_dst" 2>&1)"; then
+                ok "Lifecycle scripts deployed to $scripts_dst"
+            else
+                warn "Lifecycle scripts were copied but cannot start:"
+                printf '%s\n' "$_vd" | sed 's/^/    /'
+                warn "Wandering and the nightly ritual will not run until this is fixed."
+                DEPLOY_BROKEN=1
+            fi
+        else
+            ok "Lifecycle scripts copied to $scripts_dst (not verified)"
+        fi
     else
         warn "Scripts directory not found — lifecycle scripts not deployed."
         return
