@@ -183,8 +183,26 @@ def save(content):
         return False
 
 
+# See license.py: fails open on every unexpected condition.
+try:
+    import license as _lic
+except Exception:
+    _lic = None
+
+
 def main():
     log(f"reflect — node={NODE_NAME} vault={VAULT_URL}")
+
+    if _lic is not None:
+        try:
+            allowed, state = _lic.services_should_run()
+        except Exception as e:
+            log(f"license check raised ({e}) — reflecting anyway")
+            allowed = True
+        if not allowed:
+            log(f"skipped — license state is '{state}'. Reflection calls the model,")
+            log("  so it stays off until a key is entered on the License page.")
+            return 0
     entries = get_entries(args.limit)
     if not entries:
         log("no vault entries to read — is the vault running?")

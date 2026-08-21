@@ -553,6 +553,37 @@ def get_status(force: bool = False) -> dict:
     return value
 
 
+# States in which the app locks the UI. Background lifecycle work must stop for
+# the same set, or an expired install keeps six wander loops on the GPU forever
+# while its owner is locked out of the page that would let them stop it.
+SERVICE_BLOCK_STATES = ("expired", "denied", "revoked")
+
+
+def services_should_run() -> tuple[bool, str]:
+    """May background lifecycle work run? Returns (allowed, state).
+
+    Covers the model callers -- wandering, roundtables, reflection -- not the
+    web server (its owner still needs /license to enter a key) and not the
+    vault (that is their data, and reading it is nearly free).
+
+    FAILS OPEN, deliberately and permanently. Every failure mode here -- no
+    network, an unreadable token, a raised exception, a state string nobody
+    anticipated -- returns True. A false negative silently stops a paying
+    customer's Kin from thinking, and they would have no way to tell that from
+    the software being broken, because from the outside it is the same thing.
+    A false positive costs some electricity. Those are not comparable, so this
+    only ever blocks on an explicit, positively-identified blocking state.
+    """
+    try:
+        state = (get_status() or {}).get("state")
+    except Exception:
+        log.exception("license check failed — leaving background work running")
+        return True, "check-failed"
+    if state in SERVICE_BLOCK_STATES:
+        return False, state
+    return True, state or "unknown"
+
+
 def get_status_cached_only() -> dict:
     """Status without ever making a network call.
 

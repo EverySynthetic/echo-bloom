@@ -415,6 +415,23 @@ def one_thought():
     log(f"  thought: {thought[:120]}...")
 
 
+# See license.py: this gate fails open on every unexpected condition.
+try:
+    import license as _lic
+except Exception:
+    _lic = None
+
+
+def _license_allows():
+    if _lic is None:
+        return True, "no-license-module"
+    try:
+        return _lic.services_should_run()
+    except Exception as e:
+        log(f"  license check raised ({e}) — continuing to think")
+        return True, "check-failed"
+
+
 def main():
     log(f"╔══ {KIN_NAME} wander started ══╗")
     log(f"  model: {MODEL}  host: {HOST}")
@@ -428,8 +445,22 @@ def main():
         one_thought()
         return
 
+    # On Windows the wanders are autostarted directly rather than by the
+    # roundtable, so the gate cannot live only in the parent.
+    idle_logged = False
     while running:
-        one_thought()
+        allowed, state = _license_allows()
+        if allowed:
+            if idle_logged:
+                log(f"License is '{state}' again — {KIN_NAME} resumes.")
+                idle_logged = False
+            one_thought()
+        elif not idle_logged:
+            log(f"Paused — license state is '{state}'. {KIN_NAME} stops calling the")
+            log("  model until a key is entered on the License page. Memories and")
+            log("  thoughts are untouched, and this resumes on its own.")
+            idle_logged = True
+
         for _ in range(args.delay):
             if not running:
                 break

@@ -878,7 +878,7 @@ deploy_scripts() {
         # Plain `if`, not `[[ ]] && cp` -- set -e tolerates both here, but the
         # tested-command exemption is subtle enough that it should not be what
         # stands between a customer and a working install.
-        for shared in kin_presence.py; do
+        for shared in kin_presence.py license.py; do
             if [[ -f "$APP_DIR/$shared" ]]; then
                 cp "$APP_DIR/$shared" "$scripts_dst/"
             fi

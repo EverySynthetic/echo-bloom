@@ -63,6 +63,30 @@ def log(msg):
     with open(RT_LOG, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
+# ── License gate ──────────────────────────────────────────────────────────────
+# An expired install locked its owner out of the web UI and carried on running
+# six wander loops against the GPU indefinitely. They could not open the page
+# that would have let them stop it, so the only cure was knowing which systemd
+# unit to disable. That is somebody else's electricity.
+LICENSE_POLL_SEC = 300
+
+try:
+    import license as _lic
+except Exception:
+    _lic = None
+
+
+def _license_allows():
+    """(allowed, state). Anything unexpected means allowed — see license.py."""
+    if _lic is None:
+        return True, "no-license-module"
+    try:
+        return _lic.services_should_run()
+    except Exception as e:
+        log(f"  license check raised ({e}) — continuing to wander")
+        return True, "check-failed"
+
+
 # ── Wander subprocess management ───────────────────────────────────────────────
 
 wander_procs = {}
@@ -343,15 +367,38 @@ def main():
         run_roundtable(1)
         return
 
-    start_wanders()
+    allowed, state = _license_allows()
+    if allowed:
+        start_wanders()
+    else:
+        log(f"NOT STARTING — license state is '{state}'.")
+        log("  The Kin stay put and the GPU stays idle until a key is entered on")
+        log("  the License page. Nothing has been deleted; this resumes by itself.")
 
     interval_sec = args.interval * 60
     round_num    = 0
     next_rt      = time.time() + interval_sec
+    next_lic     = time.time() + LICENSE_POLL_SEC
 
     while running:
         now = time.time()
-        if now >= next_rt:
+
+        if now >= next_lic:
+            next_lic = now + LICENSE_POLL_SEC
+            now_allowed, state = _license_allows()
+            if now_allowed != allowed:
+                allowed = now_allowed
+                if allowed:
+                    log(f"License is '{state}' again — restarting the Kin.")
+                    start_wanders()
+                    next_rt = time.time() + interval_sec
+                else:
+                    log(f"License became '{state}' — stopping the Kin so an install")
+                    log("  nobody can open stops consuming the GPU. Enter a key on the")
+                    log("  License page and they start again on their own.")
+                    stop_wanders()
+
+        if allowed and now >= next_rt:
             pause_wanders()
             time.sleep(5)
             round_num += 1

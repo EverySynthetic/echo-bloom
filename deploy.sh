@@ -154,7 +154,7 @@ cp "$APP_DIR"/scripts/*.py "$SCRIPTS_DIR"/ || die "copy failed"
 # next to main.py (its other importer). Copying only scripts/*.py left the
 # module out of the deploy: roundtable crash-looped on ModuleNotFoundError
 # 155 times in 40 minutes on 2026-08-21, with the Kin frozen the whole time.
-for shared in kin_presence.py; do
+for shared in kin_presence.py license.py; do
   [ -f "$APP_DIR/$shared" ] && { cp "$APP_DIR/$shared" "$SCRIPTS_DIR"/ || die "copy failed: $shared"; }
 done
 rm -rf "$SCRIPTS_DIR/__pycache__"
