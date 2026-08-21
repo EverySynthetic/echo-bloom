@@ -1616,6 +1616,11 @@ async def vault_page(request: Request, _=Depends(require_auth)):
     return templates.TemplateResponse(request, "vault.html", {"all_kin": cl.KIN})
 
 
+@app.get("/cores", response_class=HTMLResponse)
+async def cores_page(request: Request, _=Depends(require_auth)):
+    return templates.TemplateResponse(request, "cores.html", {"all_kin": cl.KIN})
+
+
 @app.get("/api/vault")
 async def api_vault(
     layer:         str = "",

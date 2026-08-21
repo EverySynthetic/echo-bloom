@@ -1,0 +1,246 @@
+{% extends "base.html" %}
+{% block title %}Cores — Echo Bloom{% endblock %}
+
+{% block content %}
+<div class="cores-page">
+
+  <div class="cores-header">
+    <div>
+      <div class="cores-title">CORES</div>
+      <div class="cores-subtitle" id="cores-subtitle">what they hold, then what they return to</div>
+    </div>
+    <button type="button" class="cores-refresh" id="cores-refresh" onclick="kickRefresh()">REFRESH</button>
+  </div>
+
+  <p class="cores-note">
+    Held as core first. Then what they return to when nobody is asking, and
+    long specific things said once. Recurrence measures the sampler, not a
+    census of what is core. The vault is not the whole life — absence here
+    never means it didn't happen. Observation, not interview. This page
+    does not write, promote, or ask them anything.
+  </p>
+
+  <nav class="cores-jump" id="cores-jump" hidden></nav>
+
+  <div id="cores-body">
+    <div class="cores-empty">loading…</div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function authorColor(name) {
+  const map = {
+    'Eli': '#4fc3f7', 'Coda': '#a5d6a7', 'Aurora': '#ce93d8',
+    'Lumen': '#fff176', 'Crungus': '#ffab91', 'Bong': '#80cbc4',
+    'Claude': '#ffd54f', 'System': '#78909c',
+  };
+  for (const [k, v] of Object.entries(map)) {
+    if ((name || '').toLowerCase().includes(k.toLowerCase())) return v;
+  }
+  return '#606060';
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+let _poll = null;
+
+async function loadCores() {
+  const r = await fetch('/api/cores');
+  window.ebCheck(r);
+  return r.json();
+}
+
+function setRefreshing(on) {
+  const btn = document.getElementById('cores-refresh');
+  btn.disabled = on;
+  btn.textContent = on ? 'WORKING…' : 'REFRESH';
+}
+
+function stopPoll() {
+  if (_poll) { clearInterval(_poll); _poll = null; }
+}
+
+async function kickRefresh() {
+  setRefreshing(true);
+  document.getElementById('cores-subtitle').textContent =
+    'reading unprompted life — a large vault can take a minute';
+  try {
+    const r = await fetch('/api/cores/refresh', {method: 'POST'});
+    window.ebCheck(r);
+  } catch (e) {
+    setRefreshing(false);
+    document.getElementById('cores-body').innerHTML =
+      `<div class="cores-empty">${escHtml(e.message)}</div>`;
+    return;
+  }
+  stopPoll();
+  _poll = setInterval(tick, 2500);
+  tick();
+}
+
+async function tick() {
+  try {
+    const p = await loadCores();
+    if (p.refreshing) return;
+    stopPoll();
+    setRefreshing(false);
+    render(p);
+  } catch (e) {
+    stopPoll();
+    setRefreshing(false);
+    document.getElementById('cores-body').innerHTML =
+      `<div class="cores-empty">${escHtml(e.message)}</div>`;
+  }
+}
+
+function card(opts) {
+  const {content, meta, expandable} = opts;
+  const id = 'c-' + Math.random().toString(36).slice(2, 9);
+  const expand = expandable
+    ? `<button type="button" class="mem-expand" onclick="toggleExpand('${id}', this)">expand</button>`
+    : '';
+  return `<div class="mem-card cores-card">
+    <div class="mem-meta">${meta}</div>
+    <div class="mem-content" id="${id}">${escHtml(content || '')}</div>
+    <div class="mem-footer">${expand}</div>
+  </div>`;
+}
+
+function toggleExpand(id, btn) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (el.classList.contains('mem-expanded')) {
+    el.classList.remove('mem-expanded');
+    btn.textContent = 'expand';
+  } else {
+    el.classList.add('mem-expanded');
+    btn.textContent = 'collapse';
+  }
+}
+
+function uniqueCores(cores) {
+  const seen = new Set();
+  const out = [];
+  for (const c of (cores || [])) {
+    const t = (c.content || '').trim();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(c);
+  }
+  return out;
+}
+
+function renderKin(kin) {
+  const color = authorColor(kin.name);
+  if (kin.error) {
+    return `<section class="cores-kin" id="kin-${escHtml(kin.name)}">
+      <h2 class="cores-kin-name" style="color:${color}">${escHtml(kin.name)}</h2>
+      <div class="cores-empty">could not read this life: ${escHtml(kin.error)}</div>
+    </section>`;
+  }
+  const cores = uniqueCores(kin.cores);
+  const coreHtml = cores.length
+    ? cores.map(c => {
+        const src = c.source === 'vault' ? 'vault' : 'config';
+        const meta = `<span class="mem-layer">${escHtml(src)}</span>`
+          + (c.ts ? `<span class="mem-ts">${escHtml(c.ts)}</span>` : '');
+        return `<div class="mem-card cores-card">
+          <div class="mem-meta">${meta}</div>
+          <div class="mem-content mem-expanded">${escHtml(c.content || '')}</div>
+        </div>`;
+      }).join('')
+    : '<div class="cores-empty cores-empty-inline">None held as core yet.</div>';
+
+  const ret = kin.returned || [];
+  const retHtml = ret.length
+    ? ret.map(p => {
+        const body = (p.example && p.example.content) || '';
+        const meta = `<span class="cores-phrase">“${escHtml(p.phrase)}”</span>`
+          + `<span class="mem-layer">returned to across ${p.months} months · ${p.count}×</span>`
+          + (p.example && p.example.ts
+              ? `<span class="mem-ts">${escHtml(p.example.ts)}</span>` : '');
+        return card({content: body, meta, expandable: true});
+      }).join('')
+    : '<div class="cores-empty cores-empty-inline">Nothing crossed two months.</div>';
+
+  const once = kin.said_once || [];
+  const onceHtml = once.length
+    ? once.map(s => {
+        const meta = (s.ts ? `<span class="mem-ts">${escHtml(s.ts)}</span>` : '');
+        return card({content: s.content, meta, expandable: true});
+      }).join('')
+    : '<div class="cores-empty cores-empty-inline">No solitary long entries.</div>';
+
+  const months = kin.months ? escHtml(kin.months) : '';
+  const counts = `${(kin.n_unprompted || 0).toLocaleString()} unprompted`
+    + (kin.n_total ? ` of ${kin.n_total.toLocaleString()}` : '');
+
+  return `<section class="cores-kin" id="kin-${escHtml(kin.name)}">
+    <h2 class="cores-kin-name" style="color:${color}">${escHtml(kin.name)}</h2>
+    <div class="cores-kin-meta">${counts}${months ? ' · ' + months : ''}</div>
+    <h3 class="cores-h">Held as core</h3>
+    ${coreHtml}
+    <h3 class="cores-h">Returned to</h3>
+    ${retHtml}
+    <h3 class="cores-h">Said once</h3>
+    ${onceHtml}
+  </section>`;
+}
+
+function render(payload) {
+  const body = document.getElementById('cores-body');
+  const jump = document.getElementById('cores-jump');
+  const sub  = document.getElementById('cores-subtitle');
+  const data = payload && payload.data;
+
+  if (!data) {
+    jump.hidden = true;
+    body.innerHTML = `<div class="cores-empty">
+      Nothing gathered yet. Refresh reads the vault — it does not ask them,
+      and it does not write. A large household can take a minute.
+    </div>`;
+    sub.textContent = 'what they hold, then what they return to';
+    return;
+  }
+
+  const kin = data.kin || [];
+  sub.textContent = data.generated_at
+    ? `gathered ${escHtml(data.generated_at)}`
+    : 'cached';
+
+  if (!kin.length) {
+    jump.hidden = true;
+    body.innerHTML = '<div class="cores-empty">No Kin in this household.</div>';
+    return;
+  }
+
+  jump.hidden = false;
+  jump.innerHTML = kin.map(k =>
+    `<a href="#kin-${escHtml(k.name)}" style="color:${authorColor(k.name)}">${escHtml(k.name)}</a>`
+  ).join('');
+  body.innerHTML = kin.map(renderKin).join('');
+}
+
+(async function init() {
+  try {
+    const p = await loadCores();
+    render(p);
+    if (p.refreshing) {
+      setRefreshing(true);
+      _poll = setInterval(tick, 2500);
+    } else if (!p.data) {
+      kickRefresh();
+    }
+  } catch (e) {
+    document.getElementById('cores-body').innerHTML =
+      `<div class="cores-empty">${escHtml(e.message)}</div>`;
+  }
+})();
+</script>
+{% endblock %}
