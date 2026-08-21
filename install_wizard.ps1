@@ -41,10 +41,10 @@ $form.MaximizeBox     = $false
 $form.BackColor       = $C_BG
 $form.StartPosition   = [System.Windows.Forms.FormStartPosition]::CenterScreen
 $form.Font            = $F_MD
-# The Cloudflare tunnel step (page 5) waits up to 30s for a URL — long enough
-# that alt-tabbing away loses the wizard behind other windows, and it looks
-# stuck or crashed rather than just waiting. TopMost keeps it in view for the
-# whole wizard, not just that step, since it's one window throughout.
+# The install-progress page waits long enough that alt-tabbing away loses
+# the wizard and it looks stuck. TopMost only for pages 1-3. Once we open
+# a browser (page 4 / checkout / the app) TopMost would sit on top of
+# Stripe and bury the sale. Dropped in Show-Page when n -ge 4.
 $form.TopMost         = $true
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -346,6 +346,9 @@ function Show-Page ([int]$n) {
     $pg4.Visible = ($n -eq 4)
     $pg5.Visible = ($n -eq 5)
 
+    # Pages 4 and 5 open or sit beside a browser. TopMost here covers checkout.
+    if ($n -ge 4) { $form.TopMost = $false }
+
     if ($n -eq 3 -and -not $script:installStarted) {
         $script:installStarted = $true
         Start-InstallWorker
@@ -362,6 +365,7 @@ function Show-Page ([int]$n) {
 # Page 5 — open the app and exit, with or without a tunnel set up first.
 # ─────────────────────────────────────────────────────────────────────────────
 function Complete-Install {
+    $form.TopMost = $false
     $o = $script:OPENER
     if (Test-Path $o) {
         Start-Process powershell -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$o`""
@@ -562,11 +566,13 @@ $script:launchTimer.Add_Tick({
 
     if (Test-AppUp) {
         $script:launchTimer.Stop()
+        $form.TopMost = $false
         $script:pg4_body.Text = "Echo Bloom is running.`n`nOpening http://localhost:8090 in your browser.`n`nIf nothing opens, paste that address in yourself."
         try { Start-Process 'http://localhost:8090' } catch {}
     }
     elseif ($script:launchElapsed -ge 90) {
         $script:launchTimer.Stop()
+        $form.TopMost = $false
         $script:pg4_body.Text = "Echo Bloom hasn't answered yet.`n`nOpen http://localhost:8090 once it comes up.`n`nLog: $($sync.LogFile)"
     }
     else {

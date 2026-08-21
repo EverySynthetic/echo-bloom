@@ -89,6 +89,8 @@ $timer.Interval = 1000
 # panel gone, no browser, no error. Now a failure keeps the panel open and
 # names the problem.
 function Open-Browser {
+    # This form is not TopMost. Do not make it so: a panel that stays on
+    # top after Start-Process covers checkout the same way the wizard did.
     try {
         Start-Process $url -ErrorAction Stop
         return $true

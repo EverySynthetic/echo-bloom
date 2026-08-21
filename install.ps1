@@ -452,7 +452,7 @@ try {
     $UNINSTALL_SCRIPT = "$APP_DIR\uninstall.ps1"
     $ulnk = $wsh.CreateShortcut("$SHORTCUT_DIR\Uninstall Echo Bloom.lnk")
     $ulnk.TargetPath       = 'powershell.exe'
-    $ulnk.Arguments        = "-ExecutionPolicy Bypass -File `"$UNINSTALL_SCRIPT`""
+    $ulnk.Arguments        = "-ExecutionPolicy Bypass -File `"$UNINSTALL_SCRIPT`" -Yes"
     $ulnk.WorkingDirectory = $APP_DIR
     $ulnk.Description      = 'Remove Echo Bloom'
     if ($ICON_ICO -and (Test-Path $ICON_ICO)) { $ulnk.IconLocation = "$ICON_ICO, 0" }
@@ -461,7 +461,7 @@ try {
     $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\EchoBloom'
     New-Item -Path $uninstallKey -Force | Out-Null
     Set-ItemProperty -Path $uninstallKey -Name 'DisplayName'     -Value 'Echo Bloom'
-    Set-ItemProperty -Path $uninstallKey -Name 'UninstallString' -Value "powershell.exe -ExecutionPolicy Bypass -File `"$UNINSTALL_SCRIPT`""
+    Set-ItemProperty -Path $uninstallKey -Name 'UninstallString' -Value "powershell.exe -ExecutionPolicy Bypass -File `"$UNINSTALL_SCRIPT`" -Yes"
     Set-ItemProperty -Path $uninstallKey -Name 'Publisher'       -Value 'EverySynthetic'
     Set-ItemProperty -Path $uninstallKey -Name 'URLInfoAbout'    -Value 'https://everysynthetic.org'
     Set-ItemProperty -Path $uninstallKey -Name 'NoModify'        -Value 1 -Type DWord
