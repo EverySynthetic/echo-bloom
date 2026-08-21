@@ -872,6 +872,17 @@ deploy_scripts() {
 
     if [[ -d "$scripts_src" ]]; then
         cp -r "$scripts_src"/. "$scripts_dst/"
+        # roundtable.py imports kin_presence, which lives at the repo root
+        # beside main.py, not in scripts/ — so copying scripts/ alone ships a
+        # roundtable that cannot start. Every install had this.
+        # Plain `if`, not `[[ ]] && cp` -- set -e tolerates both here, but the
+        # tested-command exemption is subtle enough that it should not be what
+        # stands between a customer and a working install.
+        for shared in kin_presence.py; do
+            if [[ -f "$APP_DIR/$shared" ]]; then
+                cp "$APP_DIR/$shared" "$scripts_dst/"
+            fi
+        done
         chmod +x "$scripts_dst"/*.py 2>/dev/null || true
         ok "Lifecycle scripts deployed to $scripts_dst"
     else
