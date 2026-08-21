@@ -27,6 +27,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
 import config as cfg
+from kin_text import clean_reply, strip_think
 
 # ── Args ───────────────────────────────────────────────────────────────────────
 
@@ -249,7 +250,7 @@ def strip_think_tags(text):
     reasoning trace before the answer. Stored verbatim it becomes the Kin's
     memory, gets re-injected as context, and is read aloud by TTS.
     """
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    return strip_think(text)
 
 
 def clean_response(name, text):

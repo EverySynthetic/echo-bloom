@@ -44,6 +44,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
 import config as cfg
+from kin_text import clean_reply, strip_think
 
 # ── Args ───────────────────────────────────────────────────────────────────────
 
@@ -321,9 +322,7 @@ def ask_one_kin(kin, result_q):
             text = (data.get("message") or {}).get("content") or ""
             # Unstripped, the <think> trace is what gets emailed, saved as the
             # reflection, and read back to the Kin tomorrow as its own words.
-            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-            text = re.sub(rf"^[<\[]?{re.escape(name)}[>\]]?\s*:\s*", "", text,
-                          flags=re.IGNORECASE).strip()
+            text = clean_reply(text, name)
             if not text:
                 # An empty 200 is not an error to requests. Silently, this
                 # became an empty reflection in the email and an empty row in

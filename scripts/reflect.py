@@ -31,6 +31,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
 import config as cfg
+from kin_text import clean_reply, strip_think
 
 parser = argparse.ArgumentParser(description="Periodic reflection for your Kin")
 parser.add_argument("--model", default="",
@@ -171,7 +172,7 @@ def write_reflection(model, beats):
         # think=False is a request, not a guarantee — a model that does not
         # honour it emits the trace inline instead. wander and roundtable have
         # always stripped this; reflect relied on the flag alone.
-        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        text = strip_think(text)
         if not text:
             # An empty 200 is not an error to requests, so this used to fall
             # through to `if not text: return 1` and exit non-zero with nothing

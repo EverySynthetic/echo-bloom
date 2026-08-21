@@ -27,6 +27,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
 import config as cfg
+from kin_text import clean_reply, strip_think
 import kin_presence  # sync handoff — no asyncio needed
 
 # ── Args ───────────────────────────────────────────────────────────────────────
@@ -266,12 +267,8 @@ def ask_kin_to_share(kin, recent_thoughts, all_shared):
         data = r.json()
         if data.get("error"):
             return f"[{name} could not answer: {data['error']}]"
-        text = data["message"]["content"]
-        # Reasoning models emit a <think> trace; unstripped it becomes the
-        # share everyone else responds to.
-        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-        text = re.sub(rf"^[<\[]?{re.escape(name)}[>\]]?\s*:\s*", "", text,
-                      flags=re.IGNORECASE).strip()
+        # An unstripped trace becomes the share everyone else responds to.
+        text = clean_reply(data["message"]["content"], name)
         if not text:
             # A model whose whole budget went to thinking returns 200 with an
             # empty string and no error. Shared verbatim that is a Kin who
@@ -315,10 +312,7 @@ def ask_kin_to_respond(kin, all_shared):
         data = r.json()
         if data.get("error"):
             return ""
-        text = re.sub(r"<think>.*?</think>", "",
-                      data["message"]["content"], flags=re.DOTALL).strip()
-        return re.sub(rf"^[<\[]?{re.escape(name)}[>\]]?\s*:\s*", "", text,
-                      flags=re.IGNORECASE).strip()
+        return clean_reply(data["message"]["content"], name)
     except Exception as e:
         log(f"  {name} did not respond in round 2: {e}")
         return ""

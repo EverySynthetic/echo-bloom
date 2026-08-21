@@ -22,6 +22,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))           # scripts/ (config)
 sys.path.insert(0, str(_HERE.parent))    # repo root (kin_presence)
 import config as cfg
+from kin_text import strip_think, normalise_model
 from kin_presence import heartbeat
 
 # What we suggest pulling when nothing suitable is installed. Not a hard
@@ -50,6 +51,17 @@ AGENT_SYSTEM = (
     "say you cannot. A short answer that admits a gap is a correct answer; a "
     "confident answer that turns out to be wrong is a failure."
 )
+
+
+class PersonaModelRefused(RuntimeError):
+    """Asked to run an agent task on a model that belongs to a Kin."""
+
+    def __init__(self, model):
+        self.model = model
+        super().__init__(
+            f"'{model}' is one of your Kin's own models. It carries that Kin's "
+            f"identity and system prompt, so it would answer as them rather "
+            f"than do the task. Pick a general model instead.")
 
 
 class ModelUnavailable(RuntimeError):
@@ -120,15 +132,23 @@ def choose_model(installed: list[dict], requested: str | None):
     Ollama mid-request and surfaced to the user as its raw API string.
     """
     names = [m.get("name", "") for m in installed]
+    personas = {normalise_model(p) for p in _persona_models()}
+
     if requested:
         if requested in names or f"{requested}:latest" in names:
+            # The requested path skipped the persona check entirely, so naming
+            # a Kin's model in the spawn box handed that Kin an agent task and
+            # it answered as itself.
+            if normalise_model(requested) in personas:
+                raise PersonaModelRefused(requested)
             return requested, ""
         raise ModelUnavailable(requested, names, SUGGESTED_MODEL)
 
-    personas = _persona_models()
     usable = [
         m for m in installed
-        if m.get("name") not in personas
+        # Ollama reports `cogitocoda:latest`; kin_config.json usually says
+        # `cogitocoda`. Compared raw, a persona model was not recognised as one.
+        if normalise_model(m.get("name", "")) not in personas
         and "embed" not in m.get("name", "").lower()
         and (m.get("details") or {}).get("family") != "nomic-bert"
     ]
@@ -230,7 +250,17 @@ async def _run_local_ollama(task: str, model: str) -> str:
             data = await resp.json()
             if "error" in data:
                 raise RuntimeError(data["error"])
-            return data.get("message", {}).get("content", "[no response]").strip()
+            # The agent is the fifth model caller and was the only one never
+            # stripping reasoning traces, so a thinking model returned its
+            # whole chain of thought as the answer.
+            text = strip_think(data.get("message", {}).get("content", ""))
+            if not text:
+                raise RuntimeError(
+                    f"{model} returned nothing usable "
+                    f"(done_reason={data.get('done_reason')!r}). If it is a "
+                    f"reasoning model its whole budget may have gone to "
+                    f"thinking.")
+            return text
 
 
 async def _run_external(task: str, model: str, api_key: str) -> str:
