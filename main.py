@@ -701,6 +701,26 @@ async def api_cluster(_=Depends(require_auth)):
     return await cl.get_cluster_status()
 
 
+# ── Cores review (what each Kin holds, and what their unprompted life offers) ──
+
+@app.get("/api/cores")
+async def api_cores(_=Depends(require_auth)):
+    """Cached cores-review data. Never computes in-request — a 10k-row Kin
+    takes tens of seconds to analyse, so /api/cores/refresh does the work."""
+    import kin_returns
+    return {
+        "data": kin_returns.cached(),
+        "refreshing": kin_returns.is_refreshing(),
+    }
+
+
+@app.post("/api/cores/refresh")
+async def api_cores_refresh(_=Depends(require_auth)):
+    import kin_returns
+    started = kin_returns.refresh_async()
+    return {"started": started, "refreshing": True}
+
+
 @app.get("/api/kin/{name}/thoughts")
 async def api_thoughts(name: str, limit: int = 10, _=Depends(require_auth)):
     import sqlite3
