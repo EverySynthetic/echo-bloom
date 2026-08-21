@@ -118,7 +118,11 @@ def _verify_signed_token(token: str, prefix: str) -> dict:
         # `pip uninstall cryptography` plus one file write bought the product
         # for free. A trial is time-boxed; a forged permanent key is forever.
         if prefix != "EBT-":
-            return {"valid": False,
+            # unverifiable, NOT invalid. The caller must be able to tell "this
+            # key is forged" from "I have no way to check this key" -- they
+            # had the same shape, so a paying customer whose cryptography
+            # install failed was told their trial had ended.
+            return {"valid": False, "unverifiable": True,
                     "reason": "cryptography package not installed — cannot verify a license key"}
         if token.startswith(prefix):
             try:
@@ -130,7 +134,8 @@ def _verify_signed_token(token: str, prefix: str) -> dict:
                             "unverified": True}
             except Exception:
                 pass
-        return {"valid": False, "reason": "cryptography package not installed"}
+        return {"valid": False, "unverifiable": True,
+                "reason": "cryptography package not installed"}
     if not token.startswith(prefix):
         return {"valid": False, "reason": f"not an {prefix} token"}
     try:
@@ -575,7 +580,7 @@ def get_status(force: bool = False) -> dict:
 # States in which the app locks the UI. Background lifecycle work must stop for
 # the same set, or an expired install keeps six wander loops on the GPU forever
 # while its owner is locked out of the page that would let them stop it.
-SERVICE_BLOCK_STATES = ("expired", "denied", "revoked")
+SERVICE_BLOCK_STATES = ("expired", "denied", "revoked", "unverifiable")
 
 
 def services_should_run() -> tuple[bool, str]:
@@ -650,6 +655,21 @@ def _compute_status(allow_network: bool = True) -> dict:
                 "email":     result.get("email", ""),
                 "days_left": result.get("days_left"),
             }
+        if result.get("unverifiable"):
+            # A key we cannot check is not a key we know is bad. Falling
+            # through from here put a paying customer on the trial path, and
+            # an expired trial there told them their trial had ended and to
+            # pay again -- with nothing anywhere naming the real cause, which
+            # is a missing Python package they can install in one command.
+            #
+            # Still blocks, deliberately: an unverified permanent key must not
+            # grant access, which is the bypass closed in the August audit.
+            # The change is that it now blocks under its own name, with a
+            # reason the customer can act on, instead of wearing "expired".
+            log.error("licence key present but unverifiable: %s",
+                      result.get("reason", "unknown"))
+            return {"state": "unverifiable",
+                    "reason": result.get("reason", "cannot verify license key")}
 
     # Trial token (server-registered, fingerprint-bound)
     if allow_network:

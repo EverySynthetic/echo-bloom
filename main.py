@@ -419,7 +419,10 @@ def require_auth(request: Request):
     # License gate — skip for /license routes (handled separately)
     if not str(request.url.path).startswith("/license"):
         status = lic.get_status()
-        if status["state"] in ("expired", "denied", "revoked"):
+        # Single source of truth: the states that lock the UI and the states
+        # that stop the background services must never disagree about whether
+        # this install is entitled to run.
+        if status["state"] in lic.SERVICE_BLOCK_STATES:
             if _is_api(request):
                 raise HTTPException(status_code=402, detail="license required")
             raise HTTPException(status_code=303, headers={"Location": "/license"})
