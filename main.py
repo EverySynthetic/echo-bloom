@@ -428,26 +428,47 @@ def require_auth_only(request: Request):
     return token
 
 
-def get_client_ip(request: Request) -> str:
-    # Proxies APPEND the real client to X-Forwarded-For, so the FIRST entry is
-    # whatever the client claims — keying the rate limiter on it let an
-    # attacker rotate fake IPs and brute-force without ever tripping it.
-    # CF-Connecting-IP is set authoritatively at Cloudflare's edge; otherwise
-    # take the last XFF hop (proxy-appended); otherwise the socket peer.
-    cf = request.headers.get("CF-Connecting-IP")
-    if cf:
-        return cf.strip()
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
-
-
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 _PROXY_HEADERS = (
     "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto",
     "cf-connecting-ip", "x-real-ip", "forwarded",
 )
+
+
+def get_client_ip(request: Request) -> str:
+    """The address the login rate limiter is keyed on.
+
+    A forwarding header is only believable when a proxy on this machine put it
+    there. cloudflared, Caddy and nginx all connect over loopback, so a
+    loopback peer is the only case where CF-Connecting-IP or X-Forwarded-For
+    mean anything. A request that arrives directly — over the LAN, or through a
+    forwarded port — can set both headers to whatever it likes.
+
+    Trusting CF-Connecting-IP unconditionally handed every direct caller
+    control of its own rate-limit key: rotate the header, get a fresh bucket
+    each time, and brute-force the password with the limiter never tripping.
+    Verified 2026-08-21 against a live instance — eight failed logins with a
+    rotating CF-Connecting-IP produced eight 401s and no 429, while the same
+    eight without it locked out at the sixth, as designed.
+
+    That is the identical bug the previous comment here described fixing for
+    X-Forwarded-For's first entry. It came back through a header nobody
+    re-examined, because the fix was written as "use a different header"
+    rather than "do not believe the client about who it is."
+    """
+    peer = request.client.host if request.client else "unknown"
+    if peer not in _LOOPBACK:
+        # Direct connection. Its headers are self-reported; the socket is not.
+        return peer
+    cf = request.headers.get("CF-Connecting-IP")
+    if cf:
+        return cf.strip()
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        # Proxies APPEND the real client, so the LAST hop is the one the
+        # nearest proxy vouched for. The first entry is the client's claim.
+        return forwarded.split(",")[-1].strip()
+    return peer
 
 
 def is_local_request(request: Request) -> bool:
