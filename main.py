@@ -274,6 +274,14 @@ templates.env.globals["nav_kin"]     = lambda: cl.KIN
 # TemplateResponse on the event loop — one slow license server
 # blocked every request in the app on the very first page render.
 templates.env.globals["nav_license"] = lambda: lic.get_status_cached_only()
+# Cache-buster for static assets. /static/* is served with no Cache-Control, so
+# browsers apply heuristic caching and the service worker keeps its own copy —
+# which means a shipped CSS/JS fix can sit unseen behind a stale file. Observed
+# 2026-08-21: app.js gained ebFetch, the pages calling it were served the old
+# file, and three dashboard cards died with "ebFetch is not defined" on a
+# machine whose disk had the correct script. Keying on VERSION means every
+# release invalidates it and nothing else does.
+templates.env.globals["asset_v"] = VERSION
 
 # Configurable at deploy time
 PORT            = int(os.environ.get("ECHO_BLOOM_PORT", 8090))
