@@ -46,8 +46,31 @@ def top_level_imports(tree: ast.Module):
 
 
 def main(argv):
+    if len(argv) < 2:
+        print("usage: verify_deploy.py <deployed-scripts-dir> [--require mod,mod]",
+              file=sys.stderr)
+        return 2
+
+    # Modules that must be present even though every import of them is guarded.
+    #
+    # Skipping try-wrapped imports is right in general -- that is how this
+    # codebase declares an optional dependency -- but the licence gate is
+    # imported that way ON PURPOSE so it fails open, which means a deploy that
+    # omits license.py passes this checker clean and ships an inert gate. That
+    # is precisely the bug on 2026-08-21 that shipped in the release meant to
+    # fix it. A guarded import with a fallback is optional; a guarded import
+    # whose fallback silently disables a feature is not. Named explicitly by
+    # the caller, because only the caller knows which is which.
+    required = set()
+    if "--require" in argv:
+        i = argv.index("--require")
+        if i + 1 < len(argv):
+            required = {m.strip() for m in argv[i + 1].split(",") if m.strip()}
+        argv = argv[:i] + argv[i + 2:]
+
     if len(argv) != 2:
-        print("usage: verify_deploy.py <deployed-scripts-dir>", file=sys.stderr)
+        print("usage: verify_deploy.py <deployed-scripts-dir> [--require mod,mod]",
+              file=sys.stderr)
         return 2
     d = Path(argv[1])
     if not d.is_dir():
@@ -85,6 +108,15 @@ def main(argv):
                 found = False
             if not found:
                 missing.append((f.name, mod, lineno, "not importable from the deploy dir"))
+
+    for mod in sorted(required):
+        try:
+            found = importlib.util.find_spec(mod) is not None
+        except (ImportError, ValueError):
+            found = False
+        if not found:
+            missing.append((f"<required>", mod, 0,
+                            "named as required but not present in the deploy dir"))
 
     if missing:
         print(f"  {len(missing)} unresolvable import(s):")

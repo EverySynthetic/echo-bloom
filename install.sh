@@ -1091,7 +1091,7 @@ deploy_scripts() {
         # not get it until now. Resolve the imports before claiming anything.
         if [[ -f "$APP_DIR/verify_deploy.py" ]] && command -v python3 &>/dev/null; then
             local _vd
-            if _vd="$(python3 "$APP_DIR/verify_deploy.py" "$scripts_dst" 2>&1)"; then
+            if _vd="$(python3 "$APP_DIR/verify_deploy.py" "$scripts_dst" --require license,kin_presence 2>&1)"; then
                 ok "Lifecycle scripts deployed to $scripts_dst"
             else
                 warn "Lifecycle scripts were copied but cannot start:"

@@ -167,7 +167,11 @@ ok "$(ls -1 "$SCRIPTS_DIR"/*.py 2>/dev/null | wc -l) script(s) deployed, bytecod
 # into code that cannot start.
 if [ -f "$APP_DIR/verify_deploy.py" ]; then
   step "Verifying deployed scripts can start"
-  python3 "$APP_DIR/verify_deploy.py" "$SCRIPTS_DIR" \
+  # --require names the modules that must be present even though every import
+  # of them is guarded. license.py is imported inside a try so the gate fails
+  # open; that also means omitting it passes a plain import check and ships an
+  # inert gate, which is what happened on Windows in 1.2.5.
+  python3 "$APP_DIR/verify_deploy.py" "$SCRIPTS_DIR" --require license,kin_presence \
     || die "deployed scripts cannot resolve their imports — not restarting services"
 fi
 

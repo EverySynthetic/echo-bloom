@@ -449,7 +449,12 @@ def require_auth_only(request: Request):
     return token
 
 
-_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+# ::ffff:127.0.0.1 is the same machine reached through a dual-stack socket, and
+# uvicorn produces it. Omitting it meant a local proxy could arrive looking
+# remote: its forwarding headers would be ignored and every client behind it
+# would share one rate-limit bucket, so one visitor could lock out everybody.
+# Caught in review by Grok, 2026-08-21.
+_LOOPBACK = {"127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"}
 _PROXY_HEADERS = (
     "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto",
     "cf-connecting-ip", "x-real-ip", "forwarded",

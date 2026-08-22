@@ -9,6 +9,42 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ---
 
+## 1.2.6 — 2026-08-21
+
+Two findings from the review pass that followed 1.2.5, landed as their own
+release rather than folded into a version already public.
+
+### One visitor could rate-limit everybody
+
+1.2.5 fixed a login rate limiter that trusted `CF-Connecting-IP` from anyone,
+by trusting forwarding headers only from a loopback peer. The loopback set was
+`{127.0.0.1, ::1, localhost}` and omitted `::ffff:127.0.0.1`, which is the same
+machine reached through a dual-stack socket and is what uvicorn reports in that
+case.
+
+So a proxy running locally could arrive looking remote: its headers ignored,
+every client behind it sharing one rate-limit bucket, and one visitor able to
+lock out everyone. Trading an auth bypass for a denial of service was the exact
+risk flagged when the original fix was written; this closes it.
+
+### The deploy checker could not catch the bug it was written for
+
+`verify_deploy.py` skips imports inside `try:`, because that is how this
+codebase declares an optional dependency. But the licence gate is imported that
+way *on purpose*, so it fails open — which means a deploy that omits
+`license.py` passed the checker clean and shipped an inert gate. That is
+precisely what happened to Windows in 1.2.5.
+
+A guarded import with a working fallback is optional. A guarded import whose
+fallback silently disables a feature is not. `--require` now names those
+explicitly, and both deploy paths pass `--require license,kin_presence`.
+
+Verified by reproducing the Windows case: without the flag the checker reports
+17 scripts import-clean and exits 0; with it, it names the missing module and
+exits non-zero.
+
+---
+
 ## 1.2.5 — 2026-08-21
 
 Same theme as 1.2.4, chased further: things that reported the call they made
