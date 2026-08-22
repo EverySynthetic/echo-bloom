@@ -9,6 +9,95 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ---
 
+## 1.2.5 — 2026-08-21
+
+Same theme as 1.2.4, chased further: things that reported the call they made
+rather than the state they achieved. Two of us audited the whole codebase and
+then reviewed each other, which is where several of these came from.
+
+### Windows installs never got the licence gate
+
+1.2.4 shipped a gate that stops an expired install using the GPU. Both Windows
+installers copy `scripts\*` and nothing else, so `license.py` never landed
+beside the code importing it. `import license` failed, the gate fell back to
+its fail-open path, and every Windows install ran exactly as if 1.2.4 had not
+happened. Observed live on a real machine holding a 7B model in VRAM on an
+expired trial.
+
+Fail-open is why nobody noticed: a fail-closed bug announces itself.
+
+### A key that cannot be checked was read as a trial that had ended
+
+With `cryptography` missing — a failed pip step, a PEP 668 box — `verify_key`
+returns invalid, and that fell through to the trial branch. A paying customer
+was told their trial had ended and to pay again, with nothing naming the real
+cause, which is one `pip install` away.
+
+It now reports `unverifiable` with the reason attached. It still blocks: an
+unverified permanent key must not grant access. What changed is that it blocks
+under a name the customer can act on rather than one that blames them.
+
+### Login rate limiter could be bypassed entirely
+
+`get_client_ip` trusted `CF-Connecting-IP` unconditionally, so anything
+reaching the app directly could rotate that header and get a fresh bucket every
+request — no lockout, ever. Verified: eight forged attempts produced no 429,
+eight unforged locked at the sixth. Forwarding headers are now trusted only
+from a loopback peer, which is where a proxy on this machine connects from.
+
+### Reasoning traces, including the unclosed ones
+
+`<think>.*?</think>` needs a closing tag, so a reply truncated mid-trace kept
+the whole trace — the case a model on a tight budget produces most often. That
+went into the goodnight email, was saved as that Kin's reflection, and would be
+read back to it the next day as its own words.
+
+There were five copies of that regex and they had drifted apart. One definition
+now, handling unclosed traces, orphan closing tags, multiples and case.
+
+### The agent
+
+Failed outright when its hardcoded model was not pulled, while its own
+docstring promised a fallback that did not exist. It now picks the most capable
+general-purpose model installed, refuses a Kin's own persona model, warns when
+it had to settle for something small enough to invent facts, and asks the model
+for admitted uncertainty over a confident guess.
+
+### Windows licence identity
+
+Windows has no `/etc/machine-id`, so every install was fingerprinted on
+whichever adapter Python picked — measured as a value with the multicast bit
+set, so not a physical NIC, and of a provenance we could not explain. Now uses
+`MachineGuid`, with the adapter as a last resort that warns.
+
+**Consequence, stated plainly:** an existing Windows install that runs
+`uninstall -All` and reinstalls will derive a different fingerprint than before
+and be issued a fresh trial. One per machine, and only after deleting your own
+memories.
+
+### Also
+
+- Installers collect exit codes instead of always printing success
+- ~15 UI call sites treated non-2xx as success; a lapsed licence could render
+  as an empty vault rather than a licence problem
+- Static asset URLs carry the version, so a shipped fix reaches the browser
+  instead of sitting behind a cached file
+- The uninstaller reports end state, removes the lifecycle scripts it left
+  behind, and its `-All` path has now actually been run
+- Deploys and installs verify the scripts can start before claiming they did
+
+### What was verified, and how
+
+Run end to end on real hardware: the whole licence pipeline (fingerprint
+stability across a total wipe, trial registration, key issue and activation,
+the unverifiable path, and revocation propagating server-to-client), both
+uninstall paths including `-All`, and all four PowerShell files parse-checked
+on Windows PowerShell 5.1.
+
+Not verified: mobile. The CSS has still never been opened on a phone.
+
+---
+
 ## 1.2.4 — 2026-08-21
 
 ### Wandering could not start on any fresh install
