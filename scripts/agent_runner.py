@@ -22,7 +22,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))           # scripts/ (config)
 sys.path.insert(0, str(_HERE.parent))    # repo root (kin_presence)
 import config as cfg
-from kin_text import strip_think, normalise_model
+from kin_text import strip_think, normalise_model, model_base
 from kin_presence import heartbeat
 
 # What we suggest pulling when nothing suitable is installed. Not a hard
@@ -132,14 +132,14 @@ def choose_model(installed: list[dict], requested: str | None):
     Ollama mid-request and surfaced to the user as its raw API string.
     """
     names = [m.get("name", "") for m in installed]
-    personas = {normalise_model(p) for p in _persona_models()}
+    personas = {model_base(p) for p in _persona_models()}
 
     if requested:
         if requested in names or f"{requested}:latest" in names:
             # The requested path skipped the persona check entirely, so naming
             # a Kin's model in the spawn box handed that Kin an agent task and
             # it answered as itself.
-            if normalise_model(requested) in personas:
+            if model_base(requested) in personas:
                 raise PersonaModelRefused(requested)
             return requested, ""
         raise ModelUnavailable(requested, names, SUGGESTED_MODEL)
@@ -148,7 +148,7 @@ def choose_model(installed: list[dict], requested: str | None):
         m for m in installed
         # Ollama reports `cogitocoda:latest`; kin_config.json usually says
         # `cogitocoda`. Compared raw, a persona model was not recognised as one.
-        if normalise_model(m.get("name", "")) not in personas
+        if model_base(m.get("name", "")) not in personas
         and "embed" not in m.get("name", "").lower()
         and (m.get("details") or {}).get("family") != "nomic-bert"
     ]

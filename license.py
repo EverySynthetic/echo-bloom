@@ -91,8 +91,16 @@ def get_fingerprint() -> str:
             pass
 
     if not parts:
+        # Last resort. Neither /etc/machine-id nor MachineGuid was readable, so
+        # identity now rests on whichever adapter uuid.getnode() picks, which
+        # can change when a VPN or VM adapter is added or removed. Silent, this
+        # looked identical to a stable fingerprint until a customer's licence
+        # stopped matching their machine.
         import uuid
-        parts.append(str(uuid.getnode()))  # last resort: adapter address
+        log.warning("no stable machine id (/etc/machine-id absent, MachineGuid "
+                    "unreadable) - falling back to the network adapter address, "
+                    "which may change if adapters are added or removed")
+        parts.append(str(uuid.getnode()))
 
     fp = hashlib.sha256("|".join(parts).encode()).hexdigest()
     FINGERPRINT_PATH.parent.mkdir(parents=True, exist_ok=True)

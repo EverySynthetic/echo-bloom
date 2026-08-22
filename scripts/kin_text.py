@@ -60,3 +60,18 @@ def normalise_model(tag: str) -> str:
     if tag.endswith(":latest"):
         tag = tag[: -len(":latest")]
     return tag
+
+
+def model_base(tag: str) -> str:
+    """The part before the tag: `llama3.1:8b` -> `llama3.1`.
+
+    For deciding whether a model belongs to a Kin, this is the comparison that
+    matters. normalise_model only strips `:latest`, so a config saying
+    `llama3.1` did not match an installed `llama3.1:8b` and that Kin's model
+    was not recognised as a persona.
+
+    Deliberately errs toward matching: a false match only costs the agent a
+    different model to pick, while a false miss hands a Kin an agent task and
+    it answers as itself.
+    """
+    return normalise_model(tag).split(":", 1)[0]
