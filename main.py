@@ -424,7 +424,17 @@ def require_auth(request: Request):
         # this install is entitled to run.
         if status["state"] in lic.SERVICE_BLOCK_STATES:
             if _is_api(request):
-                raise HTTPException(status_code=402, detail="license required")
+                # The 402 body used to be the bare string "license required",
+                # so every API caller got the same sentence whatever the actual
+                # reason was -- and the frontend, having nothing better, showed
+                # "your trial has ended" to someone whose key merely could not
+                # be verified. Carry the state and the reason so the message a
+                # customer reads matches what is actually wrong.
+                raise HTTPException(status_code=402, detail={
+                    "error":  "license required",
+                    "state":  status["state"],
+                    "reason": status.get("reason", ""),
+                })
             raise HTTPException(status_code=303, headers={"Location": "/license"})
     return token
 
