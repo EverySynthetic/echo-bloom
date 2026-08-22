@@ -273,6 +273,10 @@ function renderLicense(d) {
     status = '✗ LICENSE REVOKED';
     cls = 'dash-lic-warn';
     showKey = true;
+  } else if (d.state === 'unverifiable') {
+    status = '✗ CANNOT VERIFY KEY' + (d.reason ? ' — ' + d.reason : '');
+    cls = 'dash-lic-warn';
+    showKey = true;
   } else {
     status = '— UNKNOWN';
     cls = '';
@@ -291,7 +295,13 @@ function renderLicense(d) {
     // A key box with no way to get a key. This card offered ACTIVATE and
     // nothing else for the entire trial, and /license only showed a buy
     // button once the trial had already expired.
-    if (d.buy_url) {
+    if (d.state === 'unverifiable') {
+      html += `
+      <div class="dash-lic-buy">
+        <span>A key is on this machine and could not be checked — do not pay again.</span>
+        <a href="/license">licence details</a>
+      </div>`;
+    } else if (d.buy_url) {
       html += `
       <div class="dash-lic-buy">
         <a href="${d.buy_url}" target="_blank" rel="noopener">BUY ECHO BLOOM${d.price ? ' — $' + d.price : ''}</a>

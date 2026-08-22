@@ -38,6 +38,8 @@
         <a href="/license" class="nav-license nav-license--expired">EXPIRED</a>
       {% elif _lic.state == "revoked" %}
         <a href="/license" class="nav-license nav-license--expired">REVOKED</a>
+      {% elif _lic.state == "unverifiable" %}
+        <a href="/license" class="nav-license nav-license--expired">KEY UNCHECKED</a>
       {% else %}
         <a href="/license" class="nav-license nav-license--ok">LICENSE</a>
       {% endif %}

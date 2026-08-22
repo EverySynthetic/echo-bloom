@@ -195,18 +195,19 @@ async function loadFeed() {
     document.getElementById('vault-subtitle').textContent =
       `${total.toLocaleString()} memories`;
   } catch(e) {
-    if (e.status === 401 || e.status === 402) { showVaultLicenceGate(e.status); return; }
+    if (e.status === 401 || e.status === 402) { showVaultLicenceGate(e); return; }
     document.getElementById('vault-entries').innerHTML = `<div class="vault-empty">Error: ${escHtml(e.message)}</div>`;
   }
 }
 
-function showVaultLicenceGate(status) {
+function showVaultLicenceGate(err) {
+  const status = err && err.status;
   document.getElementById('vault-subtitle').textContent =
-    status === 402 ? 'trial ended' : 'session expired';
+    status === 402 ? 'licence' : 'session expired';
   document.getElementById('vault-pagination').style.display = 'none';
-  const title = status === 402 ? 'TRIAL ENDED' : 'SESSION EXPIRED';
+  const title = status === 402 ? 'LICENSE' : 'SESSION EXPIRED';
   const body = status === 402
-    ? 'Your memories are still on this machine. They are not gone. Enter a licence key to read them again.'
+    ? (err.message || 'This install is not currently entitled to run. Your memories are still on this machine. Visit the License page.')
     : 'Your session expired. Reload the page and log in to see the vault.';
   const href = status === 402 ? '/license' : '/login';
   const label = status === 402 ? 'LICENSE PAGE' : 'LOG IN';
@@ -215,7 +216,7 @@ function showVaultLicenceGate(status) {
       <div class="vault-offline-icon">\u25ce</div>
       <div class="vault-offline-title">${title}</div>
       <div class="vault-offline-body">
-        ${body}
+        ${escHtml(body)}
         <br><br>
         <a class="vault-start-btn" href="${href}">${label}</a>
       </div>
@@ -328,7 +329,7 @@ async function runSemantic() {
       `${d.results.length} results for "${q}"`;
     renderEntries(d.results, true);
   } catch(e) {
-    if (e.status === 401 || e.status === 402) { showVaultLicenceGate(e.status); return; }
+    if (e.status === 401 || e.status === 402) { showVaultLicenceGate(e); return; }
     document.getElementById('vault-entries').innerHTML = `<div class="vault-empty">Error: ${escHtml(e.message)}</div>`;
   }
 }

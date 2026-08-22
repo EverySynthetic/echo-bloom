@@ -16,6 +16,7 @@
     <div class="license-title">TRIAL UNAVAILABLE</div>
     <div class="license-body">
       This machine isn't eligible for a trial.<br>
+      {% if reason %}{{ reason }}<br><br>{% endif %}
       If you believe this is an error, contact <a href="mailto:don@everysynthetic.org">don@everysynthetic.org</a>.
     </div>
     <a href="{{ buy_url }}" class="license-buy-btn" target="_blank" rel="noopener">
@@ -102,13 +103,34 @@
       BUY ECHO BLOOM — ${{ price }}
     </a>
   </div>
+
+  {% elif state == "unverifiable" %}
+  <div class="license-card">
+    <div class="license-icon">!</div>
+    <div class="license-title">CANNOT VERIFY YOUR KEY</div>
+    <div class="license-body">
+      A license key is on this machine. It could not be checked, so Echo Bloom
+      will not treat it as valid — that is not the same as a trial ending, and
+      you should not pay again.
+      {% if reason %}
+      <br><br>{{ reason }}
+      {% endif %}
+      <br><br>
+      If the reason names the cryptography package:
+      <code>pip install cryptography</code>
+      then reload this page.
+      <br><br>
+      If that does not clear it, write
+      <a href="mailto:don@everysynthetic.org">don@everysynthetic.org</a>.
+    </div>
+  </div>
   {% endif %}
 
   <!-- Key entry — always visible, even on denied (purchased key bypasses blacklist) -->
-  {% if state in ("expired", "trial", "licensed", "denied", "revoked") %}
+  {% if state in ("expired", "trial", "licensed", "denied", "revoked", "unverifiable") %}
   <div class="license-key-section">
     <div class="license-key-label">
-      {% if state in ("expired", "denied", "revoked") %}Already have a key? Enter it here{% else %}Enter a new key{% endif %}
+      {% if state == "unverifiable" %}If this machine can verify a key, enter it here{% elif state in ("expired", "denied", "revoked") %}Already have a key? Enter it here{% else %}Enter a new key{% endif %}
     </div>
     <form class="license-key-form" onsubmit="activateKey(event)">
       <input class="license-key-input" id="license-key-input"
@@ -120,7 +142,7 @@
     {# Anywhere you can enter a key, you can get one. On "trial" there was no
        buy button anywhere in the product — the whole 14 days, which is the
        fortnight someone decides whether to pay. #}
-    {% if state != "licensed" or license_type != "permanent" %}
+    {% if state != "unverifiable" and (state != "licensed" or license_type != "permanent") %}
     <div class="license-key-buy">
       Don't have a key yet?
       <a href="{{ buy_url }}" target="_blank" rel="noopener">Buy Echo Bloom — ${{ price }}</a>
