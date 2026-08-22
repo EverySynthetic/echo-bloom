@@ -123,7 +123,7 @@ def _verify_signed_token(token: str, prefix: str) -> dict:
             # had the same shape, so a paying customer whose cryptography
             # install failed was told their trial had ended.
             return {"valid": False, "unverifiable": True,
-                    "reason": "cryptography package not installed — cannot verify a license key"}
+                    "reason": "cryptography package not installed - cannot verify a license key"}
         if token.startswith(prefix):
             try:
                 rest = token[len(prefix):]
@@ -245,7 +245,7 @@ def _read_trial_token() -> dict | None:
             # and the hard cap means even a valid-looking MAC cannot outlive
             # the grace window measured from first run.
             if not _offline_token_ok(raw):
-                log.warning("offline grace token failed authentication — ignoring it")
+                log.warning("offline grace token failed authentication - ignoring it")
                 TRIAL_TOKEN_PATH.unlink(missing_ok=True)
                 return None
             expiry = min(expiry, _first_seen() + _OFFLINE_GRACE_DAYS * 86400)
@@ -490,7 +490,7 @@ def _store_server_result(result: dict) -> None:
     token = result.get("token")
     if result.get("ok") and token:
         if not str(token).startswith("EBT-"):
-            log.warning("license server returned a non-EBT token — ignoring it")
+            log.warning("license server returned a non-EBT token - ignoring it")
             return
         if _CRYPTO_OK and not _verify_signed_token(str(token), "EBT-")["valid"]:
             log.warning("license server returned an EBT token that failed signature check")
@@ -505,7 +505,7 @@ def _store_server_result(result: dict) -> None:
     if genuine:
         TRIAL_TOKEN_PATH.write_text(f"DENIED:{reason or 'blacklisted'}")
     else:
-        log.warning("trial registration did not succeed (%s) — will retry next launch",
+        log.warning("trial registration did not succeed (%s) - will retry next launch",
                     reason or "no reason given")
 
 
@@ -601,7 +601,7 @@ def services_should_run() -> tuple[bool, str]:
     try:
         state = (get_status() or {}).get("state")
     except Exception:
-        log.exception("license check failed — leaving background work running")
+        log.exception("license check failed - leaving background work running")
         return True, "check-failed"
     if state in SERVICE_BLOCK_STATES:
         return False, state

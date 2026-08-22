@@ -165,7 +165,7 @@ def choose_model(installed: list[dict], requested: str | None):
     if size < MIN_USEFUL_PARAMS_B:
         note = (f"Using {best['name']} ({size:g}B) because it is the largest "
                 f"installed. Models under {MIN_USEFUL_PARAMS_B:g}B invent "
-                f"details when asked to recall facts — treat this answer as a "
+                f"details when asked to recall facts - treat this answer as a "
                 f"draft. `ollama pull {SUGGESTED_MODEL}` for something better.")
     else:
         note = ""
@@ -219,7 +219,7 @@ async def run_task(task: str, model: str | None = None, api_key: str | None = No
         heartbeat(AGENT_NAME, "failed")
         raise RuntimeError(
             f"{chosen} did not answer within {LOCAL_TIMEOUT_S}s. A large model "
-            f"loading for the first time can take minutes — try again once it "
+            f"loading for the first time can take minutes - try again once it "
             f"is warm, or pick a smaller model."
         ) from e
     except Exception as e:
