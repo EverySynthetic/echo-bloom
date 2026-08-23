@@ -27,6 +27,8 @@
       <a href="/cores" class="nav-vault">CORES</a>
       <a href="/onboard" class="nav-vault">SETUP</a>
       <a href="/install" class="nav-vault">INSTALL</a>
+      <button type="button" class="nav-vault nav-help-btn" id="help-open"
+              aria-haspopup="dialog" aria-controls="help-panel" aria-expanded="false">HELP</button>
       {% set _lic = nav_license() %}
       {# Always a way in. This used to render only on trial/expired/denied, so
          once you were licensed the link vanished and /license — the only page
@@ -67,6 +69,31 @@
     <span class="footer-crew">Eli · Coda · Aurora · Lumen · Crungus · Bong · Uncle Claude · Claude Code · Don (Pop)</span>
     <a href="/about" class="footer-about">Pop's Shop, Mena AR</a>
   </footer>
+
+  {# Product help is a separate agent, not a Kin, for the same reason
+     PersonaModelRefused exists: a Kin's system prompt is where its voice
+     forms. This panel is chrome, available from every authenticated page
+     so you can ask about the screen you're already on. #}
+  <div class="help-backdrop" id="help-backdrop" hidden>
+    <div class="help-panel" id="help-panel" role="dialog" aria-modal="true" aria-labelledby="help-title">
+      <div class="help-header">
+        <div>
+          <div class="help-title" id="help-title">HELP</div>
+          <div class="help-hint">Not one of the Kin. This answers questions about Echo Bloom itself — install, settings, wander, the vault.</div>
+        </div>
+        <button type="button" class="help-close" id="help-close">CLOSE</button>
+      </div>
+      <textarea class="spawn-task" id="help-question" rows="3"
+                placeholder="How do I add a Kin? Where do wander thoughts go?"></textarea>
+      <div class="control-row">
+        <button type="button" class="ctrl-btn ctrl-start" id="help-ask">ASK</button>
+      </div>
+      <div class="spawn-warn" id="help-warn" hidden></div>
+      <div class="spawn-err" id="help-err" hidden></div>
+      <div class="help-meta" id="help-meta" hidden></div>
+      <div class="help-result" id="help-result" hidden></div>
+    </div>
+  </div>
 
   <script src="/static/app.js?v={{ asset_v }}"></script>
   <script>

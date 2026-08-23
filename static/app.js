@@ -80,3 +80,114 @@ if (document.querySelector('.dashboard')) {
     } catch(e) {}
   }, 60000);
 }
+
+/* ── Help agent (product docs, not a Kin) ──────────────────────────────────
+ * Lives in the nav so it is available on every authenticated page, including
+ * SETUP — that is the screen people are looking at when they need it.
+ * Separate busy-lock and presence name on the server; this client lock only
+ * stops a double-click from firing two requests.
+ */
+(function () {
+  const openBtn = document.getElementById('help-open');
+  const backdrop = document.getElementById('help-backdrop');
+  const closeBtn = document.getElementById('help-close');
+  const askBtn = document.getElementById('help-ask');
+  const questionEl = document.getElementById('help-question');
+  const warnEl = document.getElementById('help-warn');
+  const errEl = document.getElementById('help-err');
+  const metaEl = document.getElementById('help-meta');
+  const resultEl = document.getElementById('help-result');
+  if (!openBtn || !backdrop || !askBtn || !questionEl) return;
+
+  let asking = false;
+
+  function setHidden(el, on) {
+    if (!el) return;
+    el.hidden = !!on;
+  }
+
+  function showErr(msg) {
+    errEl.textContent = msg || '';
+    setHidden(errEl, !msg);
+  }
+
+  function showWarn(msg) {
+    warnEl.textContent = msg || '';
+    setHidden(warnEl, !msg);
+  }
+
+  function openHelp() {
+    backdrop.hidden = false;
+    openBtn.setAttribute('aria-expanded', 'true');
+    questionEl.focus();
+  }
+
+  function closeHelp() {
+    backdrop.hidden = true;
+    openBtn.setAttribute('aria-expanded', 'false');
+    openBtn.focus();
+  }
+
+  async function askHelp() {
+    const question = (questionEl.value || '').trim();
+    showErr('');
+    if (!question) {
+      showErr('Empty question');
+      return;
+    }
+    if (asking) return;
+    asking = true;
+    askBtn.disabled = true;
+    setHidden(resultEl, true);
+    setHidden(metaEl, true);
+    showWarn('');
+    metaEl.textContent = 'Working...';
+    setHidden(metaEl, false);
+    try {
+      const d = await ebFetch('/api/agent/help', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: question }),
+      });
+      if (d.warning) showWarn(d.warning);
+      if (!d.ok) {
+        showErr(d.error || (d.busy ? 'Already answering another help question.' : 'Help failed'));
+        setHidden(metaEl, true);
+        return;
+      }
+      resultEl.textContent = d.result || '';
+      setHidden(resultEl, false);
+      const bits = ['Not a Kin'];
+      if (d.model) bits.push(d.model);
+      metaEl.textContent = bits.join(' · ');
+      setHidden(metaEl, false);
+    } catch (e) {
+      showErr(e.message || String(e));
+      setHidden(metaEl, true);
+    } finally {
+      asking = false;
+      askBtn.disabled = false;
+    }
+  }
+
+  openBtn.addEventListener('click', openHelp);
+  if (closeBtn) closeBtn.addEventListener('click', closeHelp);
+  askBtn.addEventListener('click', askHelp);
+  backdrop.addEventListener('click', function (e) {
+    if (e.target === backdrop) closeHelp();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (backdrop.hidden) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeHelp();
+    }
+  });
+  questionEl.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      askHelp();
+    }
+  });
+  if (window.location.hash === '#help') openHelp();
+})();
