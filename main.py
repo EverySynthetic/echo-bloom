@@ -1327,6 +1327,10 @@ async def _agent_vram_warning(model: str) -> str | None:
 
 _agent_running = False
 _AGENT_NAME = "agent-default"
+# Separate lock from _agent_running on purpose: someone asking for help
+# shouldn't be told "an agent is already at the bench" because an unrelated
+# background task happens to be running.
+_help_agent_running = False
 
 
 @app.get("/api/presence")
@@ -1407,6 +1411,58 @@ async def api_agent_spawn(request: Request, _=Depends(require_auth)):
         }
     finally:
         _agent_running = False
+
+
+@app.post("/api/agent/help")
+async def api_agent_help(request: Request, _=Depends(require_auth)):
+    """Same pipeline as /api/agent/spawn, HELP_SYSTEM instead of AGENT_SYSTEM,
+    and its own busy-lock -- see the comment on _help_agent_running for why
+    this isn't just a mode flag on the existing endpoint."""
+    global _help_agent_running
+    body = await request.json()
+    question = (body.get("question") or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Empty question")
+
+    from agent_runner import run_task, DEFAULT_MODEL, HELP_SYSTEM, HELP_AGENT_NAME
+    import kin_presence
+
+    chosen = DEFAULT_MODEL
+
+    if _help_agent_running:
+        return {
+            "ok": False,
+            "busy": True,
+            "error": "Already answering another help question.",
+            "model": chosen,
+        }
+
+    _help_agent_running = True
+    kin_presence.heartbeat(HELP_AGENT_NAME, "working")
+    try:
+        warning = await _agent_vram_warning(chosen)
+        try:
+            result = await run_task(question, system=HELP_SYSTEM, name=HELP_AGENT_NAME)
+        except Exception as e:
+            log.warning("help agent failed (%s): %s", chosen, e)
+            kin_presence.heartbeat(HELP_AGENT_NAME, "failed")
+            return {
+                "ok": False,
+                "error": str(e),
+                "model": chosen,
+                "warning": warning,
+            }
+
+        kin_presence.record_thought_return(HELP_AGENT_NAME, result, mode="help")
+        kin_presence.heartbeat(HELP_AGENT_NAME, "resting")
+        return {
+            "ok": True,
+            "result": result,
+            "model": chosen,
+            "warning": warning,
+        }
+    finally:
+        _help_agent_running = False
 
 
 @app.get("/about", response_class=HTMLResponse)

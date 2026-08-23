@@ -30,6 +30,10 @@ from kin_presence import heartbeat
 SUGGESTED_MODEL = "qwen3:8b"
 DEFAULT_MODEL   = SUGGESTED_MODEL      # kept: main.py imports this name
 AGENT_NAME      = "agent-default"
+# Distinct presence identity so a Help request isn't blocked by, or
+# reported alongside, an unrelated background agent task -- someone stuck
+# on the app shouldn't have to wait for a different job to finish.
+HELP_AGENT_NAME = "agent-help"
 
 # Below this the answers stop being worth reading for anything factual. A 4B
 # model asked for Hunter S. Thompson's last book returned a fabricated title, a
@@ -50,6 +54,29 @@ AGENT_SYSTEM = (
     "dates, names, numbers, publishers or sources -- if you cannot recall one, "
     "say you cannot. A short answer that admits a gap is a correct answer; a "
     "confident answer that turns out to be wrong is a failure."
+)
+
+# Kept separate from a Kin's own system prompt for the same reason
+# PersonaModelRefused exists: a Kin's prompt is where its voice forms, and
+# product documentation stuffed into that same prompt would color a brand
+# new Kin's first words with settings-menu content instead of letting it
+# start being itself. This runs as an agent task, on a general model, same
+# as AGENT_SYSTEM -- never on a Kin's own model.
+HELP_SYSTEM = (
+    "You explain Echo Bloom, the software, to whoever is using it. Echo "
+    "Bloom lets someone run a local AI companion -- a Kin -- on their own "
+    "hardware via Ollama. Onboarding sets up nodes, then a Kin, then "
+    "optionally a memory vault. A Kin wanders on its own between "
+    "conversations and keeps its own thoughts. Agents (like you, right now) "
+    "are separate one-off task workers spawned for a single question or "
+    "job -- they never run on a Kin's own model, so asking one something "
+    "does not affect any Kin's memory or character. Licensing is a free "
+    "trial, then a one-time key. "
+    "Answer only from what you actually know about how the app works. If "
+    "you are not sure a feature or setting exists, say so plainly instead "
+    "of describing one that might not be there -- a wrong answer about "
+    "software is worse than an admitted gap, because the person trusts it "
+    "and goes looking for a button that was never real."
 )
 
 
@@ -172,19 +199,25 @@ def choose_model(installed: list[dict], requested: str | None):
     return best["name"], note
 
 
-async def run_task(task: str, model: str | None = None, api_key: str | None = None) -> str:
+async def run_task(task: str, model: str | None = None, api_key: str | None = None,
+                    system: str = AGENT_SYSTEM, name: str = AGENT_NAME) -> str:
     """Run a task and return the model's response.
 
     Local Ollama is hard default. If api_key is provided, attempt external API
     (checks for xai, openai, anthropic patterns). Falls back to local on any error.
     Raises on failure — does not return error strings, and does not write the vault.
     The caller owns record_thought_return / resting heartbeat.
+
+    system/name let a caller run a differently-purposed worker (e.g. the help
+    agent) through this same pipeline without duplicating it -- see
+    HELP_SYSTEM above for why that's a separate prompt rather than a flag
+    passed into a Kin's own persona.
     """
     # Try external API first if key is provided
     if api_key:
         try:
-            result = await _run_external(task, model or SUGGESTED_MODEL, api_key)
-            heartbeat(AGENT_NAME, "completed-external")
+            result = await _run_external(task, model or SUGGESTED_MODEL, api_key, system=system)
+            heartbeat(name, "completed-external")
             return result
         except Exception as e:
             print(f"[agent] External API failed, falling back to local: {e}")
@@ -195,7 +228,7 @@ async def run_task(task: str, model: str | None = None, api_key: str | None = No
         try:
             installed = await list_installed(session)
         except Exception as e:
-            heartbeat(AGENT_NAME, "failed")
+            heartbeat(name, "failed")
             raise RuntimeError(
                 "Could not reach Ollama at localhost:11434. Is it running?"
             ) from e
@@ -203,12 +236,12 @@ async def run_task(task: str, model: str | None = None, api_key: str | None = No
     try:
         chosen, note = choose_model(installed, model)
     except ModelUnavailable:
-        heartbeat(AGENT_NAME, "failed")
+        heartbeat(name, "failed")
         raise
 
     try:
-        result = await _run_local_ollama(task, chosen)
-        heartbeat(AGENT_NAME, "completed-local")
+        result = await _run_local_ollama(task, chosen, system=system)
+        heartbeat(name, "completed-local")
         if note:
             result = f"{result}\n\n---\n{note}"
         return result
@@ -216,25 +249,25 @@ async def run_task(task: str, model: str | None = None, api_key: str | None = No
         # str(asyncio.TimeoutError) is the empty string, so the obvious
         # f"...: {e}" produced "Local Ollama error:" and stopped. Naming the
         # model and the budget is the whole diagnosis.
-        heartbeat(AGENT_NAME, "failed")
+        heartbeat(name, "failed")
         raise RuntimeError(
             f"{chosen} did not answer within {LOCAL_TIMEOUT_S}s. A large model "
             f"loading for the first time can take minutes - try again once it "
             f"is warm, or pick a smaller model."
         ) from e
     except Exception as e:
-        heartbeat(AGENT_NAME, "failed")
+        heartbeat(name, "failed")
         raise RuntimeError(f"Local Ollama error: {e or type(e).__name__}") from e
 
 
-async def _run_local_ollama(task: str, model: str) -> str:
+async def _run_local_ollama(task: str, model: str, system: str = AGENT_SYSTEM) -> str:
     async with aiohttp.ClientSession() as session:
         async with session.post(
             "http://localhost:11434/api/chat",
             json={
                 "model": model,
                 "messages": [
-                    {"role": "system", "content": AGENT_SYSTEM},
+                    {"role": "system", "content": system},
                     {"role": "user",   "content": task},
                 ],
                 "stream": False,
@@ -263,15 +296,22 @@ async def _run_local_ollama(task: str, model: str) -> str:
             return text
 
 
-async def _run_external(task: str, model: str, api_key: str) -> str:
+async def _run_external(task: str, model: str, api_key: str, system: str = AGENT_SYSTEM) -> str:
     """Very basic external fallback. Detects provider from key prefix or env."""
     headers = {"Authorization": f"Bearer {api_key}"}
+    # Pre-existing gap, fixed as a side effect of wiring `system` through
+    # here for the help agent: this path sent no system message at all, so
+    # AGENT_SYSTEM's "don't invent an answer" rule never applied to an
+    # external-API task. It does now, same as the local path always has.
     if "xai" in api_key.lower() or "grok" in model.lower():
         url = "https://api.x.ai/v1/chat/completions"
         headers["Content-Type"] = "application/json"
         body = {
             "model": model or "grok-4",
-            "messages": [{"role": "user", "content": task}],
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user",   "content": task},
+            ],
             "temperature": 0.7,
         }
     elif api_key.startswith("sk-"):
@@ -279,7 +319,10 @@ async def _run_external(task: str, model: str, api_key: str) -> str:
         url = "https://api.openai.com/v1/chat/completions"
         body = {
             "model": model or "gpt-4o-mini",
-            "messages": [{"role": "user", "content": task}],
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user",   "content": task},
+            ],
             "temperature": 0.7,
         }
     else:
