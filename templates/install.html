@@ -190,6 +190,43 @@
         </div>
       </div>
 
+      <!-- macOS -- early access, gated. The installer works but has not
+           run on real macOS hardware outside of testing, so this is not
+           offered at large the way Linux/Windows are -- just to whoever
+           has the code. -->
+      <div class="install-card" id="mac-card">
+        <div class="install-card-os">macOS <span class="install-card-dim" style="font-size:0.75em;">-- early access</span></div>
+        <div class="install-card-detail">Apple Silicon &amp; Intel</div>
+        <div id="mac-locked">
+          <div class="install-card-note install-card-note-tight">
+            New, and not yet run on real Mac hardware outside of testing.
+            If you have got an access code, enter it below.
+          </div>
+          <div style="display:flex; gap:8px; margin-top:8px;">
+            <input type="text" id="mac-code" placeholder="access code"
+              style="flex:1; background:transparent; border:1px solid var(--border,#444);
+                     color:inherit; padding:8px 10px; font:inherit;"
+              onkeydown="if(event.key==='Enter') unlockMac()">
+            <button class="install-btn" onclick="unlockMac()">UNLOCK</button>
+          </div>
+          <div id="mac-code-err" class="install-card-note install-card-note-tight"
+               style="display:none; color:#e06060;">Not quite -- check the code and try again.</div>
+        </div>
+        <div id="mac-unlocked" style="display:none;">
+          <button class="install-btn" onclick="copyCmd('mac-cmd', this)">
+            COPY INSTALL COMMAND
+          </button>
+          <div class="install-cmd-wrap">
+            <code class="install-cmd" id="mac-cmd">git clone -b macos-install-and-presence https://github.com/EverySynthetic/echo-bloom.git &amp;&amp; cd echo-bloom &amp;&amp; bash install.sh</code>
+          </div>
+          <div class="install-card-note install-card-note-tight install-card-dim">
+            Early access build -- launchd services instead of systemd, sysctl-based
+            hardware detection. If anything looks wrong, that is exactly what this
+            round is for: email don@everysynthetic.org with what you saw.
+          </div>
+        </div>
+      </div>
+
     </div><!-- .install-cards -->
 
     <!-- The price, and a way to pay it. Moved below the install links on
@@ -302,6 +339,18 @@ function copyCmd(id, btn) {
     window.getSelection().removeAllRanges();
     window.getSelection().addRange(range);
   });
+}
+// macOS early access -- a soft gate, not real security. Keeps the
+// not-yet-run-on-real-hardware build from being the first thing a random
+// visitor tries, while staying one shared code away for anyone who has it.
+function unlockMac() {
+  const input = document.getElementById("mac-code").value.trim().toUpperCase();
+  if (input === "PINEAPPLES") {
+    document.getElementById("mac-locked").style.display = "none";
+    document.getElementById("mac-unlocked").style.display = "block";
+  } else {
+    document.getElementById("mac-code-err").style.display = "block";
+  }
 }
 </script>
 {% endblock %}
