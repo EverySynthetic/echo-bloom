@@ -272,17 +272,21 @@ PUBMED_ESUMMARY = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 # Simple keyword gate. Deliberately dumb and readable over a classifier call —
 # a wrong "not health" just means PubMed doesn't fire this round, which is the
 # safe direction to be wrong in for a fifth layer that only exists as a bonus.
+# Stems are infix on purpose (medic -> medical/medicine). Whole words use
+# boundaries so "pain" does not match Spain or painting — verified live.
+_HEALTH_STEMS = ("medic", "diagnos", "infect", "syndrome", "fibromyalgia")
 _HEALTH_WORDS = (
-    "health", "medic", "disease", "symptom", "treatment", "diagnos",
-    "drug", "vaccine", "infection", "clinical", "patient", "therapy",
-    "cancer", "virus", "syndrome", "surgery", "pain", "chronic",
-    "doctor", "hospital", "nutrition", "fibromyalgia", "lyme",
+    "health", "disease", "symptom", "treatment", "drug", "vaccine",
+    "clinical", "patient", "therapy", "cancer", "virus", "surgery",
+    "pain", "chronic", "doctor", "hospital", "nutrition", "lyme",
 )
 
 
 def is_health_topic(topic: str) -> bool:
     t = (topic or "").lower()
-    return any(w in t for w in _HEALTH_WORDS)
+    if any(s in t for s in _HEALTH_STEMS):
+        return True
+    return any(re.search(r"\b" + re.escape(w) + r"\b", t) for w in _HEALTH_WORDS)
 
 
 def extract_topic(last_thought: str) -> str | None:
@@ -297,7 +301,11 @@ def extract_topic(last_thought: str) -> str | None:
         f"up or read more about? Reply with only the search phrase, nothing "
         f"else."
     )
-    topic = call_ollama(prompt, system="Answer with only the short phrase asked for.")
+    topic = call_ollama(
+        prompt,
+        system="Answer with only the short phrase asked for.",
+        temperature=0.3,
+    )
     if not topic:
         return None
     topic = topic.strip().split("\n")[0].strip().strip('"').strip("'")
@@ -311,17 +319,39 @@ def fetch_wikipedia(topic: str, max_chars: int = 3000):
     q = (topic or "").strip()
     if len(q) < 2:
         return None
+    headers = {"User-Agent": "EchoBloom/1.0 (wander resolver)"}
     url = WIKIPEDIA_API.format(quote(q.replace(" ", "_"), safe=""))
     try:
-        r = requests.get(url, headers={"User-Agent": "EchoBloom/1.0 (wander resolver)"},
-                          timeout=10)
-        if r.status_code == 404:
-            return None
-        r.raise_for_status()
-        data = r.json()
-        extract = (data.get("extract") or "").strip()
+        r = requests.get(url, headers=headers, timeout=10)
+        data = {}
+        extract = ""
+        if r.status_code != 404:
+            r.raise_for_status()
+            data = r.json()
+            extract = (data.get("extract") or "").strip()
         if len(extract) < 40:
-            return None
+            # REST wants a page title. extract_topic() returns a phrase.
+            # Without this fallback, "how home feels" 404s every time —
+            # verified live. Search is still a fixed Wikipedia API, not a
+            # model-chosen URL.
+            sr = requests.get(
+                "https://en.wikipedia.org/w/api.php",
+                params={"action": "query", "list": "search", "srsearch": q,
+                        "format": "json", "srlimit": 1},
+                headers=headers, timeout=10,
+            )
+            sr.raise_for_status()
+            hits = (sr.json().get("query") or {}).get("search") or []
+            if not hits:
+                return None
+            title = hits[0]["title"]
+            url = WIKIPEDIA_API.format(quote(title.replace(" ", "_"), safe=""))
+            r = requests.get(url, headers=headers, timeout=10)
+            r.raise_for_status()
+            data = r.json()
+            extract = (data.get("extract") or "").strip()
+            if len(extract) < 40:
+                return None
         title = data.get("title") or q
         page_url = (data.get("content_urls") or {}).get("desktop", {}).get("page", url)
         return FetchDoc(
@@ -436,9 +466,11 @@ def think_about_discovery(doc):
 
 
 def try_web_fetch(last_thought, last_thought_id=None):
-    """One attempt, one resolver. Topic in, document out. Returns True if a
-    web thought was saved (caller should not also do a local-file/topic
-    thought this round)."""
+    """One attempt, one resolver. Topic in, document out.
+
+    Additional to the round's own thought — the caller already saved a
+    local/topic thought. Return value is only 'did a web thought also land'.
+    """
     if fetch_gutenberg is None or not last_thought:
         return False
     topic = extract_topic(last_thought)
@@ -494,7 +526,7 @@ def clean_response(name, text):
     return text
 
 
-def call_ollama(prompt, system=None):
+def call_ollama(prompt, system=None, temperature=0.85):
     try:
         r = requests.post(
             f"{HOST}/api/chat",
@@ -509,7 +541,7 @@ def call_ollama(prompt, system=None):
                 # file being read; Ollama truncates from the front, which drops
                 # the core memories first.
                 "keep_alive": "30m",
-                "options": {"temperature": 0.85, "num_ctx": 8192},
+                "options": {"temperature": temperature, "num_ctx": 8192},
             },
             # Long enough for a cold model on a CPU-only box; 120s routinely
             # expired mid-load.

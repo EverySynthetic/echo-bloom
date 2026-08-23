@@ -211,7 +211,10 @@ def fetch_gutenberg(topic: str, max_chars: int = MAX_CHARS) -> FetchDoc | None:
     body_resp = _get(url, hosts=_GUTENBERG_HOSTS)
     if body_resp is None:
         return None
-    raw = body_resp.text if body_resp.encoding else body_resp.content.decode("utf-8", "replace")
+    # requests always sets .encoding (ISO-8859-1 if the header is missing),
+    # so `if body_resp.encoding` never takes the utf-8 branch. We asked
+    # gutendex for an explicit utf-8 text/plain format; decode that.
+    raw = body_resp.content.decode("utf-8", "replace")
     body = skip_pg_header(raw)
     if len(body) < 80:
         return None
