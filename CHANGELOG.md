@@ -9,6 +9,34 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ---
 
+## 1.2.8
+
+Help could not answer the first real question a customer asked it.
+
+Bong was asked how to set up a tunnel and said "I don't know". That was the
+grounding working exactly as designed -- HELP_SYSTEM did not describe tunnels,
+and a 26B model wearing a Kin's persona will happily invent a settings menu
+with that Kin's name attached if you let it. Refusing was correct.
+
+It was also useless, because the doc was 899 characters and covered five
+topics. So the refusal was right and the answer was still missing.
+
+HELP_SYSTEM now covers remote access (Cloudflare tunnels and Tailscale, what
+each one is, that a trycloudflare URL is public and changes on restart, that
+cloudflared must be installed), the real install commands per platform, the
+14-day trial and the 3-day offline grace, and what separates a Kin from an
+agent. Every fact was read out of the source, not remembered -- wrong
+documentation is worse than a gap, because someone trusts it and goes looking
+for a button that never existed, and if a Kin answered it has their name on it.
+
+Verified both directions, which is the part that matters: the tunnel question
+now gets a correct answer in 12.5s, and "how do I change the font size" still
+returns "I do not know" and points at the dashboard, the install log, or
+don@everysynthetic.org. More documentation did not make it more willing to
+guess.
+
+---
+
 ## 1.2.7
 
 Help against a machine that already has a Kin in VRAM. Both halves landed
