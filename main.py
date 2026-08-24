@@ -1414,6 +1414,81 @@ async def api_agent_spawn(request: Request, _=Depends(require_auth)):
         _agent_running = False
 
 
+@app.get("/api/report/preview")
+async def api_report_preview(_=Depends(require_auth)):
+    """Exactly what would be sent, so the person can read it first.
+
+    Built from the same code path as the send, not a summary of it -- a
+    preview that differs from the payload is worse than no preview.
+    """
+    import report
+    try:
+        b = await asyncio.to_thread(report.build, "")
+        return {"ok": True, "preview": b["preview"],
+                "attached": b["attached"], "missing": b["missing"]}
+    except Exception as e:
+        log.warning("report preview failed: %s", e)
+        return {"ok": False, "error": str(e), "preview": "",
+                "attached": [], "missing": []}
+
+
+@app.post("/api/report")
+async def api_report(request: Request, _=Depends(require_auth)):
+    """Send a problem report.
+
+    Re-gathers rather than trusting a payload posted back from the browser:
+    the logs may have moved on since the preview, and more importantly a
+    client-supplied blob is a client-supplied blob.
+
+    Delivery goes through the licence server, which already holds the SMTP
+    credentials every install talks to anyway. The customer's machine never
+    needs mail credentials -- we are not shipping SMTP secrets to a tester's
+    laptop so they can tell us something is broken.
+    """
+    body = await request.json()
+    description = (body.get("description") or "").strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="Say what went wrong first")
+
+    import report
+    b = await asyncio.to_thread(report.build, description)
+
+    def _send():
+        import license as _lic
+        import urllib.request, json as _json
+        payload = _json.dumps({
+            "report": b["preview"],
+            "version": b["environment"].get("version"),
+            "platform": b["environment"].get("platform"),
+        }).encode()
+        req = urllib.request.Request(
+            f"{_lic.TRIAL_SERVER}/report", data=payload,
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return _json.load(r)
+
+    try:
+        res = await asyncio.to_thread(_send)
+    except Exception as e:
+        # Do not lose what they wrote. Keep it on disk so it can be sent by
+        # hand or picked up later -- a failed report that also destroys the
+        # description is the worst possible outcome for someone helping us.
+        try:
+            fallback = Path.home() / ".local/share/echo_bloom" / "unsent_reports"
+            fallback.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            (fallback / f"report_{stamp}.txt").write_text(b["preview"], encoding="utf-8")
+            saved = str(fallback / f"report_{stamp}.txt")
+        except Exception:
+            saved = None
+        log.warning("report send failed: %s", e)
+        return {"ok": False, "error": f"Could not reach the report server: {e}",
+                "saved_locally": saved}
+
+    return {"ok": True, "delivered": bool(res.get("ok")),
+            "attached": b["attached"], "missing": b["missing"]}
+
+
 @app.post("/api/agent/help")
 async def api_agent_help(request: Request, _=Depends(require_auth)):
     """Ask the resident Kin, or hand off to echo-bloom-help on the same

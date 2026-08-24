@@ -1244,6 +1244,15 @@ a:hover { color: var(--text); }
   border-top: 1px solid var(--border);
   padding-top: 12px;
 }
+.report-panel { width: min(560px, 100%); }
+.report-payload {
+  max-height: 45vh;
+  overflow: auto;
+  font-size: 11px;
+  background: var(--bg, #0a0a0a);
+  padding: 10px;
+  border: 1px solid var(--border);
+}
 
 .nav-license {
   font-size: 10px;
@@ -2457,7 +2466,7 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   /* Onboard page: full width */
   .onboard-page { padding: 0; }
 
-  .help-panel { width: 100%; padding: 16px; }
+  .help-panel, .report-panel { width: 100%; padding: 16px; }
 }
 
 /* ── Very small (≤380px) ──────────────────────────────────────────── */

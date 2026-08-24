@@ -275,6 +275,20 @@ _TRIAL_MAX_PER_WINDOW = 12
 _trial_hits: dict[str, list[float]] = {}
 
 
+_report_hits: dict = {}
+_REPORT_WINDOW_SECONDS = 3600
+_REPORT_MAX_PER_WINDOW = 6
+
+
+def _report_rate_limited(ip: str) -> bool:
+    """Same shape as the trial limiter. Openness is not an invitation."""
+    now  = time.time()
+    hits = [t for t in _report_hits.get(ip, []) if now - t < _REPORT_WINDOW_SECONDS]
+    hits.append(now)
+    _report_hits[ip] = hits
+    return len(hits) > _REPORT_MAX_PER_WINDOW
+
+
 def _trial_rate_limited(ip: str) -> bool:
     now  = time.time()
     hits = [t for t in _trial_hits.get(ip, []) if now - t < _TRIAL_WINDOW_SECONDS]
@@ -381,6 +395,73 @@ async def register_trial(request: Request):
 
 
 # ── Stripe webhook ─────────────────────────────────────────────────────────────
+
+REPORT_TO   = os.environ.get("REPORT_TO", "don@everysynthetic.org")
+REPORT_LOG  = Path(os.environ.get("REPORT_LOG", str(Path.home() / "echo_bloom_reports.log")))
+
+
+@app.post("/report")
+async def problem_report(request: Request):
+    """Take a problem report from a customer install and get it to a human.
+
+    Deliberately unauthenticated: someone whose licence is broken, or whose
+    install will not start, still needs to be able to tell us. Requiring a
+    working key to report that the key does not work is a trap.
+
+    Rate limited by IP so that openness is not an invitation, and written to
+    a file BEFORE the email is attempted -- so a mail outage loses the
+    notification, never the report.
+    """
+    ip = request.client.host if request.client else "unknown"
+    if _report_rate_limited(ip):
+        raise HTTPException(status_code=429, detail="Too many reports — try again later")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json")
+
+    text = (body.get("report") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="empty report")
+    text = text[:200_000]
+    version  = str(body.get("version") or "?")[:40]
+    platform = str(body.get("platform") or "?")[:120]
+    stamp    = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    # Disk first. The email is the notification; this file is the record.
+    try:
+        REPORT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(REPORT_LOG, "a", encoding="utf-8") as fh:
+            fh.write(f"\n{'='*70}\n{stamp}  v{version}  {platform}  ip={ip}\n{'='*70}\n{text}\n")
+        stored = True
+    except Exception as e:
+        print(f"[license-server] could not write report log: {e}")
+        stored = False
+
+    delivered = False
+    if SMTP_USER and SMTP_PASS:
+        try:
+            msg = MIMEText(text, "plain", "utf-8")
+            msg["Subject"] = f"Echo Bloom problem report — v{version} — {platform}"
+            msg["From"]    = FROM_EMAIL
+            msg["To"]      = REPORT_TO
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
+                smtp.starttls()
+                smtp.login(SMTP_USER, SMTP_PASS)
+                smtp.send_message(msg)
+            delivered = True
+        except Exception as e:
+            print(f"[license-server] report email failed: {e}")
+    else:
+        print("[license-server] no SMTP configured — report saved to disk only")
+
+    print(f"[license-server] problem report v{version} {platform} "
+          f"stored={stored} emailed={delivered}")
+    # ok reflects that we HAVE it, not that mail worked. The person reporting
+    # should not be told it failed because our mail did.
+    return {"ok": stored or delivered, "stored": stored, "emailed": delivered}
+
 
 @app.post("/stripe")
 async def stripe_webhook(request: Request):

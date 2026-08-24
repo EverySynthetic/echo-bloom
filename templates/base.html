@@ -29,6 +29,8 @@
       <a href="/install" class="nav-vault">INSTALL</a>
       <button type="button" class="nav-vault nav-help-btn" id="help-open"
               aria-haspopup="dialog" aria-controls="help-panel" aria-expanded="false">HELP</button>
+      <button type="button" class="nav-vault nav-help-btn" id="report-open"
+              aria-haspopup="dialog" aria-controls="report-panel" aria-expanded="false">REPORT</button>
       {% set _lic = nav_license() %}
       {# Always a way in. This used to render only on trial/expired/denied, so
          once you were licensed the link vanished and /license — the only page
@@ -92,6 +94,30 @@
       <div class="spawn-err" id="help-err" hidden></div>
       <div class="help-meta" id="help-meta" hidden></div>
       <div class="help-result" id="help-result" hidden></div>
+    </div>
+  </div>
+
+  <div class="help-backdrop" id="report-backdrop" hidden>
+    <div class="help-panel report-panel" id="report-panel" role="dialog" aria-modal="true" aria-labelledby="report-title">
+      <div class="help-header">
+        <div>
+          <div class="help-title" id="report-title">REPORT A PROBLEM</div>
+          <div class="help-hint">Nothing leaves this machine until you press SEND. The box below is the exact payload — logs, version, licence state. Kin thoughts and your licence key are not in it.</div>
+        </div>
+        <button type="button" class="help-close" id="report-close">CLOSE</button>
+      </div>
+      <textarea class="spawn-task" id="report-what" rows="3"
+                placeholder="What happened? What did you tap? What did you expect?"></textarea>
+      <div class="control-row">
+        <button type="button" class="ctrl-btn" id="report-preview">SHOW WHAT WILL BE SENT</button>
+      </div>
+      <div class="spawn-err" id="report-err" hidden></div>
+      <div class="help-meta" id="report-meta" hidden></div>
+      <pre class="help-result report-payload" id="report-payload" hidden></pre>
+      <div class="control-row" id="report-send-row" hidden>
+        <button type="button" class="ctrl-btn ctrl-start" id="report-send">SEND TO DON</button>
+        <button type="button" class="ctrl-btn" id="report-cancel">CANCEL</button>
+      </div>
     </div>
   </div>
 

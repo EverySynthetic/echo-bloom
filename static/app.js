@@ -193,3 +193,135 @@ if (document.querySelector('.dashboard')) {
   });
   if (window.location.hash === '#help') openHelp();
 })();
+
+/* ── Problem report ────────────────────────────────────────────────────────
+ * Preview first, send second. The tester sees the exact text that will
+ * leave. GET /api/report/preview and POST /api/report are Claude's half;
+ * this panel 404s honestly until those exist.
+ */
+(function () {
+  const openBtn = document.getElementById('report-open');
+  const backdrop = document.getElementById('report-backdrop');
+  const closeBtn = document.getElementById('report-close');
+  const previewBtn = document.getElementById('report-preview');
+  const sendBtn = document.getElementById('report-send');
+  const cancelBtn = document.getElementById('report-cancel');
+  const whatEl = document.getElementById('report-what');
+  const errEl = document.getElementById('report-err');
+  const metaEl = document.getElementById('report-meta');
+  const payloadEl = document.getElementById('report-payload');
+  const sendRow = document.getElementById('report-send-row');
+  if (!openBtn || !backdrop || !previewBtn || !whatEl) return;
+
+  let sending = false;
+
+  function setHidden(el, on) {
+    if (!el) return;
+    el.hidden = !!on;
+  }
+
+  function showErr(msg) {
+    if (!errEl) return;
+    errEl.textContent = msg || '';
+    setHidden(errEl, !msg);
+  }
+
+  function resetPreview() {
+    setHidden(payloadEl, true);
+    setHidden(sendRow, true);
+    setHidden(metaEl, true);
+    if (payloadEl) payloadEl.textContent = '';
+  }
+
+  function openReport() {
+    backdrop.hidden = false;
+    openBtn.setAttribute('aria-expanded', 'true');
+    showErr('');
+    resetPreview();
+    whatEl.focus();
+  }
+
+  function closeReport() {
+    backdrop.hidden = true;
+    openBtn.setAttribute('aria-expanded', 'false');
+    openBtn.focus();
+  }
+
+  async function loadPreview() {
+    showErr('');
+    resetPreview();
+    if (metaEl) {
+      metaEl.textContent = 'Reading logs on this machine…';
+      setHidden(metaEl, false);
+    }
+    try {
+      const q = encodeURIComponent((whatEl.value || '').trim());
+      const url = q ? '/api/report/preview?description=' + q : '/api/report/preview';
+      const d = await ebFetch(url);
+      const text = d.preview || '';
+      if (payloadEl) {
+        payloadEl.textContent = text;
+        setHidden(payloadEl, false);
+      }
+      const attached = d.attached;
+      const missing = (d.missing || []).length;
+      if (metaEl) {
+        metaEl.textContent = (attached || 0) + ' log file(s) attached, '
+          + missing + ' looked-for and missing. Scroll the box. Then send or cancel.';
+        setHidden(metaEl, false);
+      }
+      setHidden(sendRow, false);
+    } catch (e) {
+      showErr(e.message || String(e));
+      setHidden(metaEl, true);
+    }
+  }
+
+  async function sendReport() {
+    if (sending) return;
+    sending = true;
+    if (sendBtn) sendBtn.disabled = true;
+    showErr('');
+    try {
+      const d = await ebFetch('/api/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: (whatEl.value || '').trim() }),
+      });
+      if (!d.ok) {
+        showErr(d.error || 'Send failed');
+        return;
+      }
+      if (metaEl) {
+        metaEl.textContent = 'Sent. Don has it.';
+        setHidden(metaEl, false);
+      }
+      setHidden(sendRow, true);
+    } catch (e) {
+      showErr(e.message || String(e));
+    } finally {
+      sending = false;
+      if (sendBtn) sendBtn.disabled = false;
+    }
+  }
+
+  openBtn.addEventListener('click', openReport);
+  if (closeBtn) closeBtn.addEventListener('click', closeReport);
+  previewBtn.addEventListener('click', loadPreview);
+  if (sendBtn) sendBtn.addEventListener('click', sendReport);
+  if (cancelBtn) cancelBtn.addEventListener('click', function () {
+    resetPreview();
+    closeReport();
+  });
+  backdrop.addEventListener('click', function (e) {
+    if (e.target === backdrop) closeReport();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (backdrop.hidden) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeReport();
+    }
+  });
+  if (window.location.hash === '#report') openReport();
+})();
