@@ -79,10 +79,20 @@
           <details>
             <summary>Where do I find the setup code?</summary>
             <div class="login-alt-body">
-              It is printed when Echo Bloom starts, and saved on the machine
-              running it:
-              <code>{{ token_path }}</code>
-              This is what stops someone else on your network — or on the
+              <!-- This panel only ever renders when setup_local is false --
+                   i.e. the person reading it is NOT at the machine. Leading
+                   with a filesystem path told phone users to open a terminal
+                   on their phone, which is not a thing people do. Lead with
+                   the thing that works from where they actually are. -->
+              <strong>Easiest:</strong> open Echo Bloom on the computer that is
+              running it — <code>http://localhost:8090</code> — and you can
+              choose a password there with no code at all.
+              <br><br>
+              If you would rather finish from this device, the code is printed
+              in the Echo Bloom window when it starts, and saved on that
+              computer at <code>{{ token_path }}</code>.
+              <br><br>
+              The code is what stops someone else on your network — or on the
               internet, if you turned on remote access — from claiming this
               install before you do.
             </div>

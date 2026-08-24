@@ -6,7 +6,7 @@ server always reflects whatever commit is actually deployed there — that's
 what customer installs compare their own version against.
 """
 
-VERSION = "1.2.8"
+VERSION = "1.2.9"
 
 # (version, one-line descriptor) — newest first, shown on /about. Add one
 # line per release. Security-shaped fixes get the generic "security
@@ -14,6 +14,7 @@ VERSION = "1.2.8"
 # without handing anyone a working recipe before every install has had a
 # chance to update.
 CHANGELOG = [
+    ("1.2.9", "first-run setup no longer tells you to open a terminal on your phone"),
     ("1.2.8", "Help now actually knows the product: remote access and tunnels, install commands, trial length and the offline grace period"),
     ("1.2.7", "the Help agent works: it now uses the model already in memory instead of timing out, asks your Kin first, and credits whoever answered. Wandering Kin can read from Gutenberg, Wikipedia, arXiv and Stanford."),
     ("1.2.6", "security patches"),

@@ -9,6 +9,28 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ---
 
+## 1.2.9
+
+First-run setup told remote users to go read a file on the computer.
+
+The setup-code panel only renders when you are NOT at the machine -- that is
+the whole point of the code. So the one group of people who ever see it are,
+by definition, the group who cannot open a terminal where the file lives. On a
+phone the instruction was "open a terminal on your phone", which nobody does.
+
+The product sells remote access -- tunnels, Tailscale, a QR code on the
+dashboard -- and then first-run assumed you were sitting at a keyboard
+attached to the box. Those two things contradicted each other, and the phone
+is where it showed.
+
+Now it leads with what works from where the reader actually is: open Echo
+Bloom on the computer running it and set a password with no code at all. The
+file path is still there for anyone who can use it, second, where it belongs.
+
+Found by Don trying to set it up from his phone.
+
+---
+
 ## 1.2.8
 
 Help could not answer the first real question a customer asked it.
