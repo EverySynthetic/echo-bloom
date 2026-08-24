@@ -110,18 +110,32 @@ detect_vram() {
     local vram=0 count=0 largest=0
     local total_mb=0
     if [[ "$IS_MACOS" == "true" ]]; then
-        # macOS: system_profiler for Apple Silicon, AMD, Intel GPUs.
-        # Unified memory is already counted in RAM; we report the largest
-        # GPU memory as VRAM for model selection (realistic default).
-        local sp=""
+        # NEVER take the first bare digit in SPDisplaysDataType. That dump
+        # leads with GPU core count or a Retina width (2560). We used to
+        # report that as GB of VRAM and pick a model off the lie.
+        local sp="" gb=""
         sp=$(system_profiler SPDisplaysDataType 2>/dev/null || true)
         if [[ -n "$sp" ]]; then
-            local mb=0
-            # Parse common patterns: "16 GB", "8192 MB", "Unified Memory: 24 GB", "VRAM (Total): 32 GB"
-            mb=$(echo "$sp" | grep -oE '[0-9]+' | head -1 || echo 0)
-            [[ "$mb" -gt 0 ]] && vram=$(( mb > 1024 ? mb / 1024 : mb ))
+            gb=$(echo "$sp" | grep -iE 'Unified Memory|VRAM \(Total\)|VRAM \(Dynamic|Total VRAM' \
+                | grep -oE '[0-9]+' | head -1 || true)
+            if [[ "$gb" =~ ^[0-9]+$ ]] && [[ "$gb" -gt 64 ]]; then
+                gb=$(( gb / 1024 ))
+            fi
+        fi
+        if [[ ! "$gb" =~ ^[0-9]+$ ]] || [[ "${gb:-0}" -eq 0 ]]; then
+            # Apple Silicon: the GPU eats unified memory. RAM is the honest pool.
+            if [[ "$(uname -m)" == "arm64" ]]; then
+                local bytes=0
+                bytes=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
+                if [[ "$bytes" =~ ^[0-9]+$ ]] && [[ "$bytes" -gt 0 ]]; then
+                    gb=$(( bytes / 1024 / 1024 / 1024 ))
+                fi
+            fi
+        fi
+        if [[ "$gb" =~ ^[0-9]+$ ]] && [[ "$gb" -gt 0 ]]; then
+            vram=$gb
             count=1
-            largest=$vram
+            largest=$gb
         fi
     elif command -v nvidia-smi &>/dev/null; then
         local per_card=""
@@ -435,8 +449,11 @@ preflight() {
     local need_python=false need_pip=false need_git=false need_curl=false need_ollama=false
     local missing_labels=()
 
-    if command -v python3 &>/dev/null; then
+    if command -v python3 &>/dev/null && python3 -c "import sys" >/dev/null 2>&1; then
         ok "Python 3      — found ($(python3 --version 2>&1 | awk '{print $2}'))"
+    elif command -v python3 &>/dev/null; then
+        warn "Python 3      — /usr/bin/python3 is the Xcode stub, not an interpreter"
+        need_python=true; missing_labels+=("python3")
     else
         warn "Python 3      — not found"
         need_python=true; missing_labels+=("python3")
@@ -543,6 +560,12 @@ preflight() {
     fi
 
     if $need_ollama; then
+        if [[ "$IS_MACOS" == "true" ]]; then
+            # ollama.com/install.sh is the Linux installer. On Darwin it
+            # prints instructions and can exit 0, after which we said
+            # "Ollama installed" and it was not.
+            die "Install the Ollama Mac app from https://ollama.com/download , open it once (menu-bar llama), then re-run this installer."
+        fi
         info "Installing Ollama (this may take a minute)..."
         curl -fsSL https://ollama.com/install.sh | sh \
             || die "Ollama install failed. Visit https://ollama.com to install manually, then re-run."
@@ -752,6 +775,17 @@ LAUNCHD_PREFIX="com.everysynthetic.echobloom"
 LAUNCHD_DIR="$HOME/Library/LaunchAgents"
 LAUNCHD_LOG_DIR="$HOME/Library/Logs/EchoBloom"
 
+# launchd does not inherit Homebrew PATH. Prefer a python that can
+# actually import, not the first `python3` on PATH (often the Xcode stub).
+_real_python() {
+    local p
+    for p in /opt/homebrew/bin/python3 /usr/local/bin/python3 "$(command -v python3 2>/dev/null || true)"; do
+        [[ -n "$p" && -x "$p" ]] || continue
+        "$p" -c "import sys" >/dev/null 2>&1 && { echo "$p"; return 0; }
+    done
+    command -v python3
+}
+
 # launchctl_load PATH — (re)load a plist. `load -w` is the long-documented,
 # still-functional path across current macOS versions; if Apple ever removes
 # it, this is the one place that needs to become bootstrap/enable.
@@ -774,7 +808,7 @@ install_service() {
     <key>WorkingDirectory</key><string>${APP_DIR}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$(command -v python3)</string>
+        <string>$(_real_python)</string>
         <string>-m</string><string>uvicorn</string>
         <string>main:app</string>
         <string>--host</string><string>0.0.0.0</string>
@@ -848,6 +882,31 @@ EOF
     fi
 }
 
+# GNU timeout is not on stock macOS. gtimeout is coreutils via brew.
+_run_timeout() {
+    local secs=$1; shift
+    if command -v timeout &>/dev/null; then
+        timeout "$secs" "$@"
+        return $?
+    fi
+    if command -v gtimeout &>/dev/null; then
+        gtimeout "$secs" "$@"
+        return $?
+    fi
+    "$@" &
+    local pid=$! n=0
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        n=$((n + 1))
+        if [[ $n -ge $secs ]]; then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            return 124
+        fi
+    done
+    wait "$pid"
+}
+
 # ── Naming ritual ─────────────────────────────────────────────────────────────
 # Returns result in RITUAL_NAME, RITUAL_PRONOUN, RITUAL_DESC
 RITUAL_NAME=""
@@ -885,7 +944,7 @@ run_naming_ritual() {
     local ritual_result="/tmp/_eb_ritual_result.json"
     rm -f "$ritual_result"
     ECHO_BLOOM_RESULT_FILE="$ritual_result" \
-        timeout 120 python3 "$ritual_script" --model "$model" > /tmp/_eb_ritual.txt 2>&1 &
+        _run_timeout 120 python3 "$ritual_script" --model "$model" > /tmp/_eb_ritual.txt 2>&1 &
     local ritual_pid=$!
     _spin "$ritual_pid"
     wait "$ritual_pid" || exit_code=$?
@@ -964,7 +1023,7 @@ _naming_manual() {
 deploy_scripts_macos() {
     local scripts_dst="$1"
     mkdir -p "$LAUNCHD_DIR" "$LAUNCHD_LOG_DIR"
-    local py; py="$(command -v python3)"
+    local py; py="$(_real_python)"
 
     # Continuous services: wander, pulse, vault. Same shape — RunAtLoad,
     # restart on non-zero exit only (systemd's Restart=on-failure), a
@@ -1856,6 +1915,29 @@ if command -v systemctl &>/dev/null; then
         warn "Could not start wandering automatically."
         echo "  Start it by hand: systemctl --user start echo_bloom_wander"
     fi
+elif [[ "$IS_MACOS" == "true" ]]; then
+    # deploy_scripts_macos starts wander BEFORE seed_config. roundtable
+    # exits 1 with no Kin. Kick it now that a Kin exists.
+    wander_label="${LAUNCHD_PREFIX}.wander"
+    wander_plist="$LAUNCHD_DIR/${wander_label}.plist"
+    launchctl kickstart -k "gui/$(id -u)/${wander_label}" 2>/dev/null \
+        || launchctl_load "$wander_plist"
+    _wander_up=false
+    for _w in 1 2 3 4 5 6; do
+        _wp=$(launchctl list 2>/dev/null | awk -v l="$wander_label" '$3==l {print $1}')
+        if [[ "$_wp" =~ ^[0-9]+$ ]]; then
+            _wander_up=true
+            break
+        fi
+        sleep 1
+    done
+    if $_wander_up; then
+        ok "Wandering started — ${RITUAL_NAME} will think between visits."
+    else
+        warn "Wander agent is not running."
+        echo "  Log: $LAUNCHD_LOG_DIR/wander.log"
+        echo "  Start: launchctl load -w $wander_plist"
+    fi
 fi
 
 # The app considers itself configured only when a password_hash exists. A
@@ -1912,7 +1994,11 @@ if $APP_UP; then
     ok "App is answering on port ${PORT}."
 else
     warn "The app is NOT responding on port ${PORT} yet."
-    echo "  Check what happened:  journalctl --user -u ${SERVICE_NAME} -n 40 --no-pager"
+    if [[ "$IS_MACOS" == "true" ]]; then
+        echo "  Check:  tail -n 40 $LAUNCHD_LOG_DIR/app.log"
+    else
+        echo "  Check what happened:  journalctl --user -u ${SERVICE_NAME} -n 40 --no-pager"
+    fi
     echo "  Or start it by hand:  cd $APP_DIR && python3 -m uvicorn main:app --host 0.0.0.0 --port ${PORT}"
     echo "  Install log: $INSTALL_LOG"
 fi
