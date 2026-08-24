@@ -1483,7 +1483,11 @@ async def api_report(request: Request, _=Depends(require_auth)):
         except Exception:
             saved = None
         log.warning("report send failed: %s", e)
-        return {"ok": False, "error": f"Could not reach the report server: {e}",
+        # str() on a TimeoutError is the EMPTY string, so this rendered
+        # "Could not reach the report server: " and stopped -- in the one
+        # feature whose entire job is telling us what went wrong.
+        why = str(e) or type(e).__name__
+        return {"ok": False, "error": f"Could not reach the report server: {why}",
                 "saved_locally": saved}
 
     return {"ok": True, "delivered": bool(res.get("ok")),
@@ -2193,7 +2197,7 @@ async def api_ingest(request: Request, _=Depends(require_auth)):
         try:
             content = await _fetch_page_text(url, max_chars=8000)
         except Exception as e:
-            return {"ok": False, "error": f"Fetch failed: {e}"}
+            return {"ok": False, "error": f"Fetch failed: {str(e) or type(e).__name__}"}
         if not source:
             source = url
 

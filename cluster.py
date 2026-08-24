@@ -382,7 +382,18 @@ async def stream_chat(kin_name, message, history=None):
                 # memory first.
                 "options":  {"temperature": 0.85, "num_ctx": 8192},
                 },
-                timeout=aiohttp.ClientTimeout(total=120),
+                # NOT total=. This is a STREAM: `total` caps the whole
+                # response, so a large model writing a long answer gets cut
+                # off mid-sentence no matter how healthily it is streaming.
+                # Don asked Coda (32.8B) an open question on 2026-08-24 and
+                # got "[Connection error: ]" at exactly 120s, twice, while
+                # Ollama was answering fine.
+                #
+                # sock_read is the right shape: it fires only when the socket
+                # goes QUIET for that long. Tokens arriving = healthy, however
+                # long the answer runs. Silence = a real hang.
+                timeout=aiohttp.ClientTimeout(total=None, sock_connect=15,
+                                              sock_read=180),
             ) as resp:
                 import json
                 async for line in resp.content:
@@ -407,9 +418,21 @@ async def stream_chat(kin_name, message, history=None):
                             break
                     except Exception:
                         continue
+    except asyncio.TimeoutError:
+        # str(asyncio.TimeoutError()) is the EMPTY STRING, so the old handler
+        # rendered "[Connection error: ]" -- a message that names the wrong
+        # cause and then says nothing about it. The connection was fine; the
+        # model went quiet.
+        log.warning("chat stream timed out for %s at %s (no tokens for 180s)",
+                    kin_name, kin.get("host"))
+        yield (f"\n[{kin_name} stopped responding partway through. The model is "
+               f"probably still loading or the machine is busy -- the connection "
+               f"itself is fine. Try again in a moment.]")
     except Exception as e:
-        log.warning("chat stream failed for %s at %s: %s", kin_name, kin.get("host"), e)
-        yield f"\n[Connection error: {e}]"
+        detail = str(e) or type(e).__name__      # never render an empty reason
+        log.warning("chat stream failed for %s at %s: %s",
+                    kin_name, kin.get("host"), detail)
+        yield f"\n[Could not reach {kin_name}: {detail}]"
 
     reply = "".join(reply_parts).strip()
     if reply:
