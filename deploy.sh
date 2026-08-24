@@ -171,7 +171,16 @@ if [ -f "$APP_DIR/verify_deploy.py" ]; then
   # of them is guarded. license.py is imported inside a try so the gate fails
   # open; that also means omitting it passes a plain import check and ships an
   # inert gate, which is what happened on Windows in 1.2.5.
-  python3 "$APP_DIR/verify_deploy.py" "$SCRIPTS_DIR" --require license,kin_presence \
+  # Verify with the interpreter that will actually RUN this code. Themess
+  # serves the app from $APP_DIR/venv, whose site-packages has aiohttp;
+  # system python3 does not. Checking with system python3 reported an
+  # unresolvable import for code that runs fine, and refused to restart a
+  # healthy deploy. Frosty passed only because its system python happens to
+  # have the same packages -- the check was wrong on both boxes, and right
+  # by accident on one.
+  VERIFY_PY="python3"
+  [ -x "$APP_DIR/venv/bin/python" ] && VERIFY_PY="$APP_DIR/venv/bin/python"
+  "$VERIFY_PY" "$APP_DIR/verify_deploy.py" "$SCRIPTS_DIR" --require license,kin_presence \
     || die "deployed scripts cannot resolve their imports — not restarting services"
 fi
 
