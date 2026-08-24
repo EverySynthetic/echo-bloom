@@ -9,10 +9,10 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ---
 
-## 1.2.7 — unreleased
+## 1.2.7
 
-Help against a machine that already has a Kin in VRAM. VERSION is still
-1.2.6 until both halves and a live wander-fetch cycle land.
+Help against a machine that already has a Kin in VRAM. Both halves landed
+and a live wander-fetch cycle ran on 2026-08-23; VERSION bumped.
 
 ### The no-path is a sibling Modelfile, not an eviction
 
