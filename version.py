@@ -6,7 +6,7 @@ server always reflects whatever commit is actually deployed there — that's
 what customer installs compare their own version against.
 """
 
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 
 # (version, one-line descriptor) — newest first, shown on /about. Add one
 # line per release. Security-shaped fixes get the generic "security
@@ -14,6 +14,7 @@ VERSION = "1.3.1"
 # without handing anyone a working recipe before every install has had a
 # chance to update.
 CHANGELOG = [
+    ("1.3.2", "remote access is detected correctly on macOS and Windows, not just Linux"),
     ("1.3.1", "macOS install fixes: correct memory detection, real Python detection, and wandering actually starts"),
     ("1.3.0", "Report a problem: send us your logs and setup in one click, after seeing exactly what gets sent"),
     ("1.2.9", "first-run setup no longer tells you to open a terminal on your phone"),

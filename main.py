@@ -11,6 +11,7 @@ import sys
 import json
 import asyncio
 import sqlite3
+import shutil
 import subprocess
 import tempfile
 import time
@@ -2554,13 +2555,20 @@ async def api_remote_status(_=Depends(require_auth)):
 def _remote_status_blocking():
     result = {"cloudflare": None, "tailscale": None}
 
-    # Cloudflare — check systemd journal first, then temp log from a direct launch
-    for src in [
-        lambda: subprocess.run(
-            ["journalctl", "--user", "-u", "cloudflared", "--no-pager", "-n", "200"],
-            capture_output=True, text=True, timeout=5).stdout,
+    # Cloudflare. journalctl does not exist on macOS or Windows, so leading
+    # with it meant "no tunnel" on any machine that is not Linux -- a false
+    # negative on exactly the platforms we are least sure about. Try every
+    # place a URL can land, cheapest and most portable first.
+    _cf_sources = [
         lambda: (Path(tempfile.gettempdir()) / "cloudflared_tunnel.log").read_text(),
-    ]:
+        lambda: (Path.home() / "Library/Logs/EchoBloom/cloudflared.log").read_text(),
+        lambda: (Path.home() / ".local/share/echo_bloom/logs/cloudflared.log").read_text(),
+    ]
+    if shutil.which("journalctl"):
+        _cf_sources.append(lambda: subprocess.run(
+            ["journalctl", "--user", "-u", "cloudflared", "--no-pager", "-n", "200"],
+            capture_output=True, text=True, timeout=5).stdout)
+    for src in _cf_sources:
         try:
             m = re.search(r'https://[a-z0-9-]+\.trycloudflare\.com', src())
             if m:
@@ -2614,8 +2622,46 @@ async def api_remote_start_tunnel(_=Depends(require_auth)):
 
 
 @app.get("/api/remote/qr")
+def _qr_url_allowed(url: str) -> bool:
+    """Only ever encode an address that points back at THIS install.
+
+    The endpoint used to render a QR for whatever the query string said. It
+    is behind auth, so this was not an open redirect -- but a QR is a thing
+    a person points a camera at and trusts without reading, and printing an
+    arbitrary attacker-chosen URL into one is a bad shape to leave lying
+    around. Restrict it to the origins remote access can actually produce:
+    a Tailscale 100.64/10 address, a private LAN address, loopback, or a
+    trycloudflare hostname.
+    """
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(url)
+    except Exception:
+        return False
+    if u.scheme not in ("http", "https"):
+        return False
+    host = (u.hostname or "").lower()
+    if not host:
+        return False
+    if host in _LOOPBACK or host.endswith(".trycloudflare.com"):
+        return True
+    parts = host.split(".")
+    if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+        a, b = int(parts[0]), int(parts[1])
+        if a == 10 or (a == 192 and b == 168):
+            return True
+        if a == 172 and 16 <= b <= 31:
+            return True
+        # Tailscale hands out 100.64.0.0/10 (CGNAT range).
+        if a == 100 and 64 <= b <= 127:
+            return True
+    return False
+
+
 async def api_remote_qr(url: str, _=Depends(require_auth)):
     import io as _io
+    if not _qr_url_allowed(url):
+        raise HTTPException(400, "That address is not one this install can serve")
     try:
         import qrcode
         import qrcode.image.svg
