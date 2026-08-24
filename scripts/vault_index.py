@@ -87,17 +87,50 @@ def embed_url():
     return _cfg_url("embed_url", "http://localhost:11434/api/embeddings")
 
 
+# Ollama answers 503 "maximum pending requests exceeded" when its queue is
+# full, which on a box running six wanderers is often. That is a retryable
+# condition -- it means "later", not "never" -- but this function used to let
+# raise_for_status turn it into a permanent skip. The caller counts the skip
+# and immediately tries the next memory, so a busy minute burned the entire
+# work list: 2771 memories "could not be embedded" in 41 seconds on
+# 2026-08-24, every run, and the vault quietly stopped being indexed.
+_RETRY_STATUS = (503, 429, 502, 504)
+_MAX_TRIES = 5
+# Consecutive failures before we conclude the server is saturated.
+_GIVE_UP_AFTER = 8
+
+
 def embed(text):
-    r = requests.post(
-        embed_url(),
-        # keep_alive matters: a cold embed model can take longer than the
-        # default timeout, and then it never stays warm to succeed later.
-        json={"model": _cfg_url("embed_model", EMBED_MODEL),
-              "prompt": text, "keep_alive": "30m"},
-        timeout=60,
-    )
-    r.raise_for_status()
-    return r.json()["embedding"]
+    delay = 2.0
+    last = None
+    for attempt in range(_MAX_TRIES):
+        try:
+            r = requests.post(
+                embed_url(),
+                # keep_alive matters: a cold embed model can take longer than
+                # the default timeout, and then it never stays warm to
+                # succeed later.
+                json={"model": _cfg_url("embed_model", EMBED_MODEL),
+                      "prompt": text, "keep_alive": "30m"},
+                timeout=60,
+            )
+            if r.status_code in _RETRY_STATUS:
+                last = requests.HTTPError(f"{r.status_code} {r.reason}")
+                if attempt < _MAX_TRIES - 1:
+                    time.sleep(delay)
+                    delay = min(delay * 2, 30.0)
+                    continue
+                raise last
+            r.raise_for_status()
+            return r.json()["embedding"]
+        except requests.RequestException as e:
+            last = e
+            if attempt < _MAX_TRIES - 1:
+                time.sleep(delay)
+                delay = min(delay * 2, 30.0)
+                continue
+            raise
+    raise last if last else RuntimeError("embed failed")
 
 
 def ensure_collection():
@@ -232,16 +265,28 @@ def index_once():
     log(f"embedding {len(todo)} new memor{'y' if len(todo) == 1 else 'ies'} "
         f"({len(items)} total)")
 
-    points, failed = [], 0
+    points, failed, in_a_row = [], 0, 0
     for m in todo:
         content = m["content"].strip()
         try:
             vector = embed(f"{m.get('author','')} {m.get('layer','')} {content}")
         except Exception as e:
             failed += 1
+            in_a_row += 1
             if failed <= 3:
                 log(f"  skip id={m['id']}: {e}")
+            # Even with per-request retries, a server that is still refusing
+            # after several backoffs is saturated, and grinding through
+            # thousands more requests neither indexes anything nor helps the
+            # Kin whose wander traffic we are competing with. Stop, keep what
+            # did embed, and let the timer bring us back.
+            if in_a_row >= _GIVE_UP_AFTER:
+                log(f"  {in_a_row} consecutive failures — server is busy, "
+                    f"stopping early and keeping {len(points)} embedded. "
+                    f"The timer will pick the rest up next run.")
+                break
             continue
+        in_a_row = 0
         points.append({
             "id": m["id"], "vector": vector,
             "payload": {"author": m.get("author", ""),
