@@ -157,7 +157,9 @@ if (document.querySelector('.dashboard')) {
       }
       resultEl.textContent = d.result || '';
       setHidden(resultEl, false);
-      const bits = ['Not a Kin'];
+      const bits = [];
+      if (d.handed_off === false && d.author) bits.push(d.author);
+      else bits.push('Agent');
       if (d.model) bits.push(d.model);
       metaEl.textContent = bits.join(' · ');
       setHidden(metaEl, false);

@@ -9,6 +9,33 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ---
 
+## 1.2.7 — unreleased
+
+Help against a machine that already has a Kin in VRAM. VERSION is still
+1.2.6 until both halves and a live wander-fetch cycle land.
+
+### The no-path is a sibling Modelfile, not an eviction
+
+Unpaused, `num_ctx` matched to the runner's 8192: `bong:latest` answered
+in 24.6s and `gemma4:26b` (same GGUF, different name) in 16.9s. One
+runner, VRAM unchanged, `/api/ps` still only `bong:latest`. Ollama
+reuses loaded weights for a sibling name.
+
+`ensure_agent_modelfile` creates `echo-bloom-help` FROM whatever is
+resident, with HELP_SYSTEM. `stop_model` and `keep_alive: 0` stay off
+this path. Help does not SIGSTOP anyone.
+
+The hangs were a ctx mismatch (2048 vs runner `-c 8192` cannot
+reconfigure under `keep_alive 999h`) and SIGSTOP of in-flight clients
+wedging the slot. Match `num_ctx` to `/api/ps` `context_length`.
+
+When nothing is loaded, the picker still takes the smallest general
+model that clears 7B.
+
+Match `/proc/PID/cmdline` argv. Never `pkill -f`.
+
+---
+
 ## 1.2.6 — 2026-08-21
 
 Two findings from the review pass that followed 1.2.5, landed as their own

@@ -8,8 +8,8 @@ available small model" and the fallback did not exist -- the code went straight
 to qwen3:4b and failed outright if it was not pulled.
 Optional api_key enables external API fallback (XAI, OpenAI, Anthropic, etc.).
 
-Called by /api/agent/spawn. On completion the caller should call
-kin_presence.record_thought_return("agent-default", result) and heartbeat().
+Called by /api/agent/spawn and /api/agent/help. On completion the caller
+should call kin_presence.record_thought_return(...) and heartbeat().
 """
 
 import sys
@@ -42,6 +42,13 @@ HELP_AGENT_NAME = "agent-help"
 # summarising text you hand them and not fine for recall.
 MIN_USEFUL_PARAMS_B = 7.0
 
+# Cold-load only. Riding a Kin's runner must use RIDING_KEEP_ALIVE
+# ("999h"): 0 unloads them, and Ollama's 5m default would shrink the pin.
+AGENT_KEEP_ALIVE = 0
+
+# Spawn and Help share one slot so they cannot both cold-load at once.
+_slot_lock = asyncio.Lock()
+
 # Generous on purpose. A cold 27B load is minutes on a modest box, and the
 # first agent run on any machine is always a cold load.
 LOCAL_TIMEOUT_S = 600
@@ -69,9 +76,9 @@ HELP_SYSTEM = (
     "optionally a memory vault. A Kin wanders on its own between "
     "conversations and keeps its own thoughts. Agents (like you, right now) "
     "are separate one-off task workers spawned for a single question or "
-    "job -- they never run on a Kin's own model, so asking one something "
-    "does not affect any Kin's memory or character. Licensing is a free "
-    "trial, then a one-time key. "
+    "job -- they never answer under a Kin's name or persona, so asking one "
+    "something does not write into any Kin's memory or character. "
+    "Licensing is a free trial, then a one-time key. "
     "Answer only from what you actually know about how the app works. If "
     "you are not sure a feature or setting exists, say so plainly instead "
     "of describing one that might not be there -- a wrong answer about "
@@ -160,13 +167,27 @@ def choose_model(installed: list[dict], requested: str | None):
     """
     names = [m.get("name", "") for m in installed]
     personas = {model_base(p) for p in _persona_models()}
+    # Leftover tags that still wear a Kin's name (aurora:latest next to
+    # cogitoraurora:latest) are not general agent models.
+    try:
+        personas.update({
+            (k.get("name") or "").strip().lower()
+            for k in (cfg.load() or {}).get("kin") or []
+            if k.get("name")
+        })
+    except Exception:
+        pass
 
     if requested:
         if requested in names or f"{requested}:latest" in names:
             # The requested path skipped the persona check entirely, so naming
             # a Kin's model in the spawn box handed that Kin an agent task and
-            # it answered as itself.
-            if model_base(requested) in personas:
+            # it answered as itself. echo-bloom-help is a sibling Modelfile
+            # on those weights, not a persona — let it through.
+            from ollama_slot import HELP_AGENT_MODEL, SPAWN_AGENT_MODEL
+            agent_tags = {HELP_AGENT_MODEL, SPAWN_AGENT_MODEL,
+                          HELP_AGENT_MODEL + ":latest", SPAWN_AGENT_MODEL + ":latest"}
+            if model_base(requested) in personas and requested not in agent_tags:
                 raise PersonaModelRefused(requested)
             return requested, ""
         raise ModelUnavailable(requested, names, SUGGESTED_MODEL)
@@ -186,21 +207,31 @@ def choose_model(installed: list[dict], requested: str | None):
     # size alone picked a 30B *coding* model to answer a question about a
     # writer's bibliography, purely because it was the largest thing installed.
     # Bigger is not better-for-this.
+    # Smallest general model that still clears the floor. Largest-first
+    # picked qwen3.8:27b next to a resident 26B Kin and timed out at 600s.
+    # Contention is the case — after yield, still do not haul in a 27B
+    # for a help-desk question.
+    useful = [
+        m for m in usable
+        if _is_general(m) and _params_b(m) >= MIN_USEFUL_PARAMS_B
+    ]
+    if useful:
+        useful.sort(key=_params_b)
+        return useful[0]["name"], ""
+
     usable.sort(key=lambda m: (_is_general(m), _params_b(m)), reverse=True)
     best = usable[0]
     size = _params_b(best)
-    if size < MIN_USEFUL_PARAMS_B:
-        note = (f"Using {best['name']} ({size:g}B) because it is the largest "
-                f"installed. Models under {MIN_USEFUL_PARAMS_B:g}B invent "
-                f"details when asked to recall facts - treat this answer as a "
-                f"draft. `ollama pull {SUGGESTED_MODEL}` for something better.")
-    else:
-        note = ""
+    note = (f"Using {best['name']} ({size:g}B) because it is the largest "
+            f"installed. Models under {MIN_USEFUL_PARAMS_B:g}B invent "
+            f"details when asked to recall facts - treat this answer as a "
+            f"draft. `ollama pull {SUGGESTED_MODEL}` for something better.")
     return best["name"], note
 
 
 async def run_task(task: str, model: str | None = None, api_key: str | None = None,
-                    system: str = AGENT_SYSTEM, name: str = AGENT_NAME) -> str:
+                    system: str = AGENT_SYSTEM, name: str = AGENT_NAME,
+                    occupy_slot: bool = True):
     """Run a task and return the model's response.
 
     Local Ollama is hard default. If api_key is provided, attempt external API
@@ -213,17 +244,55 @@ async def run_task(task: str, model: str | None = None, api_key: str | None = No
     HELP_SYSTEM above for why that's a separate prompt rather than a flag
     passed into a Kin's own persona.
     """
+    async with _slot_lock:
+        return await _run_task_locked(task, model, api_key, system, name, occupy_slot)
+
+
+async def _run_task_locked(task, model, api_key, system, name, occupy_slot=True):
     # Try external API first if key is provided
     if api_key:
         try:
             result = await _run_external(task, model or SUGGESTED_MODEL, api_key, system=system)
             heartbeat(name, "completed-external")
-            return result
+            return result, model or SUGGESTED_MODEL
         except Exception as e:
             print(f"[agent] External API failed, falling back to local: {e}")
 
-    # Local Ollama. Decide which model BEFORE spending 120 seconds finding out
-    # Ollama does not have it.
+    from ollama_slot import (
+        loaded_runner, ensure_agent_modelfile, runner_num_ctx,
+        HELP_AGENT_MODEL, SPAWN_AGENT_MODEL, RIDING_KEEP_ALIVE, DEFAULT_NUM_CTX,
+    )
+
+    runner = loaded_runner()
+    ctx = runner_num_ctx()
+    tag = HELP_AGENT_MODEL if system == HELP_SYSTEM else SPAWN_AGENT_MODEL
+    note = ""
+    chosen = None
+
+    # A model is already in VRAM. Ride those weights as a sibling
+    # Modelfile. Do not ollama stop, do not keep_alive 0, do not
+    # SIGSTOP. occupy_slot is leftover from the eviction design.
+    if runner and not model:
+        try:
+            chosen = ensure_agent_modelfile(
+                runner["name"], system=system, name=tag,
+            )
+            result = await _run_local_ollama(
+                task, chosen, system=system,
+                keep_alive=RIDING_KEEP_ALIVE, num_ctx=ctx,
+            )
+            heartbeat(name, "completed-local")
+            return result, chosen
+        except asyncio.TimeoutError as e:
+            heartbeat(name, "failed")
+            raise RuntimeError(
+                f"{chosen or tag} did not answer within {LOCAL_TIMEOUT_S}s "
+                f"(riding {runner['name']} at num_ctx={ctx})."
+            ) from e
+        except Exception as e:
+            heartbeat(name, "failed")
+            raise RuntimeError(f"Local Ollama error: {e or type(e).__name__}") from e
+
     async with aiohttp.ClientSession() as session:
         try:
             installed = await list_installed(session)
@@ -239,12 +308,17 @@ async def run_task(task: str, model: str | None = None, api_key: str | None = No
         heartbeat(name, "failed")
         raise
 
+    riding = bool(runner)
+    keep = RIDING_KEEP_ALIVE if riding else AGENT_KEEP_ALIVE
+    num_ctx = ctx if riding else DEFAULT_NUM_CTX
     try:
-        result = await _run_local_ollama(task, chosen, system=system)
+        result = await _run_local_ollama(
+            task, chosen, system=system, keep_alive=keep, num_ctx=num_ctx,
+        )
         heartbeat(name, "completed-local")
         if note:
             result = f"{result}\n\n---\n{note}"
-        return result
+        return result, chosen
     except asyncio.TimeoutError as e:
         # str(asyncio.TimeoutError) is the empty string, so the obvious
         # f"...: {e}" produced "Local Ollama error:" and stopped. Naming the
@@ -260,7 +334,8 @@ async def run_task(task: str, model: str | None = None, api_key: str | None = No
         raise RuntimeError(f"Local Ollama error: {e or type(e).__name__}") from e
 
 
-async def _run_local_ollama(task: str, model: str, system: str = AGENT_SYSTEM) -> str:
+async def _run_local_ollama(task: str, model: str, system: str = AGENT_SYSTEM,
+                            keep_alive=AGENT_KEEP_ALIVE, num_ctx: int = 8192) -> str:
     async with aiohttp.ClientSession() as session:
         async with session.post(
             "http://localhost:11434/api/chat",
@@ -271,7 +346,8 @@ async def _run_local_ollama(task: str, model: str, system: str = AGENT_SYSTEM) -
                     {"role": "user",   "content": task},
                 ],
                 "stream": False,
-                "options": {"temperature": 0.7, "num_ctx": 8192},
+                "keep_alive": keep_alive,
+                "options": {"temperature": 0.7, "num_ctx": num_ctx},
             },
             # 120s was enough for a 4B model and is not enough for the
             # capable one the picker now prefers: a 27B cold load alone can
@@ -294,6 +370,61 @@ async def _run_local_ollama(task: str, model: str, system: str = AGENT_SYSTEM) -
                     f"reasoning model its whole budget may have gone to "
                     f"thinking.")
             return text
+
+
+async def run_help(question: str):
+    """Help against whatever is loaded. No pause, no eviction.
+
+    If a Kin is resident we ask them first. A no (or an unparseable
+    reply) hands off to echo-bloom-help, a Modelfile FROM those weights.
+    Returns (text, model, meta) with author / handed_off / from.
+    Does not write thoughts.db or the vault.
+    """
+    from ollama_slot import (
+        loaded_runner, ensure_agent_modelfile, runner_num_ctx,
+        HELP_AGENT_MODEL, RIDING_KEEP_ALIVE,
+    )
+    runner = loaded_runner()
+    if runner and runner.get("kin"):
+        from kin_consent import ask_consent, ask_as_kin
+        wants, _raw = await asyncio.to_thread(
+            ask_consent, runner["kin"], runner["name"],
+        )
+        if wants:
+            kin = cfg.get_kin(runner["kin"]) or {}
+            text = await asyncio.to_thread(
+                ask_as_kin, runner["kin"], runner["name"], question,
+                HELP_SYSTEM, kin.get("system_prompt") or "",
+            )
+            if not text:
+                wants = False
+            else:
+                return text, runner["name"], {
+                    "author": runner["kin"],
+                    "handed_off": False,
+                    "from": runner["name"],
+                }
+        tag = ensure_agent_modelfile(
+            runner["name"], system=HELP_SYSTEM, name=HELP_AGENT_MODEL,
+        )
+        text = await _run_local_ollama(
+            question, tag, system=HELP_SYSTEM,
+            keep_alive=RIDING_KEEP_ALIVE, num_ctx=runner_num_ctx(),
+        )
+        return text, tag, {
+            "author": HELP_AGENT_NAME,
+            "handed_off": True,
+            "from": runner["name"],
+        }
+
+    result, used = await run_task(
+        question, system=HELP_SYSTEM, name=HELP_AGENT_NAME,
+    )
+    return result, used, {
+        "author": HELP_AGENT_NAME,
+        "handed_off": True,
+        "from": used,
+    }
 
 
 async def _run_external(task: str, model: str, api_key: str, system: str = AGENT_SYSTEM) -> str:
@@ -341,11 +472,12 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         task = " ".join(sys.argv[1:])
         try:
-            result = asyncio.run(run_task(task))
+            result, used = asyncio.run(run_task(task))
             print(result)
+            print(f"(model: {used})", file=sys.stderr)
         except Exception as e:
             print(f"error: {e}", file=sys.stderr)
             sys.exit(1)
     else:
         print("Usage: python agent_runner.py 'your task here'")
-        print("Default model: qwen3:4b (local Ollama)")
+        print("Default model: smallest general ≥7B (suggested qwen3:8b)")

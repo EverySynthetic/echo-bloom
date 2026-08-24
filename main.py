@@ -1390,7 +1390,8 @@ async def api_agent_spawn(request: Request, _=Depends(require_auth)):
     try:
         warning = await _agent_vram_warning(chosen)
         try:
-            result = await run_task(task, model=model, api_key=api_key)
+            result, used = await run_task(task, model=model, api_key=api_key)
+            chosen = used or chosen
         except Exception as e:
             log.warning("agent spawn failed (%s): %s", chosen, e)
             kin_presence.heartbeat(_AGENT_NAME, "failed")
@@ -1415,16 +1416,15 @@ async def api_agent_spawn(request: Request, _=Depends(require_auth)):
 
 @app.post("/api/agent/help")
 async def api_agent_help(request: Request, _=Depends(require_auth)):
-    """Same pipeline as /api/agent/spawn, HELP_SYSTEM instead of AGENT_SYSTEM,
-    and its own busy-lock -- see the comment on _help_agent_running for why
-    this isn't just a mode flag on the existing endpoint."""
+    """Ask the resident Kin, or hand off to echo-bloom-help on the same
+    weights. No pause, no eviction, nothing in thoughts.db or the vault."""
     global _help_agent_running
     body = await request.json()
     question = (body.get("question") or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="Empty question")
 
-    from agent_runner import run_task, DEFAULT_MODEL, HELP_SYSTEM, HELP_AGENT_NAME
+    from agent_runner import run_help, DEFAULT_MODEL, HELP_AGENT_NAME
     import kin_presence
 
     chosen = DEFAULT_MODEL
@@ -1440,9 +1440,9 @@ async def api_agent_help(request: Request, _=Depends(require_auth)):
     _help_agent_running = True
     kin_presence.heartbeat(HELP_AGENT_NAME, "working")
     try:
-        warning = await _agent_vram_warning(chosen)
         try:
-            result = await run_task(question, system=HELP_SYSTEM, name=HELP_AGENT_NAME)
+            result, used, meta = await run_help(question)
+            chosen = used or chosen
         except Exception as e:
             log.warning("help agent failed (%s): %s", chosen, e)
             kin_presence.heartbeat(HELP_AGENT_NAME, "failed")
@@ -1450,16 +1450,18 @@ async def api_agent_help(request: Request, _=Depends(require_auth)):
                 "ok": False,
                 "error": str(e),
                 "model": chosen,
-                "warning": warning,
             }
 
-        kin_presence.record_thought_return(HELP_AGENT_NAME, result, mode="help")
+        # Presence only, and only the help worker. Do not scribble the
+        # Kin's wander presence. Do not vault-remember: Help is not a thought.
         kin_presence.heartbeat(HELP_AGENT_NAME, "resting")
         return {
             "ok": True,
             "result": result,
             "model": chosen,
-            "warning": warning,
+            "author": meta.get("author") or HELP_AGENT_NAME,
+            "handed_off": bool(meta.get("handed_off")),
+            "from": meta.get("from"),
         }
     finally:
         _help_agent_running = False

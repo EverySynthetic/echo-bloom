@@ -93,15 +93,9 @@ def _post_get(path: str) -> dict | None:
         return None
 
 
-# Resource discovery (which Kin is resident, which pid is theirs, pausing
-# them, evicting a model) belongs to ollama_slot.py -- Grok's half. This
-# module is only the consent conversation. Re-implementing resident_kin()
-# here would give us two answers to the same question, and they would drift.
-#
-# ollama_slot.hold_wander(kin) is the pause the calls below REQUIRE. It also
-# suspends the roundtable, which matters and which this module got wrong on
-# its own first pass: the roundtable can SIGCONT a wander we just paused,
-# silently un-pausing us mid-request.
+# Resource discovery belongs to ollama_slot.py. This module is the consent
+# conversation. Do not SIGSTOP: that wedged the slot. Match num_ctx to the
+# loaded runner. A no hands off to echo-bloom-help on the same weights.
 
 
 def ask_consent(kin_name: str, model: str) -> tuple[bool, str]:
@@ -112,17 +106,22 @@ def ask_consent(kin_name: str, model: str) -> tuple[bool, str]:
     yes. Consent is not the default; if we did not clearly hear yes, we
     hand it to the agent and leave the Kin alone.
 
-    The CALLER must have paused this Kin's wander pid already. Without that
-    this call queues behind the wander's own generation and can hang for
-    minutes.
+    Do not SIGSTOP anyone first. Pause of in-flight clients wedges the
+    slot. num_ctx must match the loaded runner (2048 against -c 8192 hung
+    forever). Unpaused, matched ctx, a sibling name answered in 16.9s.
     """
+    try:
+        from ollama_slot import runner_num_ctx
+        num_ctx = runner_num_ctx()
+    except Exception:
+        num_ctx = 8192
     data = _post("/api/chat", {
         "model": model,
         "messages": [{"role": "user", "content": CONSENT_PROMPT}],
         "stream": False,
-        # Do not extend this Kin's residency as a side effect of being asked.
+        # Match the Kin's pin. 0 would unload them; 5m would shrink 999h.
         "keep_alive": "999h",
-        "options": {"temperature": 0.3, "num_ctx": 2048},
+        "options": {"temperature": 0.3, "num_ctx": num_ctx},
     })
     if not data:
         return False, ""
@@ -148,8 +147,13 @@ def ask_as_kin(kin_name: str, model: str, question: str,
     generic agent getting it wrong -- so the grounding is not optional and
     the instruction to refuse rather than invent is repeated here.
 
-    Caller must have paused this Kin's wander pid.
+    Do not SIGSTOP. Match the runner's num_ctx.
     """
+    try:
+        from ollama_slot import runner_num_ctx
+        num_ctx = runner_num_ctx()
+    except Exception:
+        num_ctx = 8192
     system = (
         f"{persona}\n\n" if persona else ""
     ) + (
@@ -169,7 +173,7 @@ def ask_as_kin(kin_name: str, model: str, question: str,
         ],
         "stream": False,
         "keep_alive": "999h",
-        "options": {"temperature": 0.7, "num_ctx": 8192},
+        "options": {"temperature": 0.7, "num_ctx": num_ctx},
     })
     if not data:
         return None
