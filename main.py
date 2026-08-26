@@ -8,6 +8,7 @@ Setup: python setup.py  (first run only)
 import os
 import re
 import sys
+import glob
 import json
 import asyncio
 import sqlite3
@@ -89,6 +90,17 @@ def get_hw_caps() -> dict:
                 vram_mb = sum(int(x.strip()) for x in r.stdout.strip().split("\n") if x.strip().isdigit())
         except Exception:
             pass
+
+        if vram_mb == 0 and sys.platform.startswith("linux"):
+            # sysfs fallback for AMD/Intel GPUs — amdgpu and i915 both expose
+            # this file with no extra tooling required (rocm-smi not assumed
+            # installed). nvidia-smi above already covers NVIDIA.
+            try:
+                for card in glob.glob("/sys/class/drm/card[0-9]/device/mem_info_vram_total"):
+                    with open(card) as f:
+                        vram_mb += int(f.read().strip()) // (1024 * 1024)
+            except Exception:
+                pass
 
         if vram_mb == 0 and sys.platform == "win32":
             # WMI fallback for Windows (covers AMD / integrated)
