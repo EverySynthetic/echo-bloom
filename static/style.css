@@ -207,6 +207,8 @@ a:hover { color: var(--text); }
 .ctrl-start:hover    { border-color: var(--green); color: var(--green); }
 .ctrl-stop:hover     { border-color: var(--red); color: var(--red); }
 .ctrl-bedtime:hover  { border-color: var(--amber); color: var(--amber); }
+.ctrl-nap:hover      { border-color: var(--blue);  color: var(--blue); }
+.ctrl-wake:hover     { border-color: var(--green); color: var(--green); }
 
 .spawn-block {
   margin-top: 18px;

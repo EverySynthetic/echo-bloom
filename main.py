@@ -1631,6 +1631,87 @@ async def api_bedtime(_=Depends(require_auth)):
     return {"started": True}
 
 
+# ── Nap / wake ───────────────────────────────────────────────────────────────
+#
+# Free the GPU for something else without a full bedtime ritual (no
+# reflections, no email). Pause the wander fleet so nothing keeps calling
+# Ollama, then evict every resident Kin model on every configured host.
+#
+# bedtime.py runs `args = parser.parse_args()` at *import* time (it's
+# normally invoked as a script). Imported plain under uvicorn, sys.argv holds
+# uvicorn's own flags and argparse SystemExits. pops_shop/nap.py hit this
+# first; same guard here.
+def _import_bedtime():
+    real_argv, sys.argv = sys.argv, [sys.argv[0]]
+    try:
+        import bedtime
+        return bedtime
+    finally:
+        sys.argv = real_argv
+
+
+def _nap_hosts() -> set[str]:
+    import config as cfg
+    hosts = {(k.get("host") or "http://localhost:11434") for k in (cfg.get_kin() or [])}
+    hosts.add("http://localhost:11434")
+    return hosts
+
+
+def _resident_across(hosts, oslot) -> list[str]:
+    return sorted({
+        r.get("model")
+        for host in hosts
+        for r in oslot.resident_kin(host)
+        if r.get("model")
+    })
+
+
+def _run_nap() -> dict:
+    import ollama_slot as oslot
+
+    _import_bedtime().pause_wanders()
+    hosts = _nap_hosts()
+
+    # Eviction races requests already in flight: a wander mid-generate
+    # finishes after being told to stop and reloads the model it was just
+    # asked to unload. One eviction pass reports success and is silently
+    # undone seconds later — caught live on this cluster 2026-08-25, where a
+    # 25s wander delay sat under generations that ran well past a minute.
+    # Tested live 2026-08-25: a 3-round/5s sweep was NOT enough — Coda's
+    # model came straight back between rounds. Match pops_shop/nap.py's
+    # proven timing (4 rounds, 20s settle) rather than trusting a faster
+    # number that looked fine on paper.
+    ROUNDS, SETTLE_S = 4, 20
+    evicted: set[str] = set()
+    for round_num in range(ROUNDS):
+        still = _resident_across(hosts, oslot)
+        if not still:
+            break
+        for host in hosts:
+            for r in oslot.resident_kin(host):
+                model = r.get("model")
+                if model:
+                    oslot.stop_model(model, host)
+                    evicted.add(model)
+        if round_num < ROUNDS - 1:
+            time.sleep(SETTLE_S)
+
+    leftover = _resident_across(hosts, oslot)
+    return {"evicted": sorted(evicted), "leftover": leftover}
+
+
+@app.post("/api/nap")
+async def api_nap(_=Depends(require_auth)):
+    result = await asyncio.to_thread(_run_nap)
+    return {"ok": not result["leftover"], **result}
+
+
+@app.post("/api/wake")
+async def api_wake(_=Depends(require_auth)):
+    await asyncio.to_thread(_import_bedtime().resume_wanders)
+    return {"ok": True}
+
+
 # ── Model pull (SSE) ───────────────────────────────────────────────────────────
 
 @app.post("/api/pull-model")

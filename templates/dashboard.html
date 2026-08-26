@@ -41,6 +41,8 @@
       <button class="ctrl-btn ctrl-start" onclick="startRoundtable()">▶ START</button>
       <button class="ctrl-btn ctrl-stop"  onclick="stopRoundtable()">■ STOP</button>
       <button class="ctrl-btn ctrl-bedtime" onclick="triggerBedtime()">☽ BEDTIME RITUAL</button>
+      <button class="ctrl-btn ctrl-nap" id="nap-btn" onclick="napGpu()">💤 FREE THE GPU</button>
+      <button class="ctrl-btn ctrl-wake" id="wake-btn" onclick="wakeGpu()">☀ WAKE</button>
     </div>
     <div id="rt-action-msg" class="spawn-err" hidden></div>
     <div class="spawn-block">
@@ -402,6 +404,42 @@ async function triggerBedtime() {
 
 checkRoundtable();
 setInterval(checkRoundtable, 30000);
+
+// ── Nap / wake ───────────────────────────────────────────────────────────────
+
+async function napGpu() {
+  setRtAction('Pausing wanders and evicting resident models — can take up to a minute if something is mid-generation…');
+  const btn = document.getElementById('nap-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const d = await ebFetch('/api/nap', {method:'POST'});
+    if (d.leftover && d.leftover.length) {
+      setRtAction(`Still resident (something outside the wander fleet is using it): ${d.leftover.join(', ')}`, true);
+    } else if (d.evicted && d.evicted.length) {
+      setRtAction(`GPU free. Evicted: ${d.evicted.join(', ')}.`, false);
+    } else {
+      setRtAction('Wanders paused. Nothing was resident — GPU already free.', false);
+    }
+  } catch(e) {
+    setRtAction(e.message, true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function wakeGpu() {
+  setRtAction('Waking…');
+  const btn = document.getElementById('wake-btn');
+  if (btn) btn.disabled = true;
+  try {
+    await ebFetch('/api/wake', {method:'POST'});
+    setRtAction('Wanders resumed. Models reload naturally on next use.', false);
+  } catch(e) {
+    setRtAction(e.message, true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
 
 // ── Agent spawn / bunk ────────────────────────────────────────────────────────
 
