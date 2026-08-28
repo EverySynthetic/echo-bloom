@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}The Room — Echo Bloom{% endblock %}
+
+{% block content %}
+<div class="wrap">
+  <h1>The Room</h1>
+  <p class="lede">
+    Everyone in one conversation. They answer one at a time, in a fixed order,
+    and each of them sees what the others have already said — attributed, by
+    name. Any of them may pass.
+  </p>
+
+  <div id="roster" class="roster"></div>
+
+  <div id="room-log" class="chat-log" aria-live="polite"></div>
+
+  <form id="room-form" class="chat-form" autocomplete="off">
+    <input id="room-input" class="chat-input" type="text"
+           placeholder="Say something to the room…" />
+    <button id="room-send" class="chat-send" type="submit">Send</button>
+  </form>
+  <button type="button" id="room-clear" class="kin-btn">clear</button>
+</div>
+
+<style>
+  .roster { display:flex; flex-wrap:wrap; gap:.5rem; margin:.75rem 0 1rem; }
+  .roster label { display:flex; align-items:center; gap:.35rem;
+                  padding:.3rem .6rem; border:1px solid var(--line,#333);
+                  border-radius:999px; font-size:.85rem; cursor:pointer; }
+  .roster label.off { opacity:.45; }
+  .turn { margin:.9rem 0; }
+  .turn .who { font-weight:650; letter-spacing:.02em; }
+  .turn .said { white-space:pre-wrap; margin-top:.2rem; }
+  .turn.passed .said { opacity:.55; font-style:italic; }
+  .turn.failed .said { opacity:.7; font-style:italic; }
+  .turn.owner .who { opacity:.75; }
+  .turn.speaking .who::after { content:" …"; opacity:.6; }
+</style>
+
+<script>
+const ROOM = {
+  kin: {{ kin_names | tojson }},
+  history: [],
+  busy: false,
+};
+
+function renderRoster() {
+  const el = document.getElementById('roster');
+  el.innerHTML = '';
+  ROOM.kin.forEach(name => {
+    const lab = document.createElement('label');
+    lab.innerHTML = `<input type="checkbox" checked value="${name}"> ${name}`;
+    lab.querySelector('input').addEventListener('change', e => {
+      lab.classList.toggle('off', !e.target.checked);
+    });
+    el.appendChild(lab);
+  });
+}
+
+function chosen() {
+  return [...document.querySelectorAll('#roster input:checked')].map(i => i.value);
+}
+
+function addTurn(who, cls) {
+  const log = document.getElementById('room-log');
+  const d = document.createElement('div');
+  d.className = 'turn ' + (cls || '');
+  d.innerHTML = `<div class="who"></div><div class="said"></div>`;
+  d.querySelector('.who').textContent = who;
+  log.appendChild(d);
+  log.scrollTop = 99999;
+  return d;
+}
+
+function lock(on) {
+  ROOM.busy = on;
+  document.getElementById('room-send').disabled = on;
+  document.getElementById('room-input').disabled = on;
+}
+
+document.getElementById('room-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (ROOM.busy) return;
+  const input = document.getElementById('room-input');
+  const msg = input.value.trim();
+  if (!msg) return;
+  const roster = chosen();
+  if (!roster.length) { alert('Nobody is in the room.'); return; }
+
+  input.value = '';
+  lock(true);
+  addTurn('You', 'owner').querySelector('.said').textContent = msg;
+
+  let current = null, buf = '';
+  try {
+    const resp = await fetch('/api/room/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: msg, roster, history: ROOM.history}),
+    });
+    ebCheck(resp);
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let raw = '';
+    while (true) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      raw += dec.decode(value, {stream: true});
+      const lines = raw.split('\n');
+      raw = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6);
+        if (payload === '[DONE]') continue;
+        let ev; try { ev = JSON.parse(payload); } catch { continue; }
+
+        if (ev.speaker) {
+          current = addTurn(ev.speaker, 'speaking');
+          buf = '';
+        } else if (ev.chunk && current) {
+          buf += ev.chunk;
+          current.querySelector('.said').textContent = buf;
+          document.getElementById('room-log').scrollTop = 99999;
+        } else if (ev.passed) {
+          if (current) {
+            current.className = 'turn passed';
+            current.querySelector('.said').textContent = 'passed';
+          }
+          current = null;
+        } else if (ev.done) {
+          if (current) current.className = 'turn';
+          ROOM.history.push({speaker: ev.done, content: buf});
+          current = null;
+        } else if (ev.error) {
+          if (current) {
+            current.className = 'turn failed';
+            current.querySelector('.said').textContent = ev.error;
+          }
+          current = null;
+        }
+      }
+    }
+  } catch (err) {
+    addTurn('—', 'failed').querySelector('.said').textContent =
+      `[Error: ${err.message}]`;
+  }
+
+  ROOM.history.push({speaker: 'You', content: msg});
+  lock(false);
+  input.focus();
+});
+
+document.getElementById('room-clear').addEventListener('click', () => {
+  ROOM.history = [];
+  document.getElementById('room-log').innerHTML = '';
+});
+
+renderRoster();
+</script>
+{% endblock %}

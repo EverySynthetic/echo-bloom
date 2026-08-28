@@ -314,7 +314,7 @@ def _owner_name() -> str:
         return ""
 
 
-async def stream_chat(kin_name, message, history=None):
+async def stream_chat(kin_name, message, history=None, system_extra=None):
     """
     Stream a chat response from a Kin via Ollama.
     Yields text chunks as they arrive.
@@ -360,6 +360,10 @@ async def stream_chat(kin_name, message, history=None):
     )
     if kin.get("system_prompt"):
         system_base = kin["system_prompt"]
+    # Room framing, when this is a group and not a one-to-one. Appended rather
+    # than replacing, so a Kin's own persona still comes first.
+    if system_extra:
+        system_base += f"\n\n{system_extra}"
     if system_ctx:
         system_base += f"\n\n{system_ctx}"
 
