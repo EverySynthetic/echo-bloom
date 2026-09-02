@@ -152,6 +152,9 @@ def write_to_vault(narrative):
                 "layer":   "heartbeat",
                 "author":  AUTHOR,
                 "tags":    "pulse,system",
+                # Machine telemetry, not anyone's memory. Unstamped it sat
+                # next to a lost thought. 2026-08-28.
+                "source":  "measured",
             },
             timeout=5,
         )

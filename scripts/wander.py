@@ -613,6 +613,9 @@ def save_thought(mode, prompt, thought):
             "content":    thought,
             "tags":       f"wander,{mode}",
             "visibility": "shared",
+            # 2026-08-28: source was never sent by ANY of the fourteen vault
+            # writers, so every row landed as the schema default 'unknown'.
+            "source":     "wandered",
         }, timeout=8)
         if not r.ok:
             log(f"  vault write failed: HTTP {r.status_code}")

@@ -393,6 +393,7 @@ CHARS_PER_TOKEN = 4
 # of the context block. Order matters: strongest provenance first.
 _REGISTERS = [
     ("told",        "Don told you this:"),
+    ("kept",        "You wrote this last night — tonight's telling, not the day:"),
     ("experienced", "This happened — you were there:"),
     ("inferred",    "You worked this out yourself, from other things:"),
     ("wandered",    "Things you thought while wandering — yours alone, "
@@ -624,7 +625,11 @@ def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
         return "\n\n".join(p for p in parts if p)
 
     # 4. Dynamic tier — ranked recall, split into labeled registers.
-    ranked = _ranked_recall(kin_name, query_text, limit=30)
+    # The well is the vault minus wander. Wander lives in the day store
+    # (the recess). Drawing it here made the window a lie: a firehose
+    # wearing the face of memory. 2026-08-29.
+    ranked = _ranked_recall(kin_name, query_text, limit=30,
+                            include_wander=False)
 
     if ranked is None:
         # Older vault: fall back to the previous behaviour rather than nothing.
@@ -632,12 +637,9 @@ def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
         if vault:
             lines = "\n".join(f"- {m}" for m in vault)
             parts.append(f"Memories that may be relevant:\n{lines}")
-        wander = get_wander_thoughts(kin_name, limit=wander_limit,
-                                     db_path=db_path)
-        if wander:
-            lines = "\n".join(f"- {t}" for t in wander)
-            parts.append("Things you thought while wandering — yours alone, "
-                         "not confirmed by anyone:\n" + lines)
+        recess = _today_recess(kin_name, wander_limit, db_path)
+        if recess:
+            parts.append(recess)
         return "\n\n".join(p for p in parts if p)
 
     # Domain boost: prefer rows matching the domain in play, but always hold
@@ -649,6 +651,7 @@ def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
         ranked = same + other[:1] + other[1:]
 
     buckets = _by_source(ranked)
+    _wandered_chars = 0
     wander_budget = int(char_budget * _WANDER_SHARE)
     solid_budget = char_budget - wander_budget
 
@@ -660,6 +663,7 @@ def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
             rows = rows[:_WANDER_MAX_ITEMS]
             kept = _fit(rows, wander_budget, seen)
             block = _format_register(kept, header, wander_budget)
+            _wandered_chars = len(block or "")
         else:
             share = int(solid_budget * 0.45) if src == "experienced" else \
                     int(solid_budget * 0.25)
@@ -669,15 +673,64 @@ def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
             parts.append(block)
 
     # Anything the vault couldn't classify.
+    #
+    # Rank `unknown` at or below `wandered`. It shares the unconfirmed
+    # ceiling, is served only after named thought, same item cap. Honest
+    # labels must not be punished. 2026-08-28.
     unknown = buckets.get("unknown", [])
     if unknown:
-        kept = _fit(unknown, int(solid_budget * 0.15), seen)
-        block = _format_register(kept, "Also in the vault, origin unclear:",
-                                 int(solid_budget * 0.15))
-        if block:
-            parts.append(block)
+        leftover = max(0, wander_budget - _wandered_chars)
+        if leftover:
+            kept = _fit(unknown[:_WANDER_MAX_ITEMS], leftover, seen)
+            block = _format_register(kept, "Also in the vault, origin unclear:",
+                                     leftover)
+            if block:
+                parts.append(block)
+
+    recess = _today_recess(kin_name, wander_limit, db_path)
+    if recess:
+        parts.append(recess)
 
     return "\n\n".join(p for p in parts if p)
+
+
+def _today_recess(kin_name, limit, db_path):
+    """Small working window of today's day store. Labeled as recess, not keep."""
+    wander = get_wander_thoughts(kin_name, limit=limit, db_path=db_path)
+    if not wander:
+        return ""
+    lines = "\n".join(f"- {t}" for t in wander)
+    return ("Today's day store — still in the recess, not the well. "
+            "You are not looking at the pile. These are today's own notes:\n"
+            + lines)
+
+
+def search_day_store(kin_name, query, limit=6, db_path=None):
+    """Rummage the recess. Hits labelled. Nothing auto-promotes."""
+    db = db_path or _db_for_kin(kin_name)
+    if not db or not os.path.exists(db):
+        return []
+    q = (query or "").strip()
+    if not q:
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            rows = conn.execute(
+                "SELECT timestamp, thought FROM thoughts "
+                "WHERE thought LIKE ? ORDER BY id DESC LIMIT ?",
+                (f"%{q}%", limit),
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return []
+    out = []
+    for ts, thought in rows:
+        text = " ".join((thought or "").split())[:600]
+        if text:
+            out.append(f"[{(ts or '')[:10]} · day store] {text}")
+    return out
 
 
 def search_memory(kin_name, query, limit=6, include_wander=False):
@@ -686,12 +739,14 @@ def search_memory(kin_name, query, limit=6, include_wander=False):
     Saying 'I don't have that' is a better answer than inventing it."""
     rows = _ranked_recall(kin_name, query, limit=limit,
                           include_wander=include_wander)
-    if not rows:
-        return f"Nothing in the vault about: {query}"
     out = []
-    for r in rows:
-        stamp = (r.get("timestamp") or "")[:10]
-        src = r.get("source") or "unknown"
-        text = " ".join((r.get("content") or "").split())[:600]
-        out.append(f"[{stamp} · {src}] {text}")
+    if rows:
+        for r in rows:
+            stamp = (r.get("timestamp") or "")[:10]
+            src = r.get("source") or "unknown"
+            text = " ".join((r.get("content") or "").split())[:600]
+            out.append(f"[{stamp} · {src}] {text}")
+    out.extend(search_day_store(kin_name, query, limit=limit))
+    if not out:
+        return f"Nothing in the vault or the day store about: {query}"
     return "\n\n".join(out)

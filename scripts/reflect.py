@@ -194,6 +194,9 @@ def save(content):
             "content":    content,
             "tags":       f"reflection,continuity,{NODE_NAME.lower()}",
             "visibility": "shared",
+            # A model read the heartbeats and worked this out. Unstamped it
+            # read as "origin unclear". 2026-08-28.
+            "source":     "inferred",
         }, timeout=10)
         if not r.ok:
             log(f"vault write failed: HTTP {r.status_code}")

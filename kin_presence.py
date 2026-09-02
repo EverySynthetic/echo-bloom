@@ -112,11 +112,11 @@ def record_thought_return(
         payload = {
             "author": kin_name,
             "layer": "wander" if mode.startswith("wander") else "reflection",
+            # Source is derived from the mode we already hold, never guessed.
+            "source": "wandered" if mode.startswith("wander") else "experienced",
             "content": thought,
             "tags": f"wander,roundtable,returned,presence",
             "visibility": "shared",
-            # metadata dropped by current vault model; using tags + content instead.
-            # Matches existing pulse/reflect/wander pattern exactly (no schema change).
         }
         r = requests.post(
             f"{VAULT_URL}/remember",
