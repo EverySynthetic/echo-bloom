@@ -43,6 +43,38 @@ const ROOM = {
   history: [],
   busy: false,
 };
+// The owner is stored/sent under the same name the server uses for the live
+// turn, so the Kin see one person, not "You" (past) and a real name (present).
+// It is still shown as "You" in the owner's own view.
+const OWNER = {{ owner_name | tojson }};
+function ownerLabel(speaker) { return speaker === OWNER ? 'You' : speaker; }
+
+// ── Persistence ───────────────────────────────────────────────────────────────
+// The individual chats persist per-Kin history to localStorage and restore it
+// on open; the room only ever held its turns in memory, so a reload wiped the
+// whole conversation. Mirror the kin.html contract: one room-wide key, capped,
+// saved after every turn, rendered back on load.
+const HISTORY_KEY = 'eb_room_history';
+const MAX_STORED  = 200;
+
+function saveHistory() {
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(ROOM.history.slice(-MAX_STORED))); } catch(e) {}
+}
+function loadHistory() {
+  try { const r = localStorage.getItem(HISTORY_KEY); return r ? JSON.parse(r) : []; } catch(e) { return []; }
+}
+function renderTurn(speaker, content) {
+  const d = addTurn(ownerLabel(speaker), speaker === OWNER ? 'owner' : '');
+  d.querySelector('.said').textContent = content;
+  return d;
+}
+function restoreHistory() {
+  const saved = loadHistory().filter(t => t && t.speaker && t.content != null);
+  if (!saved.length) return;
+  ROOM.history = saved;
+  for (const t of saved) renderTurn(t.speaker, t.content);
+  document.getElementById('room-log').scrollTop = 99999;
+}
 
 function renderRoster() {
   const el = document.getElementById('roster');
@@ -92,11 +124,17 @@ document.getElementById('room-form').addEventListener('submit', async (e) => {
   addTurn('You', 'owner').querySelector('.said').textContent = msg;
 
   let current = null, buf = '';
+  // Record the owner's turn BEFORE the replies it prompts, so next round's
+  // transcript reads in the order it happened. The server adds this message
+  // itself for THIS round, so `outgoing` deliberately excludes it.
+  const outgoing = ROOM.history.slice();
+  ROOM.history.push({speaker: OWNER, content: msg});
+  saveHistory();
   try {
     const resp = await fetch('/api/room/chat', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({message: msg, roster, history: ROOM.history}),
+      body: JSON.stringify({message: msg, roster, history: outgoing}),
     });
     ebCheck(resp);
     const reader = resp.body.getReader();
@@ -130,6 +168,7 @@ document.getElementById('room-form').addEventListener('submit', async (e) => {
         } else if (ev.done) {
           if (current) current.className = 'turn';
           ROOM.history.push({speaker: ev.done, content: buf});
+          saveHistory();
           current = null;
         } else if (ev.error) {
           if (current) {
@@ -145,16 +184,19 @@ document.getElementById('room-form').addEventListener('submit', async (e) => {
       `[Error: ${err.message}]`;
   }
 
-  ROOM.history.push({speaker: 'You', content: msg});
+  saveHistory();
   lock(false);
   input.focus();
 });
 
 document.getElementById('room-clear').addEventListener('click', () => {
+  if (ROOM.history.length && !confirm('Clear the room conversation?')) return;
   ROOM.history = [];
+  try { localStorage.removeItem(HISTORY_KEY); } catch(e) {}
   document.getElementById('room-log').innerHTML = '';
 });
 
 renderRoster();
+restoreHistory();
 </script>
 {% endblock %}
