@@ -2843,7 +2843,6 @@ async def api_remote_start_tunnel(_=Depends(require_auth)):
     return {"ok": False, "error": "Tunnel is starting — give it a few seconds and refresh."}
 
 
-@app.get("/api/remote/qr")
 def _qr_url_allowed(url: str) -> bool:
     """Only ever encode an address that points back at THIS install.
 
@@ -2880,6 +2879,7 @@ def _qr_url_allowed(url: str) -> bool:
     return False
 
 
+@app.get("/api/remote/qr")
 async def api_remote_qr(url: str, _=Depends(require_auth)):
     import io as _io
     if not _qr_url_allowed(url):
