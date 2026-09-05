@@ -160,5 +160,38 @@ class Robustness(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
 
 
+class TheRoomRemembersAcrossReloads(unittest.TestCase):
+    """The reported bug: the room kept its turns only in memory, so a reload
+    wiped the whole conversation while the individual chats kept theirs. The
+    fix lives in the template (localStorage, like kin.html), so this freezes the
+    contract there. Every marker below was ABSENT in the broken version, so a
+    regression that drops persistence turns these red rather than silently
+    forgetting again."""
+
+    def setUp(self):
+        self.html = client.get("/room").text
+
+    def test_the_room_persists_history(self):
+        self.assertIn("localStorage", self.html)
+        self.assertIn("saveHistory", self.html)
+
+    def test_the_room_restores_on_load(self):
+        self.assertIn("restoreHistory", self.html)
+        # defined is not enough; it must be invoked at init
+        self.assertRegex(self.html, r"restoreHistory\(\)\s*;")
+
+    def test_the_owner_turn_is_recorded_before_the_replies(self):
+        # the ordering fix: send the prior history (without the new message),
+        # then record the owner's turn ahead of the replies it prompts
+        self.assertIn("outgoing", self.html)
+        self.assertIn("history: outgoing", self.html)
+
+    def test_the_owner_is_one_identity_not_two(self):
+        # owner turns are stored/sent under the same name the server uses live,
+        # not "You" in the past and the real name in the present
+        self.assertIn("const OWNER", self.html)
+        self.assertIn("{speaker: OWNER", self.html)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

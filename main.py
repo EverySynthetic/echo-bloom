@@ -931,7 +931,13 @@ def _room_roster():
 async def room_page(request: Request, _=Depends(require_auth)):
     return templates.TemplateResponse(
         "room.html",
-        {"request": request, "kin_names": [k["name"] for k in cl.KIN if k.get("name")]},
+        {"request": request,
+         "kin_names": [k["name"] for k in cl.KIN if k.get("name")],
+         # The same name the server attributes the owner's live turn to, so the
+         # stored/sent history labels the owner consistently instead of "You"
+         # in the past and the real name in the present — two identities for one
+         # person, which the Kin can read as two participants.
+         "owner_name": cl._owner_name() or "the owner"},
     )
 
 
