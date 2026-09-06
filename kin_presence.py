@@ -150,7 +150,11 @@ def get_presence(kin_name: str) -> Dict[str, Any]:
     elif cached:
         status = "quiet"
 
+    # Spread cached FIRST so the derived view wins. With **cached last, a
+    # heartbeat's raw status ("alive") overwrote the computed status and the
+    # whole present/thinking/quiet/offline derivation was dead on the dashboard.
     return {
+        **cached,
         "kin": kin_name,
         "entity_type": entity_type(kin_name),
         "status": status,
@@ -158,7 +162,6 @@ def get_presence(kin_name: str) -> Dict[str, Any]:
         "latest_snippet": cached.get("thought"),
         "roundtable_active": bool(cached.get("roundtable_round")),
         "source": "presence_module",
-        **cached,
     }
 
 
