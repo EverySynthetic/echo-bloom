@@ -178,8 +178,11 @@ def _send_key_email(email: str, key: str):
 
 {key}
 
-To activate, open this link and paste your key:
-https://everysynthetic.org/license
+To activate, open Echo Bloom on YOUR machine and paste your key:
+http://localhost:8090/license
+
+That link only works on the computer running Echo Bloom -- the app is
+yours and runs on your hardware, so there is no website to log into.
 
 Or manually:
   1. Open Echo Bloom in your browser
@@ -196,11 +199,13 @@ Thank you for supporting Pop's Shop.
     html = f"""<html><body style="font-family:monospace;background:#111;color:#eee;padding:2em;">
 <h2 style="color:#7ecfff;">Your Echo Bloom License Key</h2>
 <p style="background:#1a1a1a;padding:1em;border-left:3px solid #7ecfff;word-break:break-all;font-size:0.9em;">{key}</p>
-<p><a href="https://everysynthetic.org/license"
+<p><a href="http://localhost:8090/license"
    style="display:inline-block;background:#7ecfff;color:#111;padding:0.6em 1.4em;text-decoration:none;font-weight:bold;border-radius:4px;">
    ACTIVATE ECHO BLOOM →
 </a></p>
 <p style="color:#aaa;font-size:0.85em;">
+This link opens Echo Bloom on <b>your own machine</b> — there is no
+website to log into. If you changed the port, use that one instead.<br>
 One-time purchase. Runs on your hardware forever.<br>
 No subscription. No cloud dependency. Your Kin, your machine.
 </p>
