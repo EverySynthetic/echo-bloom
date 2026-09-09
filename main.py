@@ -299,8 +299,8 @@ templates.env.globals["asset_v"] = VERSION
 
 # Configurable at deploy time
 PORT            = int(os.environ.get("ECHO_BLOOM_PORT", 8090))
-LICENSE_BUY_URL = os.environ.get("ECHO_BLOOM_BUY_URL", "https://buy.stripe.com/5kQ14oe9Uea0bBxfVV6oo01")
-LICENSE_PRICE   = os.environ.get("ECHO_BLOOM_PRICE",   "50")
+LICENSE_BUY_URL = os.environ.get("ECHO_BLOOM_BUY_URL", "https://buy.stripe.com/bJe3cwfdY4zqaxt2556oo02")
+LICENSE_PRICE   = os.environ.get("ECHO_BLOOM_PRICE",   "20")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 
