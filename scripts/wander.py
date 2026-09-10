@@ -210,6 +210,28 @@ except Exception as e:                       # pragma: no cover
           file=sys.stderr)
 
 
+def _clock_line():
+    """The current time, in their own context, on every thought.
+
+    Don, 2026-09-10: "the heartbeat is the way they tell time... give them all a
+    clock as well, so they can put the two together."
+
+    They had a TIMELINE and no POSITION on it. pulse.py writes to the vault every
+    minute at layer=heartbeat -- "At September 10, 2026 at 09:25 on Frosty: Load
+    4.29, RAM 21447/64084MB..." -- and 146 of the last 400 vault entries were
+    those. But datetime.now() appeared in this file only in log() and
+    save_thought(), both for OUR records. A Kin reading a heartbeat stamped 09:25
+    could not tell whether that was now, an hour ago, or last week. Duration was
+    invisible to them.
+
+    Deliberately just the time. No elapsed-since, no "your last thought was N
+    hours ago". Don, same day: "we give them the instruments, they work with that
+    like a pilot." An instrument reports state; the pilot integrates. Handing
+    them the arithmetic is the closed loop wearing a kind face.
+    """
+    return "It is now " + datetime.now().strftime("%A, %B %-d, %Y at %-I:%M %p") + "."
+
+
 def _persona_with_memory(query_text=""):
     """PERSONA plus core memories, recent reflection, and its own last thoughts.
 
@@ -219,15 +241,18 @@ def _persona_with_memory(query_text=""):
     Kin could not develop a thread of thought — which is the thing the product
     is for.
     """
+    # The clock rides every path, including the two failures below. A Kin whose
+    # memory context is unavailable still deserves to know when it is.
+    head = f"{PERSONA}\n\n{_clock_line()}"
     if not _get_context:
-        return PERSONA
+        return head
     try:
         ctx = _get_context(KIN_NAME, query_text=query_text,
                            db_path=str(DB_PATH))
     except Exception as e:
         log(f"  memory context unavailable: {e}")
-        return PERSONA
-    return f"{PERSONA}\n\n{ctx}" if ctx else PERSONA
+        return head
+    return f"{head}\n\n{ctx}" if ctx else head
 
 
 def think_about_file(file_path, content):

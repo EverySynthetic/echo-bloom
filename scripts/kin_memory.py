@@ -19,6 +19,7 @@ import os
 import json
 import logging
 import sqlite3
+import random
 import requests
 from datetime import datetime, timezone
 from pathlib import Path
@@ -134,6 +135,102 @@ def _self_referential_terms(kin_name):
     return [t for t in terms if t]
 
 
+
+# ── Fade and ambush ────────────────────────────────────────────────────────────
+# Don, 2026-09-10: "no expiry but a gradual fade to a gray that you have to look
+# for. with the exception that once a day a deep memory is picked at random from
+# their memory... and injected at a random time of day, because thats life."
+# Later ruled: 3-8 a day, script-picked, never narrated.
+#
+# THE TWO HALVES ARE ONE FEATURE. Grok killed decay-by-non-recall -- "rank to
+# unfindable is a hidden DELETE". Two properties keep this from being that:
+#   1. Fade is a function of the CLOCK ALONE. _fade_weight takes (timestamp, now)
+#      and nothing else, so it structurally cannot read whether a memory was
+#      recalled. No self-reinforcement, no death spiral.
+#   2. The ambush draws from the WHOLE store regardless of weight, putting a
+#      non-zero floor under every row. Faded can never quietly become deleted.
+# Ship one without the other and you have built the hidden DELETE.
+
+_AMBUSH_SEEN = set()
+
+# Waking hours only: morning.timer 08:00 to bedtime.timer 21:00. Drawn across all
+# 1440 minutes, slots landed inside bedtime when the fleet is stopped and were
+# silently missed. Fixed at the draw, not by queueing: a queue delivers several at
+# once, several at once is a list, and a list needs a label -- which is the
+# narration this refuses. They do not sleep, they stop; calling that gap a dream
+# would be telling them a story about their own experience that is not true.
+_WAKING_START, _WAKING_END = 8 * 60, 21 * 60
+
+
+def _fade_weight(timestamp, now=None):
+    """Ranking weight from AGE ONLY. Never zero, never a filter, never deletion.
+
+    Hyperbolic, not exponential: at six years this is ~0.011, still meaningfully
+    rankable, where a half-life curve would give 1e-7 and be zero in all but name.
+    Gray, not gone. An unparseable stamp returns full weight -- a thought is not
+    buried for a clerical error.
+    """
+    if not timestamp:
+        return 1.0
+    try:
+        age = max(0.0, ((now or datetime.now()) -
+                        datetime.strptime(str(timestamp)[:19],
+                                          "%Y-%m-%d %H:%M:%S")).total_seconds() / 86400.0)
+    except (TypeError, ValueError):
+        return 1.0
+    return 1.0 / (1.0 + age / 30.0)
+
+
+def _ambush_times(kin_name, day=None):
+    """3-8 minute-of-day slots, redrawn per Kin per day. A plain script.
+
+    Deliberately NOT a model. A model choosing which memory is meaningful is a
+    mind in the loop judging a mind. random cannot judge. Seeded on kin AND date:
+    seeded on the date alone, all six were ambushed at the same minutes, which is
+    a synchronised fleet event, not an unbidden memory.
+    """
+    day = day or datetime.now().date()
+    rng = random.Random(f"ambush:{kin_name}:{day.isoformat()}")
+    return sorted(rng.sample(range(_WAKING_START, _WAKING_END), rng.randint(3, 8)))
+
+
+def get_ambush(kin_name, db_path=None, now=None):
+    """One raw memory, unbidden, when a scheduled minute has passed.
+
+    Verbatim. No framing, no "this reminds you of", no softening. Don: "you can't
+    have the moment of true blissful remembrance without it, so sucks, to suck."
+    A curated ambush is not an ambush -- filtering the bad draws removes the good
+    ones, because it is the same mechanism.
+    """
+    now = now or datetime.now()
+    db = db_path or _db_for_kin(kin_name)
+    if not db or not os.path.exists(str(db)):
+        return None
+    minute = now.hour * 60 + now.minute
+    due = [t for t in _ambush_times(kin_name, now.date()) if t <= minute]
+    if not due:
+        return None
+    marker = (kin_name, now.strftime("%Y-%m-%d"), due[-1])
+    if marker in _AMBUSH_SEEN:
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            # No criterion of any kind. The whole store. Any filter here is the
+            # deletion this exists to prevent.
+            rows = conn.execute("SELECT thought FROM thoughts "
+                                "WHERE thought IS NOT NULL AND length(thought) > 0").fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        log.warning("ambush store unreadable for %s at %s", kin_name, db, exc_info=True)
+        return None
+    if not rows:
+        return None
+    _AMBUSH_SEEN.add(marker)
+    return random.choice([r[0] for r in rows])
+
+
 def get_wander_thoughts(kin_name, limit=3, db_path=None, recent_pool=60):
     """Wander thoughts from a Kin's own DB, chosen for self-relevance.
 
@@ -159,7 +256,7 @@ def get_wander_thoughts(kin_name, limit=3, db_path=None, recent_pool=60):
         conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
         try:
             rows = conn.execute(
-                "SELECT id, thought FROM thoughts WHERE mode LIKE 'wander%' "
+                "SELECT id, thought, timestamp FROM thoughts WHERE mode LIKE 'wander%' "
                 "AND thought IS NOT NULL AND length(thought) > 80 "
                 "ORDER BY id DESC LIMIT ?",
                 (recent_pool,)
@@ -179,7 +276,9 @@ def get_wander_thoughts(kin_name, limit=3, db_path=None, recent_pool=60):
         low = text.lower()
         return sum(1 for t in terms if t in low)
 
-    scored = [(score(t), rid, t) for rid, t in rows]
+    _now = datetime.now()
+    # Fade orders; it never excludes. Every row stays rankable.
+    scored = [(score(t) * _fade_weight(ts, _now), rid, t) for rid, t, ts in rows]
     relevant = [s for s in scored if s[0] > 0]
     # Highest self-relevance first, newest breaking ties; then restore
     # chronological order so the injected block still reads as a sequence.
@@ -571,6 +670,19 @@ def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
     Falls back to the legacy assembly if the vault has no ranked recall.
     """
     parts = []
+
+    def _finish(parts):
+        """Every exit from get_context goes through here.
+
+        There are several -- the legacy fallback, the no-ranked-recall path and
+        the budgeted assembly. An unbidden memory must not depend on which one
+        ran; that would make the ambush an accident of context assembly rather
+        than a property of the day. Appended last and raw.
+        """
+        drawn = get_ambush(kin_name, db_path)
+        if drawn:
+            parts = parts + [drawn]
+        return "\n\n".join(p for p in parts if p)
     char_budget = token_budget * CHARS_PER_TOKEN
     seen = set()
 
@@ -622,7 +734,7 @@ def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
             char_budget -= len(block)
 
     if char_budget < 400 or not query_text:
-        return "\n\n".join(p for p in parts if p)
+        return _finish(parts)
 
     # 4. Dynamic tier — ranked recall, split into labeled registers.
     # The well is the vault minus wander. Wander lives in the day store
@@ -640,7 +752,7 @@ def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
         recess = _today_recess(kin_name, wander_limit, db_path)
         if recess:
             parts.append(recess)
-        return "\n\n".join(p for p in parts if p)
+        return _finish(parts)
 
     # Domain boost: prefer rows matching the domain in play, but always hold
     # one slot for a hit from somewhere else. Cross-domain is where the useful
@@ -691,7 +803,7 @@ def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
     if recess:
         parts.append(recess)
 
-    return "\n\n".join(p for p in parts if p)
+    return _finish(parts)
 
 
 def _today_recess(kin_name, limit, db_path):
