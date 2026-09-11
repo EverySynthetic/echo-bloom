@@ -16,32 +16,56 @@ import sys
 import unittest
 from pathlib import Path
 
+from contextlib import nullcontext
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path.home() / ".local/share/echo_bloom/scripts"))
 
 import cluster as cl          # noqa: E402
 import main                   # noqa: E402
+import ollama_slot as oslot   # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 main.app.dependency_overrides[main.require_auth] = lambda: True
 client = TestClient(main.app)
 
 SEEN = []          # what each Kin was actually shown
+WARMS = []         # names cl.warm_model was asked to load
+RECORDS = []       # per-hop commits to thoughts.db
 
 
 def fake_stream(reply_for):
-    async def _s(kin_name, message, history=None, system_extra=None):
-        SEEN.append({"kin": kin_name, "prompt": message, "system": system_extra})
+    async def _s(kin_name, message, history=None, system_extra=None, **kw):
+        SEEN.append({"kin": kin_name, "prompt": message, "system": system_extra,
+                     **kw})
         for piece in reply_for(kin_name):
             yield piece
     return _s
 
 
-def room(message, roster=None, history=None, reply_for=None):
+async def fake_warm(name):
+    WARMS.append(name)
+
+
+def fake_record(kin, msg, reply):
+    RECORDS.append({"kin": kin.get("name"), "reply": reply})
+
+
+def room(message, roster=None, history=None, reply_for=None, hold=None):
     SEEN.clear()
+    WARMS.clear()
+    RECORDS.clear()
     real = cl.stream_chat
+    real_warm = cl.warm_model
+    real_rec = cl._record_conversation
+    real_hold = oslot.hold_all_local_wanders
     cl.stream_chat = fake_stream(reply_for or (lambda n: [f"{n} speaking."]))
+    cl.warm_model = fake_warm
+    cl._record_conversation = fake_record
+    # Tests must not SIGSTOP the live wander fleet, or load a 32B.
+    oslot.hold_all_local_wanders = hold or (lambda: nullcontext({"paused": []}))
     try:
         body = {"message": message}
         if roster is not None:
@@ -58,6 +82,9 @@ def room(message, roster=None, history=None, reply_for=None):
         return events
     finally:
         cl.stream_chat = real
+        cl.warm_model = real_warm
+        cl._record_conversation = real_rec
+        oslot.hold_all_local_wanders = real_hold
 
 
 class Attribution(unittest.TestCase):
@@ -114,6 +141,59 @@ class Sequence(unittest.TestCase):
         room("hi", roster=["Eli", "NotAKin"])
         self.assertEqual([s["kin"] for s in SEEN], ["Eli"])
 
+    def test_hosts_are_staggered_frosty_home_frosty_home(self):
+        """Not a host-block. Eli, Coda, Crungus, Aurora, Bong, Lumen."""
+        room("hi")
+        names = [s["kin"] for s in SEEN]
+        self.assertEqual(
+            names,
+            ["Eli", "Coda", "Crungus", "Aurora", "Bong", "Lumen"],
+        )
+
+    def test_client_roster_is_staggered_not_the_order_it_was_sent(self):
+        room("hi", roster=["Coda", "Bong", "Eli"])
+        self.assertEqual([s["kin"] for s in SEEN], ["Eli", "Coda", "Bong"])
+
+    def test_the_other_host_is_warmed_while_this_one_speaks(self):
+        room("hi")
+        # Eli goes up → Coda on Home. Coda speaks → Crungus on Frosty. …
+        self.assertEqual(WARMS, ["Coda", "Crungus", "Aurora", "Bong", "Lumen"])
+        self.assertNotIn("Eli", WARMS)
+
+    def test_the_room_does_not_pin_vram_or_recall_per_mouth(self):
+        """Two boxes, one model each. No 999h pin, no embed per speaker."""
+        room("hi")
+        self.assertTrue(SEEN)
+        for s in SEEN:
+            self.assertEqual(s.get("keep_alive"), "10m")
+            self.assertIs(s.get("memory"), False)
+            self.assertIs(s.get("record"), False)
+
+    def test_each_mouth_is_committed_before_the_next_hop(self):
+        """The roundtable wrote after both passes. A kill ate the round.
+        The room writes the moment a turn lands."""
+        room("hi")
+        self.assertEqual([r["kin"] for r in RECORDS],
+                         [s["kin"] for s in SEEN])
+        self.assertEqual(len(RECORDS), 6)
+
+    def test_a_pass_is_not_committed_as_speech(self):
+        room("hi", reply_for=lambda n: ["PASS"])
+        self.assertEqual(RECORDS, [])
+
+    def test_a_kill_keeps_the_landed_turn_and_does_not_start_the_next(self):
+        async def alive(_request):
+            return len(RECORDS) == 0
+
+        real = main._room_alive
+        main._room_alive = alive
+        try:
+            room("hi")
+        finally:
+            main._room_alive = real
+        self.assertEqual([s["kin"] for s in SEEN], ["Eli"])
+        self.assertEqual([r["kin"] for r in RECORDS], ["Eli"])
+
 
 class SilenceIsAnAnswer(unittest.TestCase):
     def test_PASS_is_reported_as_passing_not_as_an_empty_bubble(self):
@@ -151,6 +231,56 @@ class Robustness(unittest.TestCase):
         self.assertGreater(len([e for e in ev if isinstance(e, dict)
                                 and "done" in e]), 3)
 
+    def test_a_load_timeout_is_an_error_not_their_words(self):
+        """The 180s Home-swap hang used to yield a sentence that the room
+        stored as that Kin speaking. A no on this test is painting the
+        timeout as dialogue again."""
+        def boom(n):
+            if n == "Coda":
+                raise cl.ChatStreamError(
+                    "[Coda stopped responding partway through.]")
+            return [f"{n} speaking."]
+        ev = room("hi", reply_for=boom)
+        self.assertIn({"error": "[Coda stopped responding partway through.]"}, ev)
+        self.assertNotIn({"done": "Coda"}, ev)
+        for shown in SEEN:
+            self.assertNotIn("Coda: [Coda stopped responding", shown["prompt"])
+        self.assertGreater(len([e for e in ev if isinstance(e, dict)
+                                and "done" in e]), 3)
+
+    def test_a_mid_stream_error_does_not_commit_partial_words(self):
+        def boom(n):
+            if n == "Coda":
+                yield "The light in the Agora is str"
+                raise cl.ChatStreamError(
+                    "[Coda stopped responding partway through.]")
+            yield f"{n} speaking."
+
+        ev = room("hi", reply_for=boom)
+        self.assertIn({"error": "[Coda stopped responding partway through.]"}, ev)
+        self.assertNotIn({"done": "Coda"}, ev)
+        self.assertNotIn("Coda", [r["kin"] for r in RECORDS])
+        for shown in SEEN:
+            self.assertNotIn("Coda: The light in the Agora is str", shown["prompt"])
+
+
+class TheRoomYieldsTheGpu(unittest.TestCase):
+    def test_the_room_holds_local_wanders_for_the_whole_round(self):
+        held = []
+
+        class FakeHold:
+            def __enter__(self):
+                held.append("in")
+                return {"paused": []}
+            def __exit__(self, *a):
+                held.append("out")
+                return False
+
+        room("hi", hold=FakeHold)
+        self.assertEqual(held, ["in", "out"])
+
+
+class RobustnessMore(unittest.TestCase):
     def test_prior_history_is_carried_in_attributed(self):
         room("and now?", history=[{"speaker": "Crungus", "content": "the dust settles"}])
         self.assertIn("Crungus: the dust settles", SEEN[0]["prompt"])

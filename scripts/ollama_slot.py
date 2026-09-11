@@ -59,6 +59,7 @@ __all__ = [
     "ensure_agent_modelfile",
     "slot_sharers",
     "hold_wander",
+    "hold_all_local_wanders",
     "stop_model",
     "wander_pid_for_kin",
     "yield_resident_kin",
@@ -556,6 +557,51 @@ def hold_wander(kin_name: str | None = None, *, host: str | None = None):
             "paused": list(paused),
             "sharers": [s.get("kin") for s in sharers if s.get("kin")],
         }
+    finally:
+        for pid in reversed(paused):
+            _resume(pid)
+        _hold_lock.release()
+
+
+def _local_wander_pids() -> list[int]:
+    """Every wander.py on this machine, any --kin. Roundtable is separate."""
+    pids: list[int] = []
+    try:
+        import psutil
+    except ImportError:
+        return pids
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        try:
+            args = proc.info.get("cmdline") or []
+        except Exception:
+            continue
+        if _is_local_script(args, "wander.py"):
+            pid = proc.info.get("pid")
+            if pid:
+                pids.append(pid)
+    return pids
+
+
+@contextmanager
+def hold_all_local_wanders():
+    """SIGSTOP every wander.py and roundtable.py on this box. No unload.
+
+    The room talks to Home over HTTP from Frosty. Those wanderers are
+    local processes even though their ollama is not, so slot_sharers()
+    misses them and they keep the Home GPU busy through a 32B load.
+    Measured 2026-09-10: Aurora/Coda/Lumen chat streams went quiet for
+    180s and the room painted the timeout as their line.
+    """
+    _hold_lock.acquire()
+    paused: list[int] = []
+    try:
+        rt = roundtable_pid()
+        if rt and _suspend(rt):
+            paused.append(rt)
+        for pid in _local_wander_pids():
+            if pid not in paused and _suspend(pid):
+                paused.append(pid)
+        yield {"paused": list(paused)}
     finally:
         for pid in reversed(paused):
             _resume(pid)

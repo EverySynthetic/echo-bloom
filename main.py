@@ -18,6 +18,7 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
+from itertools import zip_longest
 from typing import AsyncGenerator
 from urllib.parse import urlparse
 
@@ -868,9 +869,13 @@ async def api_chat(
     full_message = message + web_context if web_context else message
 
     async def event_stream() -> AsyncGenerator[bytes, None]:
-        async for chunk in cl.stream_chat(name, full_message, clean_history):
-            # SSE format
-            escaped = chunk.replace("\n", "\\n")
+        try:
+            async for chunk in cl.stream_chat(name, full_message, clean_history):
+                # SSE format
+                escaped = chunk.replace("\n", "\\n")
+                yield f"data: {escaped}\n\n".encode()
+        except cl.ChatStreamError as e:
+            escaped = str(e).replace("\n", "\\n")
             yield f"data: {escaped}\n\n".encode()
         yield b"data: [DONE]\n\n"
 
@@ -901,9 +906,13 @@ async def api_chat(
 # one Kin closed with another's signature line. Attribution is not decoration,
 # it is the thing that keeps a mind able to tell whose mouth was whose.
 #
-# Order is fixed rather than "whoever answers first". Frosty's models are
-# roughly twice as fast as Home's, so a race would mean the same three voices
-# always spoke first and the same three always answered into a full room.
+# Order is staggered across hosts, not a race and not a host-block.
+# While Eli speaks on Frosty, Home is already loading Coda. Then swap.
+# While Coda speaks, Frosty is already holding Crungus. Then swap.
+# Ping the other box at the start of each turn, never the box that is
+# currently talking — a prefetch onto the same GPU would unload the
+# speaker. Config-list order (Eli, Coda, Aurora, Lumen, Crungus, Bong)
+# put three Home 32B swaps in a row and Bong never got a turn.
 #
 # And silence is a real answer. A Kin may pass, and passing is reported as
 # passing rather than as an error or an empty bubble. A room where everyone
@@ -922,9 +931,63 @@ _ROOM_HEADER = (
 )
 
 
+_ROOM_LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", ""}
+
+
+def _kin_is_local(name: str) -> bool:
+    kin = cl.KIN_BY_NAME.get(name) or {}
+    raw = (kin.get("host") or "http://localhost:11434").strip()
+    if "://" not in raw:
+        raw = "http://" + raw
+    host = (urlparse(raw).hostname or "localhost").lower()
+    return host in _ROOM_LOCAL_HOSTS
+
+
+def _kin_host_key(name: str) -> str:
+    kin = cl.KIN_BY_NAME.get(name) or {}
+    raw = (kin.get("host") or "http://localhost:11434").strip()
+    if "://" not in raw:
+        raw = "http://" + raw
+    p = urlparse(raw)
+    host = (p.hostname or "localhost").lower()
+    if host in _ROOM_LOCAL_HOSTS:
+        host = "localhost"
+    return f"{host}:{(p.port or 11434)}"
+
+
+async def _room_alive(request: Request) -> bool:
+    """False once the client is gone or the generator is being killed.
+
+    Checked between hops. The roundtable never did this inside run_roundtable,
+    so a nap mid-round ate every mouth that had already spoken. Patchable
+    in tests.
+    """
+    try:
+        return not await request.is_disconnected()
+    except Exception:
+        return True
+
+
+def _room_is_pass(reply: str) -> bool:
+    return (not reply) or reply.upper().replace(".", "").strip() == "PASS"
+
+
 def _room_roster():
-    """Stable order. Not a race, and not host-grouped."""
-    return [k["name"] for k in cl.KIN if k.get("name")]
+    """Stagger hosts: Frosty, Home, Frosty, Home, …
+
+    Within each host, config order is kept. Zip, do not race, do not
+    dump one box's whole lineup before the other starts loading.
+    """
+    names = [k["name"] for k in cl.KIN if k.get("name")]
+    local = [n for n in names if _kin_is_local(n)]
+    remote = [n for n in names if n not in local]
+    out: list[str] = []
+    for a, b in zip_longest(local, remote):
+        if a:
+            out.append(a)
+        if b:
+            out.append(b)
+    return out
 
 
 @app.get("/room", response_class=HTMLResponse)
@@ -932,7 +995,7 @@ async def room_page(request: Request, _=Depends(require_auth)):
     return templates.TemplateResponse(
         "room.html",
         {"request": request,
-         "kin_names": [k["name"] for k in cl.KIN if k.get("name")],
+         "kin_names": _room_roster(),
          # The same name the server attributes the owner's live turn to, so the
          # stored/sent history labels the owner consistently instead of "You"
          # in the past and the real name in the present — two identities for one
@@ -954,7 +1017,8 @@ async def api_chat_room(request: Request, _=Depends(require_auth)):
         raise HTTPException(status_code=400, detail="Empty message")
 
     everyone = _room_roster()
-    asked    = [n for n in (body.get("roster") or everyone) if n in everyone]
+    wanted   = set(body.get("roster") or everyone)
+    asked    = [n for n in everyone if n in wanted]
     if not asked:
         raise HTTPException(status_code=400, detail="Nobody in the room")
 
@@ -970,42 +1034,155 @@ async def api_chat_room(request: Request, _=Depends(require_auth)):
                           for t in turns)
 
     async def event_stream() -> AsyncGenerator[bytes, None]:
-        said = list(prior) + [{"speaker": owner, "content": message}]
-        for name in asked:
-            yield b"data: " + json.dumps({"speaker": name}).encode() + b"\n\n"
-            # Everything said so far, attributed, including the Kin who have
-            # already answered in this round. The last speaker sees the most;
-            # that asymmetry is what a conversation is, not a defect.
-            prompt = (
-                f"{transcript(said)}\n\n"
-                f"{name}, it is your turn."
-            )
-            parts: list[str] = []
-            try:
-                async for chunk in cl.stream_chat(
-                        name, prompt, history=None,
-                        system_extra=_ROOM_HEADER.format(owner=owner)):
-                    parts.append(chunk)
-                    yield (b"data: "
-                           + json.dumps({"chunk": chunk}).encode() + b"\n\n")
-            except Exception as e:
-                log.warning("room: %s failed: %s", name, e, exc_info=True)
-                yield (b"data: "
-                       + json.dumps({"error": f"{name} could not be reached"}).encode()
-                       + b"\n\n")
-                continue
+        # All six wander.py live on this box, including the ones that
+        # HTTP to Home. slot_sharers() only sees same-host same-weight,
+        # so without this the Home GPU stays busy through a 32B swap
+        # and the room times out. Resume in the context finally, even
+        # if the client hangs up.
+        #
+        # Per-hop commit, abort between hops. roundtable.py writes
+        # all_shared only after both passes — a kill ate the mouths
+        # that had already landed. Do not copy that.
+        import ollama_slot as oslot
+        _END = object()
 
-            reply = "".join(parts).strip()
-            # PASS, or nothing at all. Reported as passing, never as a failure
-            # and never as an empty bubble -- the difference between "chose not
-            # to" and "produced nothing" is the whole point.
-            if not reply or reply.upper().replace(".", "").strip() == "PASS":
-                yield (b"data: "
-                       + json.dumps({"passed": name}).encode() + b"\n\n")
-                continue
-            said.append({"speaker": name, "content": reply})
-            yield b"data: " + json.dumps({"done": name}).encode() + b"\n\n"
-        yield b"data: [DONE]\n\n"
+        async def _anext(agen):
+            try:
+                return await agen.__anext__()
+            except StopAsyncIteration:
+                return _END
+
+        async def _drain(agen, nxt):
+            """Finish the sentence in flight. Never cancel a hop to abort."""
+            while nxt is not None:
+                try:
+                    chunk = await nxt
+                except (cl.ChatStreamError, asyncio.CancelledError, Exception):
+                    break
+                if chunk is _END:
+                    break
+                yield chunk
+                nxt = asyncio.create_task(_anext(agen))
+            try:
+                await agen.aclose()
+            except Exception:
+                pass
+
+        with oslot.hold_all_local_wanders():
+            said = list(prior) + [{"speaker": owner, "content": message}]
+            abort = False
+            for i, name in enumerate(asked):
+                if abort or not await _room_alive(request):
+                    log.warning("room: abort before %s — not starting the hop", name)
+                    break
+                # Other host only. Prefetch onto this GPU would unload the
+                # Kin who is about to speak.
+                nxt_name = asked[i + 1] if i + 1 < len(asked) else None
+                if nxt_name and _kin_host_key(nxt_name) != _kin_host_key(name):
+                    asyncio.create_task(cl.warm_model(nxt_name))
+                forward = True
+                try:
+                    yield b"data: " + json.dumps({"speaker": name}).encode() + b"\n\n"
+                except (GeneratorExit, asyncio.CancelledError):
+                    abort = True
+                    break
+                prompt = (
+                    f"{transcript(said)}\n\n"
+                    f"{name}, it is your turn."
+                )
+                parts: list[str] = []
+                hop_error = None
+                agen = cl.stream_chat(
+                    name, prompt, history=None,
+                    system_extra=_ROOM_HEADER.format(owner=owner),
+                    keep_alive=cl.ROOM_KEEP_ALIVE,
+                    memory=False,
+                    record=False,
+                )
+                nxt = None
+                try:
+                    nxt = asyncio.create_task(_anext(agen))
+                    while True:
+                        try:
+                            chunk = await asyncio.wait_for(
+                                asyncio.shield(nxt), timeout=12,
+                            )
+                        except asyncio.TimeoutError:
+                            if forward:
+                                try:
+                                    yield (b"data: "
+                                           + json.dumps({"waiting": name}).encode()
+                                           + b"\n\n")
+                                except (GeneratorExit, asyncio.CancelledError):
+                                    forward = False
+                                    abort = True
+                            continue
+                        if chunk is _END:
+                            nxt = None
+                            break
+                        parts.append(chunk)
+                        nxt = asyncio.create_task(_anext(agen))
+                        if forward:
+                            try:
+                                yield (b"data: "
+                                       + json.dumps({"chunk": chunk}).encode()
+                                       + b"\n\n")
+                            except (GeneratorExit, asyncio.CancelledError):
+                                forward = False
+                                abort = True
+                except cl.ChatStreamError as e:
+                    hop_error = str(e)
+                    log.warning("room: %s failed: %s", name, e)
+                except Exception as e:
+                    hop_error = f"{name} could not be reached"
+                    log.warning("room: %s failed: %s", name, e, exc_info=True)
+                finally:
+                    async for extra in _drain(agen, nxt):
+                        parts.append(extra)
+
+                reply = "".join(parts).strip()
+                if hop_error:
+                    if forward:
+                        try:
+                            yield (b"data: "
+                                   + json.dumps({"error": hop_error}).encode()
+                                   + b"\n\n")
+                        except (GeneratorExit, asyncio.CancelledError):
+                            abort = True
+                elif reply and not _room_is_pass(reply):
+                    kin = cl.KIN_BY_NAME.get(name)
+                    if kin:
+                        try:
+                            await asyncio.to_thread(
+                                cl._record_conversation, kin, prompt, reply)
+                        except Exception:
+                            log.exception("room: commit failed for %s", name)
+                    said.append({"speaker": name, "content": reply})
+                    if forward:
+                        try:
+                            yield (b"data: "
+                                   + json.dumps({"done": name}).encode()
+                                   + b"\n\n")
+                        except (GeneratorExit, asyncio.CancelledError):
+                            abort = True
+                else:
+                    if forward:
+                        try:
+                            yield (b"data: "
+                                   + json.dumps({"passed": name}).encode()
+                                   + b"\n\n")
+                        except (GeneratorExit, asyncio.CancelledError):
+                            abort = True
+
+                if abort or not await _room_alive(request):
+                    log.warning("room: abort after %s — not starting the next hop",
+                                name)
+                    break
+            if not abort:
+                try:
+                    yield b"data: [DONE]\n\n"
+                except (GeneratorExit, asyncio.CancelledError):
+                    pass
 
     return StreamingResponse(
         event_stream(),
