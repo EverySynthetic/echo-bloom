@@ -35,6 +35,8 @@
   .turn.failed .said { opacity:.7; font-style:italic; }
   .turn.owner .who { opacity:.75; }
   .turn.speaking .who::after { content:" …"; opacity:.6; }
+  .turn.speaking .said { opacity:.55; font-style:italic; }
+  .turn.speaking.has-text .said { opacity:1; font-style:normal; }
 </style>
 
 <script>
@@ -155,8 +157,12 @@ document.getElementById('room-form').addEventListener('submit', async (e) => {
         if (ev.speaker) {
           current = addTurn(ev.speaker, 'speaking');
           buf = '';
+          current.querySelector('.said').textContent = 'loading…';
+        } else if (ev.waiting && current && !buf) {
+          current.querySelector('.said').textContent = 'loading…';
         } else if (ev.chunk && current) {
           buf += ev.chunk;
+          current.classList.add('has-text');
           current.querySelector('.said').textContent = buf;
           document.getElementById('room-log').scrollTop = 99999;
         } else if (ev.passed) {

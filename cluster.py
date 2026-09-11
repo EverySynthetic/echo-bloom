@@ -314,11 +314,63 @@ def _owner_name() -> str:
         return ""
 
 
-async def stream_chat(kin_name, message, history=None, system_extra=None):
+# Long enough for the other box to finish its mouth and swap to us.
+# Not a pin. Wander reclaims the slot when the room lets go.
+ROOM_KEEP_ALIVE = "10m"
+
+
+async def warm_model(kin_name: str, keep_alive: str = ROOM_KEEP_ALIVE) -> None:
+    """Load a Kin's model onto its ollama without generating.
+
+    Empty generate. keep_alive is a handoff window, not 999h — two boxes,
+    one model each, next map while you play. Failures are logged, never
+    raised; a miss just means the next turn does a cold load.
+    """
+    kin = KIN_BY_NAME.get(kin_name)
+    if not kin or not kin.get("model") or not kin.get("host"):
+        return
+    try:
+        timeout = aiohttp.ClientTimeout(total=None, sock_connect=15,
+                                        sock_read=300)
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{kin['host']}/api/generate",
+                json={
+                    "model": kin["model"],
+                    "prompt": "",
+                    "keep_alive": keep_alive,
+                    "stream": False,
+                },
+                timeout=timeout,
+            ) as resp:
+                await resp.read()
+    except Exception as e:
+        log.warning("warm_model failed for %s at %s: %s",
+                    kin_name, kin.get("host"), e)
+
+
+class ChatStreamError(Exception):
+    """The model went quiet or the host was unreachable.
+
+    str(self) is the line the UI should show. Raised instead of yielded
+    so the room can mark a failure instead of storing it as that Kin's
+    words — a 180s load timeout used to become Coda speaking
+    '[Coda stopped responding…]'.
+    """
+
+
+async def stream_chat(kin_name, message, history=None, system_extra=None,
+                      keep_alive="30m", memory=True, record=True):
     """
     Stream a chat response from a Kin via Ollama.
     Yields text chunks as they arrive.
     Injects memory context from kin_memory if available.
+
+    keep_alive defaults to wander's 30m, not 999h. The room passes a
+    shorter handoff window. memory=False skips vault/embed — six
+    recalls in a group chat fight the same VRAM the mouths need.
+    record=False when the caller commits the hop itself (the room), so a
+    kill cannot wait until the whole party finishes to write.
     """
     import sys
     kin = KIN_BY_NAME.get(kin_name)
@@ -330,26 +382,27 @@ async def stream_chat(kin_name, message, history=None, system_extra=None):
     # to be a fallback — that meant any kin_memory.py a user left on their
     # Desktop was imported and executed inside the server on first chat.
     system_ctx = ""
-    _scripts = str(Path.home() / ".local/share/echo_bloom/scripts")
-    if _scripts not in sys.path:
-        sys.path.insert(0, _scripts)
-    try:
-        from kin_memory import get_context
-    except Exception as e:
-        log.warning("kin_memory unavailable — chatting without memory context: %s", e)
-        get_context = None
-
-    if get_context is not None:
+    if memory:
+        _scripts = str(Path.home() / ".local/share/echo_bloom/scripts")
+        if _scripts not in sys.path:
+            sys.path.insert(0, _scripts)
         try:
-            # get_context does blocking HTTP (vault, embeddings, Qdrant) whose
-            # timeouts total ~28s. Called inline it froze every other request in
-            # the app for the duration. Off the event loop it goes.
-            system_ctx = await asyncio.to_thread(
-                get_context, kin_name, message,
-                wander_limit=2, vault_limit=3, db_path=kin.get("db"),
-            )
+            from kin_memory import get_context
         except Exception as e:
-            log.warning("memory context failed for %s: %s", kin_name, e)
+            log.warning("kin_memory unavailable — chatting without memory context: %s", e)
+            get_context = None
+
+        if get_context is not None:
+            try:
+                # get_context does blocking HTTP (vault, embeddings, Qdrant) whose
+                # timeouts total ~28s. Called inline it froze every other request in
+                # the app for the duration. Off the event loop it goes.
+                system_ctx = await asyncio.to_thread(
+                    get_context, kin_name, message,
+                    wander_limit=2, vault_limit=3, db_path=kin.get("db"),
+                )
+            except Exception as e:
+                log.warning("memory context failed for %s: %s", kin_name, e)
 
     owner = _owner_name()
     caller = f"{owner} is" if owner else "Someone is"
@@ -381,6 +434,7 @@ async def stream_chat(kin_name, message, history=None, system_extra=None):
                     "model":    kin["model"],
                     "messages": messages,
                     "stream":   True,
+                    "keep_alive": keep_alive,
                     # 4096 could not hold the system prompt plus injected memory
                 # plus history — Ollama truncated from the front, dropping the
                 # memory first.
@@ -396,8 +450,10 @@ async def stream_chat(kin_name, message, history=None, system_extra=None):
                 # sock_read is the right shape: it fires only when the socket
                 # goes QUIET for that long. Tokens arriving = healthy, however
                 # long the answer runs. Silence = a real hang.
+                # 180s was short of a Home 32.8B unload+load; wander already
+                # waits 300s for the same cold path. Match it.
                 timeout=aiohttp.ClientTimeout(total=None, sock_connect=15,
-                                              sock_read=180),
+                                              sock_read=300),
             ) as resp:
                 import json
                 async for line in resp.content:
@@ -412,32 +468,37 @@ async def stream_chat(kin_name, message, history=None, system_extra=None):
                         if data.get("error"):
                             log.warning("ollama error for %s: %s",
                                         kin_name, data["error"])
-                            yield f"\n[{data['error']}]"
-                            return
+                            raise ChatStreamError(f"[{data['error']}]")
                         chunk = data.get("message", {}).get("content", "")
                         if chunk:
                             reply_parts.append(chunk)
                             yield chunk
                         if data.get("done"):
                             break
+                    except ChatStreamError:
+                        raise
                     except Exception:
                         continue
+    except ChatStreamError:
+        raise
     except asyncio.TimeoutError:
         # str(asyncio.TimeoutError()) is the EMPTY STRING, so the old handler
         # rendered "[Connection error: ]" -- a message that names the wrong
         # cause and then says nothing about it. The connection was fine; the
         # model went quiet.
-        log.warning("chat stream timed out for %s at %s (no tokens for 180s)",
+        log.warning("chat stream timed out for %s at %s (no tokens for 300s)",
                     kin_name, kin.get("host"))
-        yield (f"\n[{kin_name} stopped responding partway through. The model is "
-               f"probably still loading or the machine is busy -- the connection "
-               f"itself is fine. Try again in a moment.]")
+        raise ChatStreamError(
+            f"[{kin_name} stopped responding partway through. The model is "
+            f"probably still loading or the machine is busy -- the connection "
+            f"itself is fine. Try again in a moment.]"
+        ) from None
     except Exception as e:
         detail = str(e) or type(e).__name__      # never render an empty reason
         log.warning("chat stream failed for %s at %s: %s",
                     kin_name, kin.get("host"), detail)
-        yield f"\n[Could not reach {kin_name}: {detail}]"
+        raise ChatStreamError(f"[Could not reach {kin_name}: {detail}]") from e
 
     reply = "".join(reply_parts).strip()
-    if reply:
+    if record and reply:
         await asyncio.to_thread(_record_conversation, kin, message, reply)
