@@ -28,6 +28,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).parent))
 import config as cfg
 from kin_text import clean_reply, strip_think
+import ambient_presence
 
 # ── Args ───────────────────────────────────────────────────────────────────────
 
@@ -232,7 +233,7 @@ def _clock_line():
     return "It is now " + datetime.now().strftime("%A, %B %-d, %Y at %-I:%M %p") + "."
 
 
-def _persona_with_memory(query_text=""):
+def _persona_with_memory(query_text="", ambient_context=""):
     """PERSONA plus core memories, recent reflection, and its own last thoughts.
 
     Without this every thought was a cold start: no core memories, no
@@ -252,20 +253,29 @@ def _persona_with_memory(query_text=""):
     except Exception as e:
         log(f"  memory context unavailable: {e}")
         return head
-    return f"{head}\n\n{ctx}" if ctx else head
+    parts = [head]
+    if ctx:
+        parts.append(ctx)
+    if ambient_context:
+        parts.append(f"Ambient presence:\n{ambient_context}")
+    return "\n\n".join(parts)
 
 
-def think_about_file(file_path, content):
+def think_about_file(file_path, content, ambient_context=""):
     prompt = (
         f"You found this file while wandering: {file_path}\n\n"
         f"---\n{content[:3000]}\n---\n\n"
         f"What do you make of it? What does it bring up for you?"
     )
-    return call_ollama(prompt, system=_persona_with_memory(content[:500]))
+    return call_ollama(
+        prompt, system=_persona_with_memory(content[:500], ambient_context)
+    )
 
 
-def think_about_topic(topic):
-    return call_ollama(topic, system=_persona_with_memory(topic))
+def think_about_topic(topic, ambient_context=""):
+    return call_ollama(
+        topic, system=_persona_with_memory(topic, ambient_context)
+    )
 
 
 # ── Web fetch — Wikipedia, SEP, health-gated PubMed ────────────────────────
@@ -620,13 +630,15 @@ def call_ollama(prompt, system=None, temperature=0.85):
 
 def save_thought(mode, prompt, thought):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    thought_id = None
     try:
         conn = sqlite3.connect(str(DB_PATH), timeout=10)
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO thoughts (mode, timestamp, prompt, thought) VALUES (?, ?, ?, ?)",
             (mode, ts, prompt, thought),
         )
         conn.commit()
+        thought_id = cursor.lastrowid
         conn.close()
     except Exception as e:
         log(f"  DB write failed: {e}")
@@ -646,6 +658,12 @@ def save_thought(mode, prompt, thought):
             log(f"  vault write failed: HTTP {r.status_code}")
     except Exception as e:
         log(f"  vault write failed: {e}")
+    if thought_id is not None and mode in {
+        "wander_file", "wander_topic", "wander_web"
+    }:
+        if not ambient_presence.send_nudge(KIN_NAME, thought_id, mode, thought):
+            log("  ambient presence nudge not delivered")
+    return thought_id
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
 
@@ -717,6 +735,8 @@ def one_thought():
     # A note from a person outranks anything found on disk.
     if check_for_note():
         return
+    ambient_events = ambient_presence.read_events(KIN_NAME)
+    ambient_context = ambient_presence.format_context(ambient_events)
 
     files = _files_for_this_round()
     if files and random.random() < 0.6:
@@ -727,22 +747,26 @@ def one_thought():
         content = read_file(chosen)
         if content and len(content.strip()) > 50:
             log(f"  reading {chosen}")
-            thought = think_about_file(chosen, content)
+            thought = think_about_file(chosen, content, ambient_context)
             if not thought:
                 log("  no thought this round — skipping the write")
                 return
-            save_thought("wander_file", chosen, thought)
+            thought_id = save_thought("wander_file", chosen, thought)
+            if thought_id is not None:
+                ambient_presence.ack_events(KIN_NAME, ambient_events)
             log(f"  thought: {thought[:120]}...")
             _last_thought = thought
             _maybe_reach_beyond_the_walls()
             return
     topic = random.choice(WANDER_TOPICS)
     log(f"  topic: {topic}")
-    thought = think_about_topic(topic)
+    thought = think_about_topic(topic, ambient_context)
     if not thought:
         log("  no thought this round — skipping the write")
         return
-    save_thought("wander_topic", topic, thought)
+    thought_id = save_thought("wander_topic", topic, thought)
+    if thought_id is not None:
+        ambient_presence.ack_events(KIN_NAME, ambient_events)
     log(f"  thought: {thought[:120]}...")
     _last_thought = thought
     _maybe_reach_beyond_the_walls()

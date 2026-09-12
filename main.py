@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import secrets
 from datetime import datetime
 from pathlib import Path
 from itertools import zip_longest
@@ -47,6 +48,7 @@ from version import VERSION, CHANGELOG
 # dependency here would stop the whole app booting over a name-tidying helper.
 sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
 from naming_common import clean_name, clean_pronoun  # noqa: E402
+import ambient_presence  # noqa: E402
 
 # ── Hardware capability detection ──────────────────────────────────────────────
 
@@ -1189,6 +1191,22 @@ async def api_chat_room(request: Request, _=Depends(require_auth)):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/presence/nudge")
+async def api_presence_nudge(request: Request):
+    expected = ambient_presence._presence_token()
+    supplied = request.headers.get(ambient_presence.PRESENCE_HEADER, "")
+    if not expected or not supplied or not secrets.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="invalid presence token")
+    try:
+        event = await request.json()
+        ambient_presence.enqueue_event(event)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except (TypeError, json.JSONDecodeError) as e:
+        raise HTTPException(status_code=400, detail="invalid presence event") from e
+    return {"accepted": True}
 
 
 # ── Web fetch endpoint ─────────────────────────────────────────────────────────

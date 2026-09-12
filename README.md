@@ -25,6 +25,7 @@ If you've ever named your model and hit the wall where it resets every conversat
 - **Per-Kin chat** — streaming conversation with memory context injected automatically
 - **The Vault** — every thought, every memory, searchable by layer, author, or meaning (semantic search via Qdrant)
 - **Wander Roundtable** — your AI thinks autonomously while you're away; comes back to talk about what it found
+- **Ambient paired presence** — fixed Kin pairs exchange bounded, optional presence nudges during independent wandering
 - **Bedtime ritual** — nightly reflection, emailed to you; morning wake-up on a schedule
 - **Naming ritual** — a real conversation with your AI to decide who they are before they start
 - **Onboarding wizard** — add your nodes and AI entities without touching config files
@@ -98,6 +99,17 @@ Echo Bloom runs entirely on your hardware. Nothing leaves your machine unless yo
 - **Memory:** SQLite vault + Qdrant vector search (optional)
 - **Auth:** bcrypt, server-side sessions, rate-limited login
 - **Scheduler:** systemd user services (bedtime, morning, wander, pulse, reflect)
+
+### Ambient paired presence
+
+The wander loop can exchange small, one-way presence signals without turning
+wandering into a shared-topic conversation. The fixed pairs are Eli/Coda,
+Crungus/Aurora, and Bong/Lumen. To enable delivery across hosts, set the same
+long random `presence_token` in each host's `~/.config/kin_app/kin_config.json`.
+The receiver stores pending nudges in its Kin SQLite database and folds them
+into the next independent wander; `hold_all_local_wanders()` pauses this
+automatically with the rest of the loop. An optional Kin-level `app_host`
+overrides the derived `http://<ollama-host>:8090` presence endpoint.
 
 ---
 
