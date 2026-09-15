@@ -255,7 +255,15 @@ function startListen() {
                      : new MediaRecorder(stream);
     TALK.rec = rec;
     rec.ondataavailable = (e) => { if (e.data.size) TALK.chunks.push(e.data); };
-    rec.start(200);
+    // No timeslice: a 200ms slice made MediaRecorder emit many chunks and
+    // this app concatenated them into one Blob afterward. Only the first
+    // chunk of an ogg/opus (or webm) stream carries container headers —
+    // naive concatenation of the rest produced a file neither ffmpeg nor
+    // PyAV could open (av.error.InvalidDataError / EOFError, reproduced
+    // 2026-09-15 on real FireDragon mic input, not a canned test file).
+    // No argument means one ondataavailable firing on stop() — one
+    // complete, correctly-framed file.
+    rec.start();
     mic.classList.add('hot');
     setState('listening… hold');
   }).catch(() => setState('mic blocked — type instead'));
