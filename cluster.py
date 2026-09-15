@@ -262,6 +262,17 @@ async def get_cluster_status():
     return {"nodes": nodes_out, "kin": kin_out}
 
 
+_DEFAULT_VAULT = "http://localhost:8765"
+
+
+def _vault_url() -> str:
+    try:
+        cfg = json.loads(CONFIG_PATH.read_text())
+        return cfg.get("vault_url") or _DEFAULT_VAULT
+    except Exception:
+        return _DEFAULT_VAULT
+
+
 def _record_conversation(kin: dict, user_message: str, reply: str):
     """Persist one exchange to the Kin's own thoughts DB.
 
@@ -304,6 +315,40 @@ def _record_conversation(kin: dict, user_message: str, reply: str):
                 conn.close()
             except Exception:
                 pass
+
+
+async def _record_conversation_to_vault(kin: dict, user_message: str, reply: str):
+    """A conversation with the person who lives here is not the same class
+    of memory as something wandered alone or told secondhand — it's the
+    thing _SOURCE_WEIGHT's own table already calls 'experienced', its top
+    tier (1.00x, same as 'told', five times 'wandered's 0.20x). Nothing
+    routed conversation into the vault at all before this, so that top
+    weight never applied to it in deep/ranked recall — only the
+    always-injected last few turns saw it. Best-effort: a vault hiccup
+    must never break the chat reply it's attached to.
+    """
+    owner = _owner_name() or "Don"
+    content = f"{owner}: {user_message[:2000]}\n\n{kin['name']}: {reply[:4000]}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{_vault_url()}/remember",
+                json={
+                    "author":     kin["name"],
+                    "layer":      "conversation",
+                    "content":    content,
+                    "tags":       f"conversation,owner,{owner.lower()}",
+                    "visibility": "shared",
+                    "source":     "experienced",
+                    "domain":     "conversation",
+                },
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as r:
+                if r.status >= 300:
+                    log.warning("vault conversation store failed for %s: HTTP %s",
+                               kin.get("name"), r.status)
+    except Exception as e:
+        log.warning("vault conversation store failed for %s: %s", kin.get("name"), e)
 
 
 def _owner_name() -> str:
@@ -502,3 +547,4 @@ async def stream_chat(kin_name, message, history=None, system_extra=None,
     reply = "".join(reply_parts).strip()
     if record and reply:
         await asyncio.to_thread(_record_conversation, kin, message, reply)
+        await _record_conversation_to_vault(kin, message, reply)
