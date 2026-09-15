@@ -1,0 +1,303 @@
+{% extends "base.html" %}
+{% block title %}Talk — Echo Bloom{% endblock %}
+
+{% block content %}
+<div class="talk">
+  <div class="talk-pick" id="talk-pick">
+    {% for name in kin_names %}
+    <button type="button" class="talk-chip" data-name="{{ name }}">{{ name }}</button>
+    {% endfor %}
+  </div>
+
+  <div class="talk-stage">
+    <div class="talk-face" id="talk-face">
+      <img id="talk-avatar" alt="" hidden>
+      <video id="talk-clip" playsinline muted hidden></video>
+      <div class="talk-mouth" id="talk-mouth" aria-hidden="true"></div>
+      <div class="talk-placeholder" id="talk-ph">pick someone</div>
+    </div>
+    <div class="talk-who" id="talk-who"></div>
+    <div class="talk-said" id="talk-said"></div>
+  </div>
+
+  <div class="talk-bar">
+    <button type="button" class="talk-mic" id="talk-mic" disabled>hold to speak</button>
+    <input class="talk-type" id="talk-type" placeholder="or type…" disabled>
+    <span class="talk-state" id="talk-state"></span>
+  </div>
+  <p class="talk-note">Parlor trick. The face rides the sound. That’s the whole of it.</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const NAMES = {{ kin_names | tojson }};
+const TALK = { name: null, history: [], busy: false, rec: null, chunks: [] };
+
+function $(id) { return document.getElementById(id); }
+
+function pick(name) {
+  TALK.name = name;
+  TALK.history = [];
+  document.querySelectorAll('.talk-chip').forEach(b => {
+    b.classList.toggle('on', b.dataset.name === name);
+  });
+  $('talk-who').textContent = name;
+  $('talk-said').textContent = '';
+  $('talk-ph').hidden = true;
+  const img = $('talk-avatar');
+  img.hidden = false;
+  img.src = '/talk/avatar/' + encodeURIComponent(name) + '?t=' + Date.now();
+  img.onerror = () => { img.hidden = true; $('talk-ph').hidden = false; $('talk-ph').textContent = name; };
+  $('talk-mic').disabled = false;
+  $('talk-type').disabled = false;
+  $('talk-state').textContent = 'hold the button, or type';
+}
+
+document.getElementById('talk-pick').addEventListener('click', (e) => {
+  const b = e.target.closest('.talk-chip');
+  if (b && b.dataset.name) pick(b.dataset.name);
+});
+
+function setState(s) { $('talk-state').textContent = s; }
+
+function pulse(level) {
+  const face = $('talk-face');
+  const mouth = $('talk-mouth');
+  const s = 1 + Math.min(0.12, level * 0.4);
+  face.style.transform = `scale(${s})`;
+  face.classList.toggle('speaking', level > 0.04);
+  mouth.style.transform = `scaleX(1) scaleY(${0.35 + Math.min(1.4, level * 3)})`;
+}
+
+function rideWav(buf) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  const anal = ctx.createAnalyser();
+  anal.fftSize = 256;
+  src.connect(anal);
+  anal.connect(ctx.destination);
+  const data = new Uint8Array(anal.fftSize);
+  let raf;
+  function tick() {
+    anal.getByteTimeDomainData(data);
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) {
+      const v = (data[i] - 128) / 128;
+      sum += v * v;
+    }
+    pulse(Math.sqrt(sum / data.length));
+    raf = requestAnimationFrame(tick);
+  }
+  src.onended = () => {
+    cancelAnimationFrame(raf);
+    pulse(0);
+    $('talk-face').classList.remove('speaking');
+    ctx.close();
+    TALK.busy = false;
+    setState('hold the button, or type');
+  };
+  src.start();
+  tick();
+}
+
+async function speakText(text) {
+  const r = await fetch('/api/tts', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text, kin_name: TALK.name}),
+  });
+  if (!r.ok) throw new Error('no voice');
+  const arr = await r.arrayBuffer();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const buf = await ctx.decodeAudioData(arr.slice(0));
+  ctx.close();
+  rideWav(buf);
+}
+
+async function ask(text) {
+  if (!TALK.name || TALK.busy || !text.trim()) return;
+  TALK.busy = true;
+  setState(TALK.name + ' is thinking…');
+  $('talk-said').textContent = '';
+  TALK.history.push({role: 'user', content: text});
+  let reply = '';
+  try {
+    const resp = await fetch('/api/talk/chat/' + encodeURIComponent(TALK.name), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: text, history: TALK.history.slice(-20, -1)}),
+    });
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let raw = '';
+    while (true) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      raw += dec.decode(value, {stream: true});
+      const lines = raw.split('\n');
+      raw = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6);
+        if (payload === '[DONE]') continue;
+        reply += payload.replace(/\\n/g, '\n');
+        $('talk-said').textContent = reply;
+      }
+    }
+  } catch (e) {
+    $('talk-said').textContent = '[could not reach them]';
+    TALK.busy = false;
+    setState('hold the button, or type');
+    return;
+  }
+  reply = reply.trim();
+  if (reply) TALK.history.push({role: 'assistant', content: reply});
+  if (!reply) {
+    TALK.busy = false;
+    setState('hold the button, or type');
+    return;
+  }
+  setState(TALK.name + ' is speaking…');
+  fetch('/api/talk/sadtalker/' + encodeURIComponent(TALK.name), {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text: reply}),
+  }).catch(() => {});
+  try { await speakText(reply); }
+  catch (e) {
+    TALK.busy = false;
+    setState('they answered. no voice engine.');
+  }
+  const clip = $('talk-clip');
+  const img = $('talk-avatar');
+  fetch('/talk/clip/' + encodeURIComponent(TALK.name), {method: 'HEAD'}).then(r => {
+    if (!r.ok) return;
+    clip.src = '/talk/clip/' + encodeURIComponent(TALK.name) + '?t=' + Date.now();
+    clip.hidden = false;
+    img.hidden = true;
+    clip.muted = true;
+    clip.loop = true;
+    clip.play().catch(() => {});
+  }).catch(() => {});
+}
+
+$('talk-type').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const t = $('talk-type').value.trim();
+    $('talk-type').value = '';
+    ask(t);
+  }
+});
+
+function SpeechRec() {
+  // Firefox/FireDragon expose SpeechRecognition as a stub. Chrome's is
+  // webkitSpeechRecognition. Using the stub eats the hold and yields silence.
+  if (!window.webkitSpeechRecognition) return null;
+  return window.webkitSpeechRecognition;
+}
+
+function recMime() {
+  if (typeof MediaRecorder === 'undefined') return '';
+  // Gecko (FireDragon/Firefox) often lists webm as supported and then
+  // writes a container whisper cannot open. Prefer ogg there.
+  const gecko = !window.webkitSpeechRecognition;
+  if (gecko && MediaRecorder.isTypeSupported('audio/ogg;codecs=opus'))
+    return 'audio/ogg;codecs=opus';
+  if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus'))
+    return 'audio/webm;codecs=opus';
+  if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus'))
+    return 'audio/ogg;codecs=opus';
+  return '';
+}
+
+const mic = $('talk-mic');
+
+mic.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  try { mic.setPointerCapture(e.pointerId); } catch (err) {}
+  startListen();
+});
+mic.addEventListener('pointerup', stopListen);
+mic.addEventListener('pointercancel', stopListen);
+
+function startListen() {
+  if (!TALK.name || TALK.busy) return;
+  const Rec = SpeechRec();
+  if (Rec) {
+    const r = new Rec();
+    r.lang = 'en-US';
+    r.interimResults = true;
+    r.continuous = false;
+    TALK.webRec = r;
+    r.onresult = (ev) => {
+      let t = '';
+      for (let i = 0; i < ev.results.length; i++) t += ev.results[i][0].transcript;
+      $('talk-said').textContent = t;
+      TALK.lastHeard = t;
+    };
+    r.onerror = () => {};
+    r.start();
+    mic.classList.add('hot');
+    setState('listening…');
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setState('no mic — type instead');
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({audio: true}).then(stream => {
+    TALK.chunks = [];
+    const mime = recMime();
+    const rec = mime ? new MediaRecorder(stream, {mimeType: mime})
+                     : new MediaRecorder(stream);
+    TALK.rec = rec;
+    rec.ondataavailable = (e) => { if (e.data.size) TALK.chunks.push(e.data); };
+    rec.start(200);
+    mic.classList.add('hot');
+    setState('listening… hold');
+  }).catch(() => setState('mic blocked — type instead'));
+}
+
+function stopListen() {
+  mic.classList.remove('hot');
+  if (TALK.webRec) {
+    try { TALK.webRec.stop(); } catch (e) {}
+    TALK.webRec = null;
+    const t = (TALK.lastHeard || '').trim();
+    TALK.lastHeard = '';
+    if (t) ask(t);
+    else setState('hold the button, or type');
+    return;
+  }
+  const rec = TALK.rec;
+  if (!rec) return;
+  TALK.rec = null;
+  rec.onstop = async () => {
+    rec.stream.getTracks().forEach(t => t.stop());
+    const mime = rec.mimeType || recMime() || 'audio/ogg';
+    const blob = new Blob(TALK.chunks, {type: mime});
+    if (!TALK.chunks.length || blob.size < 200) {
+      setState('hold longer, or type');
+      return;
+    }
+    setState('hearing you…');
+    try {
+      const r = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: {'Content-Type': mime},
+        body: blob,
+      });
+      const j = await r.json();
+      if (j.ok && j.text) ask(j.text);
+      else setState((j && j.error) ? j.error : 'could not hear — type instead');
+    } catch (e) {
+      setState('could not hear — type instead');
+    }
+  };
+  try { rec.stop(); } catch (e) {}
+}
+</script>
+{% endblock %}

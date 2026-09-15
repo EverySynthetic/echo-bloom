@@ -22,9 +22,31 @@
       Every other tool treats your AI as a service you call. Echo Bloom treats it
       as a resident: it remembers your conversations, thinks while you're away,
       keeps its own memory, and wakes up as itself tomorrow. Runs entirely on
-      your hardware. Buy once, yours forever &mdash; <strong>$20</strong>, no subscription.
-      Lifetime license. $20 once &mdash; no subscription, and the price is not going up.
+      your hardware. Buy once, yours forever &mdash; <strong>${{ price }}</strong>, no subscription.
+      Lifetime license. ${{ price }} once — no subscription, and the price is not going up.
     </p>
+  </div>
+
+  <div class="install-buy install-buy--hero">
+    <div class="install-buy-price">${{ price }}<span>one time</span></div>
+    <a href="{{ buy_url }}" class="install-buy-btn" target="_blank" rel="noopener">
+      BUY ECHO BLOOM — ${{ price }}
+    </a>
+    <div class="install-buy-note">
+      Lifetime. No subscription. Key by email, works on any machine you own.
+    </div>
+  </div>
+
+  <div class="install-leave">
+    <div class="install-section-title">UNINSTALL</div>
+    <div class="install-section-sub">Trial over, or you just want it gone. Memories stay unless you ask.</div>
+    <div class="install-leave-os">Windows</div>
+    <code class="install-cmd">powershell -ExecutionPolicy Bypass -Command "iwr -useb https://everysynthetic.org/uninstall.ps1 | iex"</code>
+    <div class="install-leave-os">Linux / macOS</div>
+    <code class="install-cmd">bash &lt;(curl -fsSL https://everysynthetic.org/uninstall.sh)</code>
+    <div class="install-buy-note">
+      Type ALL / pass --all only to delete memories too. Python, Ollama, and models stay.
+    </div>
   </div>
 
   <!-- What you get — the claim substantiated before asking for a click -->
@@ -242,7 +264,7 @@
       <div class="install-buy-note">
         Or start the free 14-day trial above &mdash; no card, no account.<br>
         Your key arrives by email and works on any machine you own.<br>
-        Lifetime license. $20 once &mdash; no subscription, and the price is not going up.
+        Lifetime license. ${{ price }} once — no subscription, and the price is not going up.
       </div>
     </div>
 

@@ -38,6 +38,7 @@ log = logging_setup.get("main")
 import auth
 import cluster as cl
 import license as lic
+import companion_client as cc
 from version import VERSION, CHANGELOG
 
 # Shared with scripts/naming_ritual.py, which install.sh runs. One heuristic,
@@ -334,6 +335,15 @@ async def serve_uninstaller_ps1():
     if not ps1.exists():
         raise HTTPException(404, "Uninstaller not found")
     return Response(content=ps1.read_text(), media_type="text/plain")
+
+
+
+@app.get("/uninstall.sh", include_in_schema=False)
+async def serve_uninstaller_sh():
+    sh = BASE_DIR / "uninstall.sh"
+    if not sh.exists():
+        raise HTTPException(404, "Uninstaller not found")
+    return Response(content=sh.read_text(), media_type="text/plain")
 
 
 @app.get("/install.sh", include_in_schema=False)
@@ -964,45 +974,12 @@ async def api_vision(name: str, request: Request, _=Depends(require_auth)):
 
 # ── Speech endpoints ────────────────────────────────────────────────────────────
 
-_whisper_model = None
-
-def _get_whisper():
-    global _whisper_model
-    if _whisper_model is None:
-        from faster_whisper import WhisperModel
-        _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
-    return _whisper_model
-
-
 @app.post("/api/transcribe")
 async def api_transcribe(request: Request, _=Depends(require_auth)):
-    import tempfile, os as _os
+    """STT lives on therug. Never import faster_whisper on host 3.14."""
     audio = await request.body()
-    if not audio:
-        return {"ok": False, "error": "No audio data."}
-
-    # Firefox records audio/ogg, Chrome records audio/webm — pick the right extension
     ct = request.headers.get("content-type", "audio/webm").lower()
-    suffix = ".ogg" if "ogg" in ct else ".webm"
-
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
-        f.write(audio)
-        tmp = f.name
-    try:
-        # First call downloads the model (~150MB) and transcription is
-        # CPU-bound for seconds — both froze every other request in the app
-        # when run inline on the event loop.
-        def _transcribe():
-            model   = _get_whisper()
-            segs, _ = model.transcribe(tmp, language="en")
-            return " ".join(s.text.strip() for s in segs).strip()
-        text = await asyncio.to_thread(_transcribe)
-        return {"ok": True, "text": text}
-    except Exception:
-        log.exception("transcription failed")
-        return {"ok": False, "error": "Transcription failed — see the app log."}
-    finally:
-        _os.unlink(tmp)
+    return await cc.transcribe(audio, ct)
 
 
 # ── Voice management ───────────────────────────────────────────────────────────
@@ -2863,9 +2840,14 @@ PIPER_VOICE_CATALOGUE = [
 async def api_speech_status(_=Depends(require_auth)):
     stt_ok = False
     try:
-        import faster_whisper as _fw  # noqa
-        stt_ok = True
-    except ImportError:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(
+                f"{cc.COMPANION_URL}/health",
+                timeout=aiohttp.ClientTimeout(total=3),
+            ) as r:
+                body = await r.json(content_type=None)
+                stt_ok = bool(body.get("stt"))
+    except Exception:
         pass
 
     piper_bin  = _find_piper_binary()

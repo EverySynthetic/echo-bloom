@@ -309,6 +309,12 @@ function renderLicense(d) {
         <a href="${d.buy_url}" target="_blank" rel="noopener">BUY ECHO BLOOM${d.price ? ' — $' + d.price : ''}</a>
         <span>one-time · key arrives by email · <a href="/license">licence details</a></span>
       </div>`;
+      if (d.state === 'expired' || d.state === 'denied' || d.state === 'revoked') {
+        html += `
+      <div class="dash-lic-buy">
+        <a href="/license">uninstall from this machine</a>
+      </div>`;
+      }
     }
   }
 
