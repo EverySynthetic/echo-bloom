@@ -1,0 +1,25 @@
+[Unit]
+Description=Echo Bloom companion container (STT + SadTalker) on therug
+After=network.target nvidia-persistenced.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/bash -c 'for i in $(seq 1 30); do [ -e /dev/nvidia0 ] && [ -e /dev/nvidia1 ] && [ -e /dev/nvidiactl ] && [ -e /dev/nvidia-uvm ] && exit 0; sleep 1; done; echo "nvidia device nodes never appeared" >&2; exit 1'
+ExecStart=/usr/bin/podman run --rm --replace --name echo-bloom-companion \
+  --device nvidia.com/gpu=all \
+  -e NVIDIA_VISIBLE_DEVICES=all \
+  -e OMP_NUM_THREADS=1 \
+  -e MKL_THREADING_LAYER=GNU \
+  -e KMP_DUPLICATE_LIB_OK=TRUE \
+  -e SADTALKER_DIR=/opt/SadTalker \
+  -e SADTALKER_PYTHON=/opt/sadtalker/bin/python \
+  -p 8092:8092 \
+  -v %h/SadTalker:/opt/SadTalker:ro \
+  -v %h/echo-bloom-companion/app.py:/app/app.py:ro \
+  localhost/echo-bloom-companion:latest
+ExecStop=/usr/bin/podman stop -t 20 echo-bloom-companion
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
