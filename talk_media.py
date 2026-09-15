@@ -1,12 +1,16 @@
-"""Companion layer — voice, face, animation — runs on therug.
+"""Companion layer — voice, face, animation.
 
 Frosty and Home think (wander, roundtable, room, talk chat).
-therug speaks and wears the face. Don, 2026-09-12.
+On Don's own cluster therug speaks and wears the face (Don,
+2026-09-12); on anyone else's install there is no second box, so
+this degrades to local piper, then espeak, then no voice — never a
+hang and never a crash.
 
-Piper is CPU-only. The native tree lives at thedude@therug:~/piper
-(rsynced from /mnt/ai/piper). SadTalker GPU is a 1660 SUPER on that
-box, looked up by name not slot. Both cards share the name and both
-are idle; first match is fine until they aren't.
+ECHO_BLOOM_THERUG (e.g. "thedude@192.168.1.142") is optional. Unset,
+every _ssh/_scp call below fails fast (no 8s connect-timeout tax on
+someone who was never going to have that host) and synthesis falls
+through to a local piper install, and from there to main.py's
+espeak fallback.
 
 Easel is NOT this module. CPU-pinned on Frosty on purpose. Do not
 import it. Do not move it.
@@ -21,9 +25,11 @@ import os
 import subprocess
 from pathlib import Path
 
+import cluster as cl
+
 log = logging.getLogger("echo_bloom.talk_media")
 
-THERUG = "thedude@192.168.1.142"
+THERUG = os.environ.get("ECHO_BLOOM_THERUG", "").strip()
 THERUG_PIPER = "/home/thedude/piper"
 THERUG_SADTALKER = "/home/thedude/SadTalker"
 FROSTY_OLLAMA = "http://127.0.0.1:11434"
@@ -31,7 +37,9 @@ THERUG_VISION = "http://192.168.1.142:11434"
 VIDEO_DIR = Path.home() / "kin_video"
 AUDIO_DIR = Path.home() / "kin_audio"
 
-# Same few voices as kin_talk.py / uber_es_news.py.
+# Don's own six. Anyone else's Kin resolves through kin_config.json's
+# per-Kin "voice" field first (see _voice_filename below); this dict is
+# just the personal shortcut so Don's install needs no config entry.
 VOICES = {
     "Eli":     "en_US-joe-medium.onnx",
     "Coda":    "en_US-ljspeech-high.onnx",
@@ -44,8 +52,12 @@ SPEAKERS = {
     "Crungus": 2,
 }
 
+# A real, downloadable voice (main.py's PIPER_VOICE_CATALOGUE) so a
+# Kin nobody's configured yet still gets a shot at real piper audio
+# instead of going straight to espeak.
+_GENERIC_VOICE = "en_US-lessac-high.onnx"
+
 # Local lookup only so tests and leftover callers can resolve a filename.
-# Synthesis itself is remote.
 _PIPER_DIRS = [
     Path("/mnt/ai/piper"),
     Path.home() / "piper-voices",
@@ -53,7 +65,17 @@ _PIPER_DIRS = [
 ]
 
 
+def _voice_filename(kin_name: str) -> str:
+    """kin_config.json's own per-Kin voice field first (what the app's
+    voice-picker UI already writes to), then Don's personal shortcut,
+    then a generic downloadable voice — always something to try."""
+    configured = cl.KIN_BY_NAME.get(kin_name, {}).get("voice")
+    return configured or VOICES.get(kin_name) or _GENERIC_VOICE
+
+
 def _ssh(remote: str, timeout: int = 60) -> subprocess.CompletedProcess:
+    if not THERUG:
+        return subprocess.CompletedProcess(args=[], returncode=1)
     return subprocess.run(
         ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
          THERUG, remote],
@@ -62,6 +84,8 @@ def _ssh(remote: str, timeout: int = 60) -> subprocess.CompletedProcess:
 
 
 def _scp_from(remote_path: str, local: Path, timeout: int = 60) -> bool:
+    if not THERUG:
+        return False
     r = subprocess.run(
         ["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
          f"{THERUG}:{remote_path}", str(local)],
@@ -81,9 +105,7 @@ def piper_bin() -> Path | None:
 def voice_path(kin_name: str) -> Path | None:
     """Filename for the Kin. Prefers therug; falls back to a local copy
     of the same onnx so tests still resolve without ssh."""
-    fname = VOICES.get(kin_name)
-    if not fname:
-        return None
+    fname = _voice_filename(kin_name)
     r = _ssh(f"test -f {THERUG_PIPER}/{fname} && echo ok", timeout=10)
     if r.returncode == 0 and b"ok" in r.stdout:
         return Path(THERUG_PIPER) / fname
@@ -182,43 +204,54 @@ def strip_asterisks(text: str) -> str:
 
 
 def synthesize_wav(text: str, kin_name: str, dest: Path) -> bytes:
-    """Piper: therug first, then Frosty /mnt/ai/piper. Never espeak if joe exists.
+    """Piper: therug first, then a local install. Caller falls to espeak
+    if this returns empty — that fallback is not this function's job,
+    it has no host to run espeak on that isn't just "this machine".
 
     espeak is the Hawking-with-an-accent path. Eli's voice is en_US-joe.
     """
-    fname = VOICES.get(kin_name)
-    if not fname or not text.strip():
+    fname = _voice_filename(kin_name)
+    if not text.strip():
         return b""
     dest.parent.mkdir(parents=True, exist_ok=True)
     speaker = SPEAKERS.get(kin_name)
-    remote_wav = f"/tmp/talk_{os.getpid()}.wav"
-    model = f"{THERUG_PIPER}/{fname}"
-    argv = [
-        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", THERUG,
-        f"cd {THERUG_PIPER} && ./piper --model {model} --output_file {remote_wav}"
-        + (f" --speaker {speaker}" if speaker is not None else ""),
-    ]
-    try:
-        r = subprocess.run(argv, input=text[:12000].encode(),
-                           capture_output=True, timeout=180)
-        if r.returncode == 0 and _scp_from(remote_wav, dest):
-            data = dest.read_bytes() if dest.is_file() else b""
-            _ssh(f"rm -f {remote_wav}", timeout=10)
-            if len(data) > 44:
-                return data
-        else:
-            log.warning("therug piper failed: %s", (r.stderr or b"")[-400:])
-    except Exception:
-        log.warning("therug piper exception", exc_info=True)
 
-    local_bin = Path("/mnt/ai/piper/piper")
-    local_model = Path("/mnt/ai/piper") / fname
-    if not local_model.is_file():
-        local_model = Path.home() / "piper-voices" / fname
-    audio = _piper_once(local_bin, local_model, text, dest, speaker, 180)
-    if audio:
-        log.info("piper local fallback for %s", kin_name)
-    return audio
+    if THERUG:
+        remote_wav = f"/tmp/talk_{os.getpid()}.wav"
+        model = f"{THERUG_PIPER}/{fname}"
+        argv = [
+            "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", THERUG,
+            f"cd {THERUG_PIPER} && ./piper --model {model} --output_file {remote_wav}"
+            + (f" --speaker {speaker}" if speaker is not None else ""),
+        ]
+        try:
+            r = subprocess.run(argv, input=text[:12000].encode(),
+                               capture_output=True, timeout=180)
+            if r.returncode == 0 and _scp_from(remote_wav, dest):
+                data = dest.read_bytes() if dest.is_file() else b""
+                _ssh(f"rm -f {remote_wav}", timeout=10)
+                if len(data) > 44:
+                    return data
+            else:
+                log.warning("therug piper failed: %s", (r.stderr or b"")[-400:])
+        except Exception:
+            log.warning("therug piper exception", exc_info=True)
+
+    for bin_candidate in (Path("/mnt/ai/piper/piper"),
+                          Path("/usr/lib/piper-tts/bin/piper"),
+                          Path("/usr/local/bin/piper")):
+        if not bin_candidate.is_file():
+            continue
+        for model_dir in _PIPER_DIRS:
+            local_model = model_dir / fname
+            if local_model.is_file():
+                audio = _piper_once(bin_candidate, local_model, text, dest,
+                                    speaker, 180)
+                if audio:
+                    log.info("piper local fallback for %s (%s)", kin_name, fname)
+                    return audio
+        break
+    return b""
 
 
 def run_sadtalker(name: str, wav: Path, portrait: Path) -> Path | None:

@@ -1320,7 +1320,14 @@ async def api_talk_sadtalker(name: str, request: Request, _=Depends(require_auth
     portrait = _talk_avatar_path(name)
 
     async def _go():
-        await asyncio.to_thread(tm.synthesize_wav, text, name, wav)
+        audio = await asyncio.to_thread(tm.synthesize_wav, text, name, wav)
+        if not audio:
+            # No therug, no local piper voice for this Kin — same espeak
+            # fallback /api/tts already uses, so an unconfigured Kin still
+            # gets a voice instead of a silent clip.
+            audio = await _espeak_wav(text, name)
+            if audio:
+                wav.write_bytes(audio)
         if portrait and wav.is_file() and wav.stat().st_size > 44:
             video = await cc.animate(name, wav, portrait)
             if video:
