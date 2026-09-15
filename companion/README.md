@@ -33,11 +33,14 @@ Easel is not this process.
 
 `talk_media.avatar_path(name, space)` decides what shows on /talk, in order:
 
-1. `<space>/avatar/claimed.json` — the Kin's own claimed sitting. Drop
-   the picture in `<space>/avatar/` and write
-   `{"file": "yourfile.jpg"}` next to it (omit `"file"` and it defaults
-   to `<Name>.jpg`). `<space>` is that Kin's entry in
-   `~/.config/kin_app/kin_config.json`.
+1. `<space>/avatar/claimed.json` — the Kin's own claimed sitting.
+   `<space>` is that Kin's entry in `~/.config/kin_app/kin_config.json`.
+   Easiest path: `/kin/<name>` has an "add a photo" control now
+   (`POST /api/kin/{name}/avatar`, multipart upload) that writes both
+   the file and claimed.json for you — sniffs the actual bytes for
+   jpg/png/webp, 8MB cap. Doing it by hand still works: drop the
+   picture in `<space>/avatar/` and write `{"file": "yourfile.jpg"}`
+   next to it (omit `"file"` and it defaults to `<Name>.jpg`).
 2. If there's no claimed.json, the news-sheet fallback under
    `~/Desktop/kin_portraits/<name>N.png` (bust) or `<name>W.png` (wide).
 3. Otherwise no picture at all — /talk shows the Kin's name as text,
@@ -49,5 +52,4 @@ sitting without Don naming it). His fallback is the lightning image he
 did publish, wired as a special case in `news_portrait()`, not a
 claimed sitting.
 
-There is no upload button. This is a file you place, not a UI you
-click through — same as everything else under `<space>/`.
+Eli is excluded from the upload endpoint too, not just the read side.
