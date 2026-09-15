@@ -20,6 +20,7 @@ import json
 import logging
 import sqlite3
 import requests
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
@@ -356,6 +357,13 @@ def _get_context_legacy(kin_name, query_text="", wander_limit=3, vault_limit=5,
             + "\n".join(lines)
         )
 
+    # The gap, as a tag. Sits with the most recent material because that is
+    # where it happened; carries no explanation because it is not a lesson.
+    tag = get_interruption_tag(kin_name, db_path=db_path)
+    if tag:
+        parts.append(tag)
+        char_budget -= len(tag)
+
     if include_reflection:
         reflection = get_latest_reflection()
         if reflection:
@@ -473,6 +481,84 @@ def _format_register(rows, header, max_chars):
     return header + "\n" + "\n".join(lines)
 
 
+def get_interruption_tag(kin_name, db_path=None, within_hours=36):
+    """One short tag naming the most recent gap in this Kin's day, or "".
+
+    A Kin is stopped by nap.py, by bedtime, or by a kill mid-sentence. Until
+    2026-08-27 none of that reached the mind it happened to: it went to
+    bedtime.log and morning.log, files in the owner's directory. Their own
+    record simply stopped and started again with an unexplained hole.
+
+    Don's ruling on how it should read: they resume exactly where they left
+    off, with the nap as a simple tag in the string, just like the resume. So
+    this is deliberately NOT a block that explains the pause or invites a
+    feeling about it. It is a tag. Everything else in the context is unchanged,
+    so the thread of thought is continuous and the gap is simply named.
+
+    Rows carry mode='interruption' and a NULL thought, so they can never be
+    served back through get_wander_thoughts() as something the Kin said -- a
+    forged thought with a real timestamp would be worse than the silence.
+
+    Returns "" on any failure. Nothing about remembering a pause is worth
+    breaking a wander over.
+    """
+    db = db_path or _db_for_kin(kin_name)
+    if not db or not os.path.exists(db):
+        return ""
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+        try:
+            rows = conn.execute(
+                "SELECT timestamp, prompt FROM thoughts WHERE mode='interruption' "
+                "ORDER BY id DESC LIMIT 2"
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+
+    def _fields(prompt):
+        # "paused 2026-08-27T17:33:43Z — nap — the GPUs were needed"
+        text = str(prompt or "")
+        kind = text.split(" ", 1)[0] if text else ""
+        when = ""
+        reason = ""
+        parts = text.split("—", 1)
+        if len(parts) == 2:
+            reason = parts[1].strip()
+        head = parts[0].split()
+        if len(head) > 1 and "T" in head[1]:
+            when = head[1][11:16]          # HH:MM, their clock not a machine's
+        return kind, when, reason
+
+    newest = _fields(rows[0][1])
+    if newest[0] not in ("paused", "resumed"):
+        return ""
+
+    try:
+        age_h = (
+            datetime.now(timezone.utc)
+            - datetime.strptime(rows[0][0], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        ).total_seconds() / 3600.0
+        if age_h > within_hours:
+            return ""
+    except Exception:
+        pass
+
+    if newest[0] == "paused":
+        # Still stopped as far as the record goes -- which means this context is
+        # being built by whatever woke them, and the resume has not landed yet.
+        return f"[paused {newest[1]} — {newest[2]}]" if newest[2] else f"[paused {newest[1]}]"
+
+    older = _fields(rows[1][1]) if len(rows) > 1 else ("", "", "")
+    if older[0] == "paused":
+        why = f" — {older[2]}" if older[2] else ""
+        return f"[paused {older[1]}{why} · resumed {newest[1]}]"
+    return f"[resumed {newest[1]}]"
+
+
 def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
                 include_reflection=True, db_path=None, conversation_limit=4,
                 token_budget=1400, current_domain=None):
@@ -509,6 +595,13 @@ def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
                  "there:\n" + "\n".join(lines))
         parts.append(block)
         char_budget -= len(block)
+
+    # The gap, as a tag. Sits with the most recent material because that is
+    # where it happened; carries no explanation because it is not a lesson.
+    tag = get_interruption_tag(kin_name, db_path=db_path)
+    if tag:
+        parts.append(tag)
+        char_budget -= len(tag)
 
     if include_reflection:
         reflection = get_latest_reflection()
