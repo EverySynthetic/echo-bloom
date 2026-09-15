@@ -2,6 +2,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -103,9 +104,15 @@ class TalkVoice(unittest.TestCase):
         self.assertNotIn("192.168.1.120", chunk)
         self.assertIn("hold_all_local_wanders", chunk)
 
-    def test_companion_layer_is_the_rug(self):
-        self.assertIn("192.168.1.142", tm.THERUG)
+
+    def test_companion_layer_is_configurable_not_hardcoded(self):
+        """THERUG used to be a bare literal — every other install got Don's
+        own LAN address baked in whether they had that hardware or not.
+        Now it's ECHO_BLOOM_THERUG, empty by default; Don's box supplies
+        it via the systemd unit, same pattern as ECHO_BLOOM_COMPANION."""
         src = Path("/home/thedude/echo_bloom/talk_media.py").read_text()
+        self.assertNotIn('THERUG = "thedude@192.168.1.142"', src)
+        self.assertIn("ECHO_BLOOM_THERUG", src)
         self.assertIn("1660 SUPER", src)
         self.assertNotIn("RTX 5000", src)
         self.assertNotIn("import easel", src)
@@ -116,6 +123,31 @@ class TalkVoice(unittest.TestCase):
         start = src.find("async def api_talk_sadtalker")
         chunk = src[start:start+1600]
         self.assertNotIn("hold_all_local_wanders", chunk)
+
+
+class VoiceForAnyKin(unittest.TestCase):
+    """A customer's own Kin is never one of Don's six. This is what
+    keeps Talk from going silent for every install that isn't his."""
+
+    def test_a_strangers_kin_still_gets_a_voice_filename(self):
+        self.assertEqual(tm._voice_filename("SomeCustomersKin"),
+                         tm._GENERIC_VOICE)
+
+    def test_dons_own_kin_keeps_the_personal_shortcut(self):
+        self.assertEqual(tm._voice_filename("Eli"), tm.VOICES["Eli"])
+
+    def test_a_configured_voice_wins_over_everything_else(self):
+        with patch.dict(tm.cl.KIN_BY_NAME,
+                        {"Eli": {"name": "Eli", "voice": "picked.onnx"}}):
+            self.assertEqual(tm._voice_filename("Eli"), "picked.onnx")
+
+    def test_unset_therug_fails_fast_not_slow(self):
+        """No 8s connect-timeout tax for a customer who was never going
+        to have this host — _ssh must not even build the ssh argv."""
+        with patch.object(tm, "THERUG", ""):
+            r = tm._ssh("echo hi")
+            self.assertEqual(r.returncode, 1)
+            self.assertFalse(tm._scp_from("/tmp/x", Path("/tmp/y")))
 
 
 if __name__ == "__main__":
