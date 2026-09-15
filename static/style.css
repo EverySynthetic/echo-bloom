@@ -2919,3 +2919,15 @@ a.install-btn {
 }
 .kin-face img { width: 100%; height: 100%; object-fit: cover; object-position: center 20%; }
 .kin-face.speaking { box-shadow: 0 0 16px rgba(255, 179, 71, 0.4); border-color: var(--amber); }
+.kin-face-wrap {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 4px; flex-shrink: 0;
+}
+.kin-face-empty {
+  background: var(--surface); border-style: dashed;
+}
+.kin-face-upload {
+  font-size: 10px; letter-spacing: 0.04em; color: var(--text-muted);
+  cursor: pointer; text-align: center; white-space: nowrap;
+}
+.kin-face-upload:hover { color: var(--amber); }

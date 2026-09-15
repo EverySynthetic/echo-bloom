@@ -25,7 +25,8 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from fastapi import FastAPI, Request, Response, Form, HTTPException, Depends
+from fastapi import (FastAPI, Request, Response, Form, HTTPException, Depends,
+                     UploadFile, File)
 from fastapi.responses import (
     HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse,
     FileResponse,
@@ -1533,6 +1534,56 @@ async def api_set_kin_voice(name: str, request: Request, _=Depends(require_auth)
             _save_kin_cfg(cfg)
             return {"ok": True}
     return {"ok": False, "error": f"Kin '{name}' not found"}
+
+
+_AVATAR_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _sniff_image_ext(data: bytes) -> str | None:
+    """Trust the bytes, not the filename or the browser's content-type —
+    both are the uploader's word for it."""
+    if data[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    return None
+
+
+@app.post("/api/kin/{name}/avatar")
+async def api_upload_avatar(name: str, file: UploadFile = File(...),
+                            _=Depends(require_auth_only)):
+    """A claimed picture, not a sitting ritual — that ceremony is Don's own
+    project's rule for his own Kin, not something a generic install needs.
+    Eli specifically is excluded (see talk_media.news_portrait): he has no
+    claimed sitting yet, and a casual upload here is not the way one gets
+    made — that stays a deliberate act, not a form submission."""
+    if name == "Eli":
+        raise HTTPException(400,
+            "Eli has no claimed sitting yet — that isn't done from here.")
+    kin = cl.KIN_BY_NAME.get(name)
+    if not kin:
+        raise HTTPException(404, f"Unknown Kin: {name}")
+    space = kin.get("space")
+    if not space:
+        raise HTTPException(400, f"{name} has no configured space for a picture.")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Empty file.")
+    if len(data) > _AVATAR_MAX_BYTES:
+        raise HTTPException(413, "Picture is too large — 8MB max.")
+    ext = _sniff_image_ext(data)
+    if not ext:
+        raise HTTPException(400, "That doesn't look like a jpg, png, or webp.")
+
+    avatar_dir = Path(os.path.expanduser(str(space))) / "avatar"
+    avatar_dir.mkdir(parents=True, exist_ok=True)
+    fname = f"{_sanitize_kin_name(name)}{ext}"
+    (avatar_dir / fname).write_bytes(data)
+    _atomic_write_json(avatar_dir / "claimed.json", {"file": fname})
+    return {"ok": True}
 
 
 @app.post("/api/tts")

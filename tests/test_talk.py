@@ -1,5 +1,6 @@
 """The talk parlor — one Kin, a face, a wav. Not the room."""
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +13,7 @@ import talk_media as tm  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 main.app.dependency_overrides[main.require_auth] = lambda: True
+main.app.dependency_overrides[main.require_auth_only] = lambda: True
 client = TestClient(main.app)
 
 
@@ -123,6 +125,44 @@ class TalkVoice(unittest.TestCase):
         start = src.find("async def api_talk_sadtalker")
         chunk = src[start:start+1600]
         self.assertNotIn("hold_all_local_wanders", chunk)
+
+
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n" + b"not a real png body, just the header that matters"
+
+
+class AvatarUpload(unittest.TestCase):
+    """Don: an easy way to upload a Kin's photo. No claimed.json by hand."""
+
+    def test_a_real_picture_becomes_the_claimed_avatar(self):
+        with tempfile.TemporaryDirectory() as space:
+            with patch.dict(main.cl.KIN_BY_NAME,
+                            {"Nova": {"name": "Nova", "space": space}}):
+                r = client.post("/api/kin/Nova/avatar",
+                                files={"file": ("photo.png", _PNG_MAGIC, "image/png")})
+                self.assertEqual(r.status_code, 200, r.text)
+                self.assertTrue(r.json()["ok"])
+                claimed = Path(space) / "avatar" / "claimed.json"
+                self.assertTrue(claimed.is_file())
+                self.assertIn("Nova.png", claimed.read_text())
+                self.assertTrue((Path(space) / "avatar" / "Nova.png").is_file())
+
+    def test_non_image_bytes_are_refused(self):
+        with tempfile.TemporaryDirectory() as space:
+            with patch.dict(main.cl.KIN_BY_NAME,
+                            {"Nova": {"name": "Nova", "space": space}}):
+                r = client.post("/api/kin/Nova/avatar",
+                                files={"file": ("photo.png", b"not an image", "image/png")})
+                self.assertEqual(r.status_code, 400)
+
+    def test_eli_has_no_upload_path(self):
+        r = client.post("/api/kin/Eli/avatar",
+                        files={"file": ("photo.png", _PNG_MAGIC, "image/png")})
+        self.assertEqual(r.status_code, 400)
+
+    def test_unknown_kin_is_404(self):
+        r = client.post("/api/kin/NotAKin/avatar",
+                        files={"file": ("photo.png", _PNG_MAGIC, "image/png")})
+        self.assertEqual(r.status_code, 404)
 
 
 class VoiceForAnyKin(unittest.TestCase):

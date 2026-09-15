@@ -5,10 +5,21 @@
 <div class="kin-page" style="--kin-color: {{ kin.color }}">
 
   <div class="kin-page-header">
-    {% if has_face %}
-    <a href="/talk" class="kin-face" id="kin-face" title="Talk">
-      <img src="/talk/avatar/{{ kin.name }}" alt="">
-    </a>
+    {% if kin.name != "Eli" %}
+    <div class="kin-face-wrap">
+      {% if has_face %}
+      <a href="/talk" class="kin-face" id="kin-face" title="Talk">
+        <img src="/talk/avatar/{{ kin.name }}" alt="" id="kin-face-img">
+      </a>
+      {% else %}
+      <div class="kin-face kin-face-empty" id="kin-face"></div>
+      {% endif %}
+      <label class="kin-face-upload" for="kin-avatar-input" id="kin-face-upload-label">
+        {{ 'change photo' if has_face else 'add a photo' }}
+      </label>
+      <input type="file" id="kin-avatar-input" accept="image/png,image/jpeg,image/webp" hidden
+             onchange="uploadAvatar(this.files[0])">
+    </div>
     {% endif %}
     <div class="kin-page-name">{{ kin.name }}</div>
     <div class="kin-page-meta">
@@ -139,6 +150,30 @@ let ttsEnabled    = false;
 let mediaRecorder = null;
 let audioChunks   = [];
 let isRecording   = false;
+
+// ── Avatar upload ────────────────────────────────────────────────────────────
+
+async function uploadAvatar(file) {
+  if (!file) return;
+  const label = document.getElementById('kin-face-upload-label');
+  const prevText = label.textContent;
+  label.textContent = 'uploading…';
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const r = await fetch('/api/kin/' + KIN_PATH + '/avatar', {method: 'POST', body: fd});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) {
+      alert(d.error || d.detail || 'Could not upload that picture.');
+      label.textContent = prevText;
+      return;
+    }
+    location.reload();
+  } catch (e) {
+    alert('Upload failed — check your connection.');
+    label.textContent = prevText;
+  }
+}
 
 // ── Persistence ───────────────────────────────────────────────────────────────
 
