@@ -5,6 +5,11 @@
 <div class="kin-page" style="--kin-color: {{ kin.color }}">
 
   <div class="kin-page-header">
+    {% if has_face %}
+    <a href="/talk" class="kin-face" id="kin-face" title="Talk">
+      <img src="/talk/avatar/{{ kin.name }}" alt="">
+    </a>
+    {% endif %}
     <div class="kin-page-name">{{ kin.name }}</div>
     <div class="kin-page-meta">
       <span>{{ kin.model }}</span>
@@ -332,7 +337,10 @@ async function captureVision() {
 async function initRecording() {
   const stream = await navigator.mediaDevices.getUserMedia({audio: true});
   // Firefox records ogg/opus; Chrome records webm. Detect what's supported.
-  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+  const gecko = !window.webkitSpeechRecognition;
+  const mimeType = (gecko && MediaRecorder.isTypeSupported('audio/ogg;codecs=opus'))
+    ? 'audio/ogg;codecs=opus'
+    : MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
     ? 'audio/webm;codecs=opus'
     : MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
     ? 'audio/ogg;codecs=opus'
@@ -638,9 +646,34 @@ async function speakText(text) {
     if (_audioCtx.state === 'running') {
       const decoded = await _audioCtx.decodeAudioData(await blob.arrayBuffer());
       const src = _audioCtx.createBufferSource();
+      const anal = _audioCtx.createAnalyser();
+      anal.fftSize = 256;
       src.buffer = decoded;
-      src.connect(_audioCtx.destination);
+      src.connect(anal);
+      anal.connect(_audioCtx.destination);
+      const data = new Uint8Array(anal.fftSize);
+      const face = document.getElementById('kin-face');
+      let raf;
+      function tick() {
+        anal.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) {
+          const v = (data[i] - 128) / 128;
+          sum += v * v;
+        }
+        const level = Math.sqrt(sum / data.length);
+        if (face) {
+          face.style.transform = `scale(${1 + Math.min(0.08, level * 0.3)})`;
+          face.classList.toggle('speaking', level > 0.04);
+        }
+        raf = requestAnimationFrame(tick);
+      }
+      src.onended = () => {
+        cancelAnimationFrame(raf);
+        if (face) { face.style.transform = ''; face.classList.remove('speaking'); }
+      };
       src.start(0);
+      tick();
       _ttsNote('');
       return;
     }

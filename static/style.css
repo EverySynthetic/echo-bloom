@@ -1341,6 +1341,26 @@ a:hover { color: var(--text); }
   color: var(--text-dim);
   line-height: 1.6;
 }
+.license-leave { margin-top: 8px; }
+.license-leave-cmds {
+  text-align: left;
+  width: 100%;
+  max-width: 40em;
+}
+.license-leave-os {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin: 10px 0 4px;
+}
+.license-leave-cmds code {
+  display: block;
+  font-size: 11px;
+  word-break: break-all;
+  background: var(--bg);
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+}
 .license-transparency-note {
   font-size: 11px;
   color: var(--text-dim);
@@ -2295,6 +2315,21 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
 
 /* Price + checkout. The page claimed "one purchase" four times and had no
    link to buy anything. */
+.install-buy--hero { margin: 0 auto 36px; }
+.install-leave {
+  max-width: 720px;
+  margin: 0 auto 40px;
+  padding: 20px 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.install-leave-os {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin: 12px 0 6px;
+}
+.install-leave .install-cmd { display: block; margin: 0 0 8px; }
 .install-buy {
   margin-top: 36px;
   padding: 28px 24px;
@@ -2751,3 +2786,136 @@ a.install-btn {
   padding: 8px 0 16px;
   text-align: left;
 }
+
+/* ── Talk parlor ─────────────────────────────────────────────────── */
+
+.talk {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 12px 0 32px;
+}
+.talk-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 18px;
+}
+.talk-chip {
+  font: inherit;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.talk-chip.on, .talk-chip:hover { color: var(--text); border-color: var(--amber); }
+.talk-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 280px;
+}
+.talk-face {
+  width: min(42vw, 300px);
+  height: min(42vw, 300px);
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  position: relative;
+  transform-origin: center 70%;
+  transition: transform 0.05s linear, box-shadow 0.1s ease;
+}
+.talk-face.speaking {
+  box-shadow: 0 0 28px rgba(255, 179, 71, 0.35);
+  border-color: var(--amber);
+}
+.talk-face img, .talk-face video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 20%;
+  display: block;
+}
+.talk-mouth {
+  position: absolute;
+  left: 50%;
+  bottom: 18%;
+  width: 22%;
+  height: 10%;
+  margin-left: -11%;
+  background: rgba(10, 10, 10, 0.55);
+  border-radius: 50%;
+  transform-origin: center;
+  transform: scaleY(0.35);
+  pointer-events: none;
+  opacity: 0;
+}
+.talk-face.speaking .talk-mouth { opacity: 1; }
+.talk-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
+}
+.talk-who {
+  margin-top: 14px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--amber);
+}
+.talk-said {
+  margin-top: 10px;
+  max-width: 36em;
+  min-height: 3em;
+  text-align: center;
+  white-space: pre-wrap;
+  color: var(--text);
+}
+.talk-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 18px;
+}
+.talk-mic {
+  font: inherit;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  min-width: 9em;
+}
+.talk-mic.hot { border-color: var(--red); color: var(--red); }
+.talk-mic:disabled { opacity: 0.4; cursor: default; }
+.talk-type {
+  flex: 1;
+  font: inherit;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+}
+.talk-state { color: var(--text-dim); font-size: 12px; min-width: 12em; }
+.talk-note {
+  margin-top: 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.kin-face {
+  width: 56px; height: 56px; border-radius: 50%; overflow: hidden;
+  border: 1px solid var(--border); display: block; flex-shrink: 0;
+  transition: transform 0.05s linear, box-shadow 0.1s ease;
+}
+.kin-face img { width: 100%; height: 100%; object-fit: cover; object-position: center 20%; }
+.kin-face.speaking { box-shadow: 0 0 16px rgba(255, 179, 71, 0.4); border-color: var(--amber); }

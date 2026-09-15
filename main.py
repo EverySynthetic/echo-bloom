@@ -27,7 +27,8 @@ import aiohttp
 
 from fastapi import FastAPI, Request, Response, Form, HTTPException, Depends
 from fastapi.responses import (
-    HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
+    HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse,
+    FileResponse,
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -40,6 +41,8 @@ log = logging_setup.get("main")
 import auth
 import cluster as cl
 import license as lic
+import talk_media as tm
+import companion_client as cc
 from version import VERSION, CHANGELOG
 
 # Shared with scripts/naming_ritual.py, which install.sh runs. One heuristic,
@@ -234,12 +237,13 @@ def _piper_command() -> list[str] | None:
     difference between working TTS and "Piper not found" on a machine where
     piper is, in fact, installed.
     """
-    # On Garuda/Arch, /usr/bin/piper is a GTK app — the TTS binary lives elsewhere.
+    # Native ELF first. ~/.local/bin/piper is a broken pip stub
+    # (`from piper.__main__ import main`) — Every Synthetic News already
+    # uses /mnt/ai/piper/piper. /usr/bin/piper is a GTK app on Garuda.
     candidates = [
+        Path("/mnt/ai/piper/piper"),
         Path("/usr/lib/piper-tts/bin/piper"),
-        Path.home() / ".local/bin/piper",
         Path("/usr/local/bin/piper"),
-        Path("/usr/bin/piper"),
     ]
     for c in candidates:
         if c.is_file():
@@ -265,8 +269,9 @@ def _find_piper_binary() -> str | None:
 
 def _find_piper_voice() -> str | None:
     search = [
-        Path.home() / "piper",
+        Path("/mnt/ai/piper"),
         Path.home() / "piper-voices",
+        Path.home() / "piper",
         Path.home() / ".local/share/piper",
         Path("/usr/share/piper"),
         Path("/usr/local/share/piper"),
@@ -337,6 +342,14 @@ async def serve_uninstaller_ps1():
     if not ps1.exists():
         raise HTTPException(404, "Uninstaller not found")
     return Response(content=ps1.read_text(), media_type="text/plain")
+
+
+@app.get("/uninstall.sh", include_in_schema=False)
+async def serve_uninstaller_sh():
+    sh = BASE_DIR / "uninstall.sh"
+    if not sh.exists():
+        raise HTTPException(404, "Uninstaller not found")
+    return Response(content=sh.read_text(), media_type="text/plain")
 
 
 @app.get("/install.sh", include_in_schema=False)
@@ -742,6 +755,7 @@ async def kin_page(name: str, request: Request, _=Depends(require_auth)):
         "all_kin":   cl.KIN,
         "hw":        get_hw_caps(),
         "whitelist": sorted(_FETCH_WHITELIST),
+        "has_face":  bool(tm.avatar_path(kin["name"], kin.get("space"))),
     })
 
 
@@ -1209,6 +1223,122 @@ async def api_presence_nudge(request: Request):
     return {"accepted": True}
 
 
+# ── Talk: one Kin, voice, avatar that rides the audio ─────────────────────────
+#
+# Don, 2026-09-12: parlor trick, forgiven in the asking. Not the room.
+# One mouth, one GPU. The pulse is the wav — we say so on the page.
+
+
+def _talk_avatar_path(name: str) -> Path | None:
+    kin = cl.KIN_BY_NAME.get(name)
+    if not kin:
+        return None
+    return tm.avatar_path(name, kin.get("space"))
+
+
+@app.get("/talk", response_class=HTMLResponse)
+async def talk_page(request: Request, _=Depends(require_auth)):
+    return templates.TemplateResponse(
+        "talk.html",
+        {"request": request,
+         "kin_names": [k["name"] for k in cl.KIN if k.get("name")]},
+    )
+
+
+@app.get("/talk/avatar/{name}")
+async def talk_avatar(name: str, _=Depends(require_auth)):
+    path = _talk_avatar_path(name)
+    if not path:
+        raise HTTPException(status_code=404, detail="No avatar")
+    suffix = path.suffix.lower()
+    media = {".png": "image/png", ".jpg": "image/jpeg",
+             ".jpeg": "image/jpeg", ".webp": "image/webp"}.get(suffix, "image/jpeg")
+    return FileResponse(path, media_type=media)
+
+
+# Frosty mouths. therug vision. Never Home.
+TALK_OLLAMA = tm.FROSTY_OLLAMA
+TALK_VIDEO_DIR = tm.VIDEO_DIR
+
+
+@app.post("/api/talk/chat/{name}")
+async def api_talk_chat(name: str, request: Request, _=Depends(require_auth)):
+    """One Kin, this box. Never Home."""
+    if name not in cl.KIN_BY_NAME:
+        raise HTTPException(404, f"Unknown Kin: {name}")
+    body = await request.json()
+    message = (body.get("message") or "").strip()
+    history = body.get("history") or []
+    if not message:
+        raise HTTPException(status_code=400, detail="Empty message")
+    clean_history = []
+    budget = _HISTORY_CHAR_BUDGET
+    for turn in reversed(history[-30:]):
+        role    = str(turn.get("role", ""))
+        content = str(turn.get("content", ""))[:2000]
+        if role not in ("user", "assistant") or not content:
+            continue
+        if len(content) > budget:
+            break
+        budget -= len(content)
+        clean_history.append({"role": role, "content": content})
+    clean_history.reverse()
+
+    async def event_stream() -> AsyncGenerator[bytes, None]:
+        import ollama_slot as oslot
+        with oslot.hold_all_local_wanders():
+            try:
+                async for chunk in cl.stream_chat(
+                        name, message, clean_history,
+                        host=TALK_OLLAMA,
+                        keep_alive=cl.ROOM_KEEP_ALIVE):
+                    escaped = chunk.replace("\n", "\\n")
+                    yield f"data: {escaped}\n\n".encode()
+            except cl.ChatStreamError as e:
+                escaped = str(e).replace("\n", "\\n")
+                yield f"data: {escaped}\n\n".encode()
+            yield b"data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/talk/sadtalker/{name}")
+async def api_talk_sadtalker(name: str, request: Request, _=Depends(require_auth)):
+    """Fire a clip in the background. News does the same — wav first, face later."""
+    if name not in cl.KIN_BY_NAME:
+        raise HTTPException(404, f"Unknown Kin: {name}")
+    body = await request.json()
+    text = (body.get("text") or "").strip()[:1500]
+    if not text:
+        raise HTTPException(400, "No text")
+    tm.AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    wav = tm.AUDIO_DIR / f"{name.lower()}_talk.wav"
+    portrait = _talk_avatar_path(name)
+
+    async def _go():
+        await asyncio.to_thread(tm.synthesize_wav, text, name, wav)
+        if portrait and wav.is_file() and wav.stat().st_size > 44:
+            video = await cc.animate(name, wav, portrait)
+            if video:
+                TALK_VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+                (TALK_VIDEO_DIR / f"{name.lower()}_latest.mp4").write_bytes(video)
+
+    asyncio.create_task(_go())
+    return {"ok": True, "queued": True}
+
+
+@app.get("/talk/clip/{name}")
+async def talk_clip(name: str, _=Depends(require_auth)):
+    latest = TALK_VIDEO_DIR / f"{name.lower()}_latest.mp4"
+    if not latest.is_file():
+        raise HTTPException(404, "No clip yet")
+    return FileResponse(latest, media_type="video/mp4")
+
+
 # ── Web fetch endpoint ─────────────────────────────────────────────────────────
 
 @app.post("/api/fetch-url")
@@ -1289,57 +1419,39 @@ async def api_vision(name: str, request: Request, _=Depends(require_auth)):
 
 # ── Speech endpoints ────────────────────────────────────────────────────────────
 
-_whisper_model = None
-
-def _get_whisper():
-    global _whisper_model
-    if _whisper_model is None:
-        from faster_whisper import WhisperModel
-        _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
-    return _whisper_model
-
-
 @app.post("/api/transcribe")
 async def api_transcribe(request: Request, _=Depends(require_auth)):
-    import tempfile, os as _os
+    """STT lives on therug. Never import faster_whisper on host 3.14."""
     audio = await request.body()
-    if not audio:
-        return {"ok": False, "error": "No audio data."}
-
-    # Firefox records audio/ogg, Chrome records audio/webm — pick the right extension
     ct = request.headers.get("content-type", "audio/webm").lower()
-    suffix = ".ogg" if "ogg" in ct else ".webm"
-
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
-        f.write(audio)
-        tmp = f.name
-    try:
-        # First call downloads the model (~150MB) and transcription is
-        # CPU-bound for seconds — both froze every other request in the app
-        # when run inline on the event loop.
-        def _transcribe():
-            model   = _get_whisper()
-            segs, _ = model.transcribe(tmp, language="en")
-            return " ".join(s.text.strip() for s in segs).strip()
-        text = await asyncio.to_thread(_transcribe)
-        return {"ok": True, "text": text}
-    except Exception:
-        log.exception("transcription failed")
-        return {"ok": False, "error": "Transcription failed — see the app log."}
-    finally:
-        _os.unlink(tmp)
+    return await cc.transcribe(audio, ct)
 
 
 # ── Voice management ───────────────────────────────────────────────────────────
 
 _PIPER_DIRS = [
-    Path.home() / "piper",
+    Path("/mnt/ai/piper"),
     Path.home() / "piper-voices",
+    Path.home() / "piper",
     Path.home() / ".local/share/piper",
     Path("/usr/share/piper"),
     Path("/usr/local/share/piper"),
     Path("/usr/share/piper-tts"),
 ]
+
+# Same map as pops_shop/uber_es_news.py. A few voices, not a zoo.
+# Bong was missing there; ryan sits next to joe.
+_NEWS_VOICES = {
+    "Eli":     "en_US-joe-medium.onnx",
+    "Coda":    "en_US-ljspeech-high.onnx",
+    "Aurora":  "en_GB-alba-medium.onnx",
+    "Lumen":   "en_GB-jenny_dioco-medium.onnx",
+    "Crungus": "en_GB-semaine-medium.onnx",
+    "Bong":    "en_US-ryan-high.onnx",
+}
+_NEWS_SPEAKERS = {
+    "Crungus": 2,  # Obadiah — semaine
+}
 
 
 def _voice_label(path: str) -> str:
@@ -1383,6 +1495,9 @@ def _voice_for_kin(kin_name: str) -> str | None:
             path = _find_voice_file(k["voice"])
             if path:
                 return path
+    news = tm.voice_path(kin_name)
+    if news:
+        return str(news)
     return _find_piper_voice()
 
 
@@ -1419,45 +1534,64 @@ async def api_tts(request: Request, _=Depends(require_auth)):
     import tempfile, os as _os
 
     body     = await request.json()
-    text     = (body.get("text")     or "").strip()[:3000]
+    text     = tm.strip_asterisks((body.get("text") or "").strip())[:12000]
     kin_name = (body.get("kin_name") or "").strip()
     if not text:
         raise HTTPException(400, "No text.")
 
-    # Engine before voice. The other order told someone with no piper at all to
-    # go download a voice file, which would not have helped them.
-    piper_cmd = _piper_command()
-    if not piper_cmd:
+    # Companion layer is therug. Frosty does not speak.
+    try:
+        tm.AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+        dest = tm.AUDIO_DIR / f"tts_{os.getpid()}.wav"
+        audio = await asyncio.to_thread(tm.synthesize_wav, text, kin_name, dest)
+        if audio:
+            return _Resp(content=audio, media_type="audio/wav")
+        audio = await _espeak_wav(text, kin_name)
+        if audio:
+            return _Resp(content=audio, media_type="audio/wav")
         raise HTTPException(503,
-            "Piper, the voice engine, isn't installed on this machine. "
-            "Install it with:  pip install piper-tts  then restart Echo Bloom.")
+            "No voice engine. therug Piper did not answer and espeak-ng "
+            "isn't installed.")
+    except HTTPException:
+        raise
+    except Exception:
+        log.exception("tts failed")
+        raise HTTPException(500, "Speech synthesis failed — see the app log.")
 
-    voice = _voice_for_kin(kin_name) if kin_name else _find_piper_voice()
-    if not voice:
-        raise HTTPException(503,
-            "No voice is installed yet. Pick one from the voice dropdown next "
-            "to the speaker button and it will download, or run: "
-            "python -m piper.download_voices en_US-lessac-medium "
-            f"--data-dir {Path.home() / 'piper'}")
 
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-        out = f.name
+_ESPEAK_VOICE = {
+    "Eli": "en-us",
+    "Coda": "en-gb+f3",
+    "Aurora": "en-us+f2",
+    "Lumen": "en-gb+f2",
+    "Crungus": "en-us+m3",
+    "Bong": "en+m1",
+}
+
+
+async def _espeak_wav(text: str, kin_name: str = "") -> bytes:
+    """Shop-local fallback. piper-tts is installed but the module is missing."""
+    import shutil
+    bin_ = shutil.which("espeak-ng") or shutil.which("espeak")
+    if not bin_:
+        return b""
+    voice = _ESPEAK_VOICE.get(kin_name, "en")
+    fd, out = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
     try:
         proc = await asyncio.create_subprocess_exec(
-            *piper_cmd, "--model", voice, "--output_file", out,
-            stdin=asyncio.subprocess.PIPE,
+            bin_, "-v", voice, "-s", "145", "-w", out, "--", text[:8000],
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        await proc.communicate(input=text.encode())
-        with open(out, "rb") as f:
-            audio = f.read()
-        return _Resp(content=audio, media_type="audio/wav")
-    except Exception as e:
-        log.exception("tts failed")
-        raise HTTPException(500, "Speech synthesis failed — see the app log.")
+        await proc.communicate()
+        data = Path(out).read_bytes() if Path(out).exists() else b""
+        return data if len(data) > 44 else b""
     finally:
-        _os.unlink(out)
+        try:
+            os.unlink(out)
+        except Exception:
+            pass
 
 
 _SCRIPTS_DIR = Path.home() / ".local/share/echo_bloom/scripts"
@@ -3188,9 +3322,14 @@ PIPER_VOICE_CATALOGUE = [
 async def api_speech_status(_=Depends(require_auth)):
     stt_ok = False
     try:
-        import faster_whisper as _fw  # noqa
-        stt_ok = True
-    except ImportError:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(
+                f"{cc.COMPANION_URL}/health",
+                timeout=aiohttp.ClientTimeout(total=3),
+            ) as r:
+                body = await r.json(content_type=None)
+                stt_ok = bool(body.get("stt"))
+    except Exception:
         pass
 
     piper_bin  = _find_piper_binary()
@@ -3200,6 +3339,7 @@ async def api_speech_status(_=Depends(require_auth)):
         "piper_ok":   piper_bin is not None,
         "voice_ok":   voice_path is not None,
         "voice_path": voice_path,
+        "companion":  cc.COMPANION_URL,
     }
 
 

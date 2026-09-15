@@ -25,7 +25,7 @@
     <div class="license-buy-note">
       A purchased license works on any machine.<br>
       One-time. No subscription. Yours forever.<br>
-      Lifetime license. $20 once — no subscription, and the price is not going up.
+      Lifetime license. ${{ price }} once — no subscription, and the price is not going up.
     </div>
   </div>
 
@@ -44,7 +44,7 @@
     <div class="license-buy-note">
       One-time. No subscription. Runs on your hardware forever.
       <br>After payment you'll receive a license key by email.
-      <br>Lifetime license. $20 once — no subscription, and the price is not going up.
+      <br>Lifetime license. ${{ price }} once — no subscription, and the price is not going up.
     </div>
   </div>
 
@@ -62,7 +62,7 @@
     <div class="license-buy-note">
       Buy any time — the days you have left aren't lost.<br>
       One-time. No subscription. Runs on your hardware forever.<br>
-      Lifetime license. $20 once — no subscription, and the price is not going up.
+      Lifetime license. ${{ price }} once — no subscription, and the price is not going up.
     </div>
     <a href="/" class="license-back-btn">← BACK TO DASHBOARD</a>
   </div>
@@ -122,6 +122,26 @@
       <br><br>
       If that does not clear it, write
       <a href="mailto:don@everysynthetic.org">don@everysynthetic.org</a>.
+    </div>
+  </div>
+  {% endif %}
+
+  {% if state in ("expired", "denied", "revoked") %}
+  <div class="license-card license-leave">
+    <div class="license-title">LEAVE THIS MACHINE</div>
+    <div class="license-body">
+      Trial over, or you just want it gone. Uninstall runs on <em>this computer</em>,
+      not in the browser. Memories stay unless you ask them gone.
+    </div>
+    <div class="license-leave-cmds">
+      <div class="license-leave-os">Windows</div>
+      <code>powershell -ExecutionPolicy Bypass -Command "iwr -useb https://everysynthetic.org/uninstall.ps1 | iex"</code>
+      <div class="license-leave-os">Linux / macOS</div>
+      <code>bash &lt;(curl -fsSL https://everysynthetic.org/uninstall.sh)</code>
+    </div>
+    <div class="license-buy-note">
+      Type ALL / pass --all only if you also want memories deleted.
+      Python, Ollama, and your models are left alone.
     </div>
   </div>
   {% endif %}
