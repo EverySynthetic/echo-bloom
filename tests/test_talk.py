@@ -64,18 +64,18 @@ class FacesAreReceiptsNotSittings(unittest.TestCase):
         self.assertEqual(p.name, "Bong.jpg")
 
     def test_talk_media_does_not_import_the_sitting(self):
-        src = Path("/home/thedude/echo_bloom/talk_media.py").read_text()
+        src = (ROOT / "talk_media.py").read_text()
         self.assertNotIn("import easel", src)
         self.assertNotIn("avatar_ritual", src)
 
 
 class CompanionProxy(unittest.TestCase):
     def test_transcribe_does_not_import_faster_whisper(self):
-        src = Path("/home/thedude/echo_bloom/main.py").read_text()
+        src = (ROOT / "main.py").read_text()
         self.assertNotIn("from faster_whisper", src)
         self.assertIn("companion_client", src)
         self.assertIn("192.168.1.142:8092",
-                      Path("/home/thedude/echo_bloom/companion_client.py").read_text())
+                      (ROOT / "companion_client.py").read_text())
 
     def test_transcribe_fail_open_when_companion_down(self):
         r = client.post("/api/transcribe", content=b"not-audio",
@@ -100,7 +100,7 @@ class TalkVoice(unittest.TestCase):
 
     def test_talk_chat_does_not_name_home(self):
         self.assertEqual(tm.FROSTY_OLLAMA, "http://127.0.0.1:11434")
-        src = Path("/home/thedude/echo_bloom/main.py").read_text()
+        src = (ROOT / "main.py").read_text()
         start = src.find("async def api_talk_chat")
         chunk = src[start:start+2200]
         self.assertNotIn("192.168.1.120", chunk)
@@ -112,7 +112,7 @@ class TalkVoice(unittest.TestCase):
         own LAN address baked in whether they had that hardware or not.
         Now it's ECHO_BLOOM_THERUG, empty by default; Don's box supplies
         it via the systemd unit, same pattern as ECHO_BLOOM_COMPANION."""
-        src = Path("/home/thedude/echo_bloom/talk_media.py").read_text()
+        src = (ROOT / "talk_media.py").read_text()
         self.assertNotIn('THERUG = "thedude@192.168.1.142"', src)
         self.assertIn("ECHO_BLOOM_THERUG", src)
         self.assertIn("1660 SUPER", src)
@@ -121,7 +121,7 @@ class TalkVoice(unittest.TestCase):
         self.assertNotIn("avatar_ritual", src)
 
     def test_sadtalker_does_not_stop_frosty_wanderers(self):
-        src = Path("/home/thedude/echo_bloom/main.py").read_text()
+        src = (ROOT / "main.py").read_text()
         start = src.find("async def api_talk_sadtalker")
         chunk = src[start:start+1600]
         self.assertNotIn("hold_all_local_wanders", chunk)
