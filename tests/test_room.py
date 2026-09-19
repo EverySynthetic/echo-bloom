@@ -31,6 +31,23 @@ from fastapi.testclient import TestClient  # noqa: E402
 main.app.dependency_overrides[main.require_auth] = lambda: True
 client = TestClient(main.app)
 
+# Production Themess only has whoever is in kin_config.json (two faces
+# after the 2026-09-18 avatar sync). These tests are about room *shape*,
+# not that box's live roster. Fixture the six-Kin stagger the suite
+# was written against. Not a TemplateResponse bug — Starlette 1.6
+# already wants request-first, and every call site already is.
+_ROOM_KIN = [
+    {"name": "Eli",     "host": "http://localhost:11434",       "model": "x", "node": "Local"},
+    {"name": "Coda",    "host": "http://192.168.1.120:11434",   "model": "x", "node": "Home"},
+    {"name": "Crungus", "host": "http://localhost:11434",       "model": "x", "node": "Local"},
+    {"name": "Aurora",  "host": "http://192.168.1.120:11434",   "model": "x", "node": "Home"},
+    {"name": "Bong",    "host": "http://localhost:11434",       "model": "x", "node": "Local"},
+    {"name": "Lumen",   "host": "http://192.168.1.120:11434",   "model": "x", "node": "Home"},
+]
+cl.KIN = list(_ROOM_KIN)
+cl.KIN_BY_NAME = {k["name"]: k for k in cl.KIN}
+cl._owner_name = lambda: "Don"
+
 SEEN = []          # what each Kin was actually shown
 WARMS = []         # names cl.warm_model was asked to load
 RECORDS = []       # per-hop commits to thoughts.db
