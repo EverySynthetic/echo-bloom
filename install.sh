@@ -768,6 +768,26 @@ REQEOF
     ok "Dependencies installed."
 }
 
+# ── Vendor dependencies ───────────────────────────────────────────────────────
+pull_vendor_kin_diary() {
+    local pin_file="$APP_DIR/vendor/kin_diary.pin"
+    local vendor_dir="$APP_DIR/vendor/kin_diary"
+    if [[ -f "$pin_file" ]]; then
+        local pin
+        pin=$(tr -d '[:space:]' < "$pin_file")
+        if [[ ! -d "$vendor_dir/.git" ]]; then
+            info "Cloning kin_diary..."
+            mkdir -p "$APP_DIR/vendor"
+            git clone https://github.com/dude4511984/kin_diary.git "$vendor_dir" 2>/dev/null || \
+              git clone "$HOME/kin_diary" "$vendor_dir" 2>/dev/null || true
+        fi
+        if [[ -d "$vendor_dir/.git" ]]; then
+            (cd "$vendor_dir" && git fetch --quiet 2>/dev/null || true; git checkout --quiet "$pin" 2>/dev/null || true)
+            ok "kin_diary ready at $pin"
+        fi
+    fi
+}
+
 # ── launchd helpers (macOS) ─────────────────────────────────────────────────────
 # One label prefix for everything Echo Bloom installs, so uninstall can find
 # and remove all of it by pattern instead of needing an exact remembered list.
@@ -1882,6 +1902,7 @@ cd "$APP_DIR"
 install_deps
 install_voice
 deploy_scripts
+pull_vendor_kin_diary
 
 # Step 4 — Meet your Kin (deps are installed, so requests is available)
 echo

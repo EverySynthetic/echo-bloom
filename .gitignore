@@ -25,3 +25,6 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Vendored repos (pinned checkout)
+vendor/kin_diary/

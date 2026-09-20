@@ -2369,6 +2369,12 @@ async def api_naming_ritual(request: Request, _=Depends(require_auth)):
         return {"ok": False, "error": "the model never settled on a name"}
     pronoun = clean_pronoun(pronoun_raw)
 
+    try:
+        import agora_bridge
+        agora_bridge.keygen_kin(name)
+    except Exception as e:
+        log.warning("agora keygen for %s failed: %s", name, e)
+
     return {"ok": True, "name": name, "pronoun": pronoun,
             "description": description.strip(), "opening": opening_reply}
 
@@ -3720,6 +3726,14 @@ async def api_onboard_save(request: Request, _=Depends(require_auth)):
     merged["vault_url"] = (body.get("vault_url") or existing.get("vault_url")
                            or "http://localhost:8765")
     _atomic_write_json(config_path, merged)
+
+    try:
+        import agora_bridge
+        for k in kin_list:
+            if k.get("name"):
+                agora_bridge.keygen_kin(k["name"])
+    except Exception as e:
+        log.warning("agora keygen on onboard save failed: %s", e)
 
     cl.reload_config()
     auth.mark_setup_complete()
