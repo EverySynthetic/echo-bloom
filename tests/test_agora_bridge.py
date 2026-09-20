@@ -274,6 +274,26 @@ class TestAgoraBridgeExport(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, f"kin_diary verify failed: {proc.stderr}")
         self.assertIn("ok Ada entries 2", proc.stdout.strip())
 
+class TestAgoraBridgeBackupReminder(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="eb_backup_test_"))
+        self.keys_root = self.tmp_dir / "keys"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_backup_reminder_info_contains_directory_and_warnings(self):
+        info = agora_bridge.get_backup_reminder_info(keys_root=self.keys_root)
+        self.assertEqual(info["keys_dir"], str(self.keys_root))
+        self.assertIn("back this up.", info["reminder"])
+        self.assertIn("Echo Bloom does not upload keys anywhere", info["notice"])
+
+    def test_backup_reminder_default_keys_dir(self):
+        info = agora_bridge.get_backup_reminder_info()
+        self.assertIn(".config/kin_diary/keys", info["keys_dir"])
+        self.assertEqual(info["reminder"], "back this up.")
+
 
 if __name__ == "__main__":
     unittest.main()

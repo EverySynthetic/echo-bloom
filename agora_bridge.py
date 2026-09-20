@@ -426,3 +426,17 @@ def export_kin_diary(
     verify_bundle(bundle)
     verify_out = f"ok {bundle['mind']} entries {len(bundle.get('entries') or [])}"
     return bundle, verify_out
+
+
+def get_backup_reminder_info(keys_root: Optional[Path] = None) -> dict[str, str]:
+    """Return key backup reminder information for setup.
+
+    Setup shows the keys directory path and says back it up.
+    Echo Bloom does not upload keys anywhere.
+    """
+    keys_dir = get_keys_dir(keys_root)
+    return {
+        "keys_dir": str(keys_dir),
+        "reminder": "back this up.",
+        "notice": "Echo Bloom does not upload keys anywhere. Private keys live on metal controlled by the node steward.",
+    }

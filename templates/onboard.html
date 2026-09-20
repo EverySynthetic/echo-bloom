@@ -197,6 +197,19 @@
           {{ steward.custody_statement }}
         </blockquote>
 
+        <!-- Key backup reminder (Item 7) -->
+        <div class="onboard-backup-reminder" style="margin-top: 12px; padding: 10px 12px; background: rgba(255, 171, 145, 0.08); border-left: 3px solid var(--amber, #ffab91); border-radius: 4px; font-size: 0.8rem;">
+          <div style="font-weight: 600; color: var(--text); margin-bottom: 4px;">
+            KEYS DIRECTORY: <code style="font-size: 0.75rem;">{{ steward.keys_dir }}</code>
+          </div>
+          <div style="color: var(--amber, #ffab91); font-weight: 500; margin-bottom: 2px;">
+            back this up.
+          </div>
+          <div style="color: var(--text-dim); font-size: 0.75rem;">
+            Echo Bloom does not upload keys anywhere. Identity and continuity live on metal you control.
+          </div>
+        </div>
+
         <!-- Agora Node Toggle -->
         <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;">
           <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.82rem; color: var(--text);">

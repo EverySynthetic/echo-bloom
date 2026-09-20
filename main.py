@@ -2987,6 +2987,16 @@ async def api_agora_steward_key(_=Depends(require_auth)):
         return {"ok": False, "error": str(e)}
 
 
+@app.get("/api/agora/keys-info")
+async def api_agora_keys_info(_=Depends(require_auth)):
+    try:
+        import agora_bridge
+        info = agora_bridge.get_backup_reminder_info()
+        return {"ok": True, **info}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/api/agora/node-toggle")
 async def api_agora_node_toggle_get(_=Depends(require_auth)):
     try:
