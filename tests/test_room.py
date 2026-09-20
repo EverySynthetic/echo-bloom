@@ -27,6 +27,10 @@ import cluster as cl          # noqa: E402
 import main                   # noqa: E402
 import ollama_slot as oslot   # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+# The room moved to routers/chat.py in the 2026-09-20 router split.
+# _room_alive is a plain module global there now, not on main — patch it
+# where api_chat_room's closure actually looks it up.
+from routers import chat as chat_router  # noqa: E402
 
 main.app.dependency_overrides[main.require_auth] = lambda: True
 client = TestClient(main.app)
@@ -202,12 +206,12 @@ class Sequence(unittest.TestCase):
         async def alive(_request):
             return len(RECORDS) == 0
 
-        real = main._room_alive
-        main._room_alive = alive
+        real = chat_router._room_alive
+        chat_router._room_alive = alive
         try:
             room("hi")
         finally:
-            main._room_alive = real
+            chat_router._room_alive = real
         self.assertEqual([s["kin"] for s in SEEN], ["Eli"])
         self.assertEqual([r["kin"] for r in RECORDS], ["Eli"])
 
