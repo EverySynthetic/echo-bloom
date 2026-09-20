@@ -27,6 +27,7 @@ async def api_agora_steward_key(_=Depends(require_auth)):
         info = agora_bridge.get_or_create_steward_key()
         return {"ok": True, **info}
     except Exception as e:
+        log.warning("agora steward-key lookup failed: %s", e, exc_info=True)
         return {"ok": False, "error": str(e)}
 
 
@@ -37,6 +38,7 @@ async def api_agora_keys_info(_=Depends(require_auth)):
         info = agora_bridge.get_backup_reminder_info()
         return {"ok": True, **info}
     except Exception as e:
+        log.warning("agora keys-info lookup failed: %s", e, exc_info=True)
         return {"ok": False, "error": str(e)}
 
 
@@ -59,6 +61,7 @@ async def api_agora_node_toggle_get(_=Depends(require_auth)):
             "port": port,
         }
     except Exception as e:
+        log.warning("agora node-toggle status check failed: %s", e, exc_info=True)
         return {"ok": False, "error": str(e)}
 
 
@@ -113,6 +116,7 @@ async def api_agora_node_card(_=Depends(require_auth)):
         data = agora_bridge.get_node_card_data(node_name=node_name, port=port)
         return {"ok": True, **data}
     except Exception as e:
+        log.warning("agora node-card lookup failed: %s", e, exc_info=True)
         return {"ok": False, "error": str(e)}
 
 

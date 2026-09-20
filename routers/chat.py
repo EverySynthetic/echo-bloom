@@ -405,6 +405,7 @@ async def api_fetch_url(request: Request, _=Depends(require_auth)):
         text = await _fetch_page_text(url)
         return {"ok": True, "content": text, "url": url}
     except Exception as e:
+        log.warning("fetch-url failed for %s: %s", url, e, exc_info=True)
         return {"ok": False, "error": str(e)}
 
 

@@ -90,6 +90,7 @@ async def api_vault(
 
         return {"entries": entries, "total": total, "offset": offset, "limit": limit}
     except Exception:
+        log.warning("vault recall failed against %s", vault, exc_info=True)
         return {"entries": [], "total": 0, "offset": offset, "limit": limit,
                 "error": "vault_offline", "vault_url": vault}
 
@@ -132,6 +133,7 @@ async def api_vault_meta(_=Depends(require_auth)):
                 authors_data = await r.json()
         return {"layers": layers_data["layers"], "authors": authors_data["authors"]}
     except Exception:
+        log.warning("vault layers/authors fetch failed against %s", vault, exc_info=True)
         return {"layers": [], "authors": [], "error": "vault_offline"}
 
 
@@ -202,6 +204,7 @@ async def _vault_semantic_fallback(q: str, limit: int) -> dict:
             for m in memories
         ]}
     except Exception as e:
+        log.warning("vault semantic-search fallback failed: %s", e, exc_info=True)
         return {"results": [], "error": str(e)}
 
 

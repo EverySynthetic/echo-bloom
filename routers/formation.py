@@ -115,6 +115,7 @@ async def api_get_modelfile(name: str, _=Depends(require_auth)):
                 data = await r.json()
         return {"ok": True, "modelfile": data.get("modelfile", "")}
     except Exception as e:
+        log.warning("modelfile fetch failed for %s: %s", name, e, exc_info=True)
         return {"ok": False, "error": str(e)}
 
 
