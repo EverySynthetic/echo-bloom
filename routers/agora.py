@@ -2,14 +2,19 @@
 diary export. Moved out of main.py in the router split (2026-09-20) —
 routes only, unchanged.
 
-NOTE (found during the move, not fixed — out of scope for a move-only
-commit): four of these routes call socket.gethostname() with no `socket`
-import anywhere in main.py, module-level or local. Every path that reaches
-it raises NameError, caught by the surrounding `except Exception` and
-reported as {"ok": false, "error": "name 'socket' is not defined"}. See the
-router-split report for detail and reproduction.
+2026-09-20, second fix (Don's call): four of these routes called
+socket.gethostname() with no `socket` import anywhere in main.py,
+module-level or local. Every path that reached it raised NameError,
+caught by the surrounding `except Exception` and reported as
+{"ok": false, "error": "name 'socket' is not defined"} — on a fresh
+install, every time, since node_name isn't set until Setup's node toggle
+is used once. Reproduced against both the original main.py and the split
+before fixing (see REPORT_sonnet_routers.md) — the split didn't cause it,
+it's been there since the agora bridge merged (e8b0c92). Fixed by adding
+the missing import below; nothing else about these routes changed.
 """
 
+import socket
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
