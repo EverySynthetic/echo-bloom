@@ -5,6 +5,7 @@ is watching, so a plain FileHandler would grow without bound.
 """
 
 import logging
+import os
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -27,9 +28,11 @@ def setup(level=logging.INFO) -> logging.Logger:
     )
 
     try:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        env_file = os.environ.get("ECHO_BLOOM_LOG_FILE")
+        log_file = Path(env_file).expanduser() if env_file else LOG_FILE
+        log_file.parent.mkdir(parents=True, exist_ok=True)
         fh = RotatingFileHandler(
-            LOG_FILE, maxBytes=5_000_000, backupCount=3, encoding="utf-8"
+            log_file, maxBytes=5_000_000, backupCount=3, encoding="utf-8"
         )
         fh.setLevel(logging.DEBUG)    # full detail on disk
         fh.setFormatter(fmt)
