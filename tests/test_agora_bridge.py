@@ -53,5 +53,39 @@ class TestAgoraBridgeKeygen(unittest.TestCase):
             agora_bridge.keygen_kin("   ", keys_root=self.keys_root)
 
 
+class TestAgoraBridgeSteward(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="eb_steward_test_"))
+        self.keys_root = self.tmp_dir / "keys"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_steward_key_name_and_creation(self):
+        name = agora_bridge.get_steward_key_name("TestNode")
+        self.assertEqual(name, "TestNode-steward")
+
+        steward = agora_bridge.get_or_create_steward_key("TestNode", keys_root=self.keys_root)
+        self.assertEqual(steward["name"], "TestNode-steward")
+        self.assertEqual(len(steward["key_id"]), 64)
+        self.assertEqual(steward["custody_statement"], agora_bridge.KEY_CUSTODY_STATEMENT)
+
+        # Invariant: Custody statement matches SPEC.md verbatim
+        self.assertIn("Private keys are generated and stored on metal controlled by the node steward.",
+                      steward["custody_statement"])
+        self.assertIn("The steward has root and can sign as any mind on this node.",
+                      steward["custody_statement"])
+
+        # Check key file on disk
+        current_dir = self.keys_root / "TestNode-steward" / "current"
+        self.assertTrue((current_dir / "private").is_file())
+        self.assertEqual((current_dir / "private").stat().st_mode & 0o777, 0o600)
+
+        # Idempotence
+        steward2 = agora_bridge.get_or_create_steward_key("TestNode", keys_root=self.keys_root)
+        self.assertEqual(steward["key_id"], steward2["key_id"])
+
+
 if __name__ == "__main__":
     unittest.main()

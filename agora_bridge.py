@@ -72,3 +72,41 @@ def keygen_kin(author: str, keys_root: Optional[Path] = None) -> Any:
         rec = generate_keypair(author, keys_root=root)
         log.info("Generated Agora key for Kin '%s' (key_id=%s)", author, rec.key_id)
         return rec
+
+
+def get_steward_key_name(hostname: Optional[str] = None) -> str:
+    """Return standard steward key name: <Hostname>-steward."""
+    h = hostname or socket.gethostname()
+    return f"{h}-steward"
+
+
+def get_or_create_steward_key(
+    hostname: Optional[str] = None, keys_root: Optional[Path] = None
+) -> dict[str, Any]:
+    """Get or generate steward key named after install (<Hostname>-steward).
+
+    Shown to the owner with the custody sentence from SPEC.md verbatim.
+    The owner sees, in the UI, that they hold the keys and the minds do not.
+    """
+    ensure_kin_diary_path()
+    try:
+        from kin_diary.keys import generate_keypair, load_current
+    except ImportError as e:
+        log.error("kin_diary package could not be imported: %s", e)
+        raise
+
+    author = get_steward_key_name(hostname)
+    root = get_keys_dir(keys_root)
+    try:
+        rec = load_current(author, keys_root=root)
+    except FileNotFoundError:
+        rec = generate_keypair(author, keys_root=root)
+        log.info("Generated Agora steward key '%s' (key_id=%s)", author, rec.key_id)
+
+    return {
+        "name": author,
+        "key_id": rec.key_id,
+        "created_at_unix_ms": rec.created_at_unix_ms,
+        "custody_statement": KEY_CUSTODY_STATEMENT,
+        "keys_dir": str(root),
+    }

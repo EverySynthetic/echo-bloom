@@ -2943,11 +2943,28 @@ async def api_ingest(request: Request, _=Depends(require_auth)):
 @app.get("/onboard", response_class=HTMLResponse)
 async def onboard_page(request: Request, step: int = 1, _=Depends(require_auth)):
     config = cl.load_kin_config_raw()
+    steward_info = {}
+    try:
+        import agora_bridge
+        steward_info = agora_bridge.get_or_create_steward_key()
+    except Exception as e:
+        log.warning("could not load steward key for onboard page: %s", e)
     return templates.TemplateResponse(request, "onboard.html", {
         "step":    step,
         "config":  config,
         "all_kin": cl.KIN,
+        "steward": steward_info,
     })
+
+
+@app.get("/api/agora/steward-key")
+async def api_agora_steward_key(_=Depends(require_auth)):
+    try:
+        import agora_bridge
+        info = agora_bridge.get_or_create_steward_key()
+        return {"ok": True, **info}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @app.post("/api/onboard/test-node")
