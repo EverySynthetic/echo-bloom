@@ -361,3 +361,68 @@ def get_node_card_data(
         "service_active": active,
         "facts": facts,
     }
+
+
+def get_vault_entries_for_author(author: str, db_path: Optional[Path] = None) -> list[dict[str, Any]]:
+    """Retrieve memories from vault database for author, shaped for kin_diary."""
+    path = db_path or (Path.home() / ".local" / "share" / "echo_bloom" / "vault.db")
+    if not path.is_file():
+        return []
+
+    import sqlite3
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    entries = []
+    try:
+        cursor = conn.execute(
+            "SELECT content, layer, author, tags, created_at FROM memories WHERE author = ? ORDER BY id ASC",
+            (author,),
+        )
+        for row in cursor.fetchall():
+            entries.append({
+                "author": row["author"] or author,
+                "timestamp": row["created_at"] or "",
+                "layer": row["layer"] or "general",
+                "source": "experienced",
+                "domain": "",
+                "tags": row["tags"] or "",
+                "content": row["content"] or "",
+            })
+    finally:
+        conn.close()
+    return entries
+
+
+def export_kin_diary(
+    author: str,
+    node_name: Optional[str] = None,
+    entries: Optional[list[dict[str, Any]]] = None,
+    db_path: Optional[Path] = None,
+    keys_root: Optional[Path] = None,
+) -> tuple[dict[str, Any], str]:
+    """Build and verify a signed export bundle for author.
+
+    Calls the same code path as `python3 -m kin_diary export` and `python3 -m kin_diary verify`.
+    Returns (bundle, verify_output_string).
+    """
+    ensure_kin_diary_path()
+    from kin_diary.bundle import export_bundle, verify_bundle
+
+    # Ensure Kin has a key
+    keygen_kin(author, keys_root=keys_root)
+
+    steward_node = node_name or socket.gethostname()
+    if entries is None:
+        entries = get_vault_entries_for_author(author, db_path=db_path)
+
+    bundle = export_bundle(
+        author=author,
+        entries=entries,
+        steward_node=steward_node,
+        keys_root=keys_root,
+    )
+
+    # Verify bundle output
+    verify_bundle(bundle)
+    verify_out = f"ok {bundle['mind']} entries {len(bundle.get('entries') or [])}"
+    return bundle, verify_out

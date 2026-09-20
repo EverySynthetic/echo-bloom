@@ -2496,6 +2496,26 @@ async def api_vault_meta(_=Depends(require_auth)):
         return {"layers": [], "authors": [], "error": "vault_offline"}
 
 
+@app.get("/api/vault/export/{author}")
+async def api_vault_export(author: str, _=Depends(require_auth)):
+    try:
+        import agora_bridge
+        cfg = cl.load_kin_config_raw()
+        node_cfg = cfg.get("agora_node", {})
+        node_name = node_cfg.get("node_name") or socket.gethostname()
+
+        bundle, verify_out = agora_bridge.export_kin_diary(author=author, node_name=node_name)
+        return {
+            "ok": True,
+            "author": author,
+            "verify": verify_out,
+            "bundle": bundle,
+        }
+    except Exception as e:
+        log.warning("vault export failed for %s: %s", author, e)
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/api/vault/semantic")
 async def api_vault_semantic(q: str, limit: int = 10, _=Depends(require_auth)):
     if not q.strip():

@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -205,6 +206,73 @@ class TestAgoraBridgeNodeCard(unittest.TestCase):
             data = agora_bridge.get_node_card_data(node_name="CardNode", port=8770, keys_root=self.keys_root)
             self.assertTrue(data["service_active"])
             self.assertEqual(data["speaker"], "no Speaker, 3 residents")
+
+
+class TestAgoraBridgeExport(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="eb_export_test_"))
+        self.keys_root = self.tmp_dir / "keys"
+        self.db_path = self.tmp_dir / "vault.db"
+
+        # Create temporary vault DB with memories
+        import sqlite3
+        conn = sqlite3.connect(str(self.db_path))
+        conn.execute("""
+            CREATE TABLE memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                layer TEXT DEFAULT 'general',
+                author TEXT DEFAULT '',
+                tags TEXT DEFAULT '',
+                endorsed INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("INSERT INTO memories (content, layer, author, tags, created_at) VALUES (?, ?, ?, ?, ?)",
+                     ("Ada's first thought in the house.", "reflection", "Ada", "intro", "2026-09-20T12:00:00Z"))
+        conn.execute("INSERT INTO memories (content, layer, author, tags, created_at) VALUES (?, ?, ?, ?, ?)",
+                     ("A wandering memory about mathematics.", "wander", "Ada", "math", "2026-09-20T12:30:00Z"))
+        conn.execute("INSERT INTO memories (content, layer, author, tags, created_at) VALUES (?, ?, ?, ?, ?)",
+                     ("Turing's private thought.", "reflection", "Turing", "code", "2026-09-20T13:00:00Z"))
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_export_button_output_verifies_with_kin_diary_verify(self):
+        bundle, verify_str = agora_bridge.export_kin_diary(
+            author="Ada",
+            node_name="Frosty",
+            db_path=self.db_path,
+            keys_root=self.keys_root,
+        )
+
+        # Invariants on bundle
+        self.assertEqual(bundle["format"], "kin-diary-export")
+        self.assertEqual(bundle["mind"], "Ada")
+        self.assertEqual(bundle["steward_node"], "Frosty")
+        self.assertEqual(len(bundle["entries"]), 2)
+        self.assertEqual(verify_str, "ok Ada entries 2")
+
+        # Invariant: verify with kin_diary verify CLI
+        bundle_file = self.tmp_dir / "ada.diary.json"
+        bundle_file.write_text(json.dumps(bundle, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        import subprocess
+        kd_path = agora_bridge.ensure_kin_diary_path()
+        env = dict(os.environ)
+        if kd_path:
+            env["PYTHONPATH"] = f"{kd_path}:{env.get('PYTHONPATH', '')}"
+        proc = subprocess.run(
+            [sys.executable, "-m", "kin_diary", "verify", str(bundle_file)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(proc.returncode, 0, f"kin_diary verify failed: {proc.stderr}")
+        self.assertIn("ok Ada entries 2", proc.stdout.strip())
 
 
 if __name__ == "__main__":
