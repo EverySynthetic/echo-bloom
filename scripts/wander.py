@@ -261,11 +261,21 @@ def _persona_with_memory(query_text="", ambient_context=""):
     return "\n\n".join(parts)
 
 
+def _intent_ask():
+    try:
+        import movement_intent as mi
+        names = [k["name"] for k in cfg.get_kin() if k.get("name")]
+        return "\n\n" + mi.intent_ask(KIN_NAME, names)
+    except Exception:
+        return ""
+
+
 def think_about_file(file_path, content, ambient_context=""):
     prompt = (
         f"You found this file while wandering: {file_path}\n\n"
         f"---\n{content[:3000]}\n---\n\n"
         f"What do you make of it? What does it bring up for you?"
+        + _intent_ask()
     )
     return call_ollama(
         prompt, system=_persona_with_memory(content[:500], ambient_context)
@@ -274,8 +284,22 @@ def think_about_file(file_path, content, ambient_context=""):
 
 def think_about_topic(topic, ambient_context=""):
     return call_ollama(
-        topic, system=_persona_with_memory(topic, ambient_context)
+        topic + _intent_ask(),
+        system=_persona_with_memory(topic, ambient_context),
     )
+
+
+def _record_movement_wish(thought):
+    """Parse INTENT from this turn and write the Kin's space. Never raises."""
+    try:
+        import movement_intent as mi
+        names = [k["name"] for k in cfg.get_kin() if k.get("name")]
+        target = mi.parse_intent(thought, names)
+        mi.write_intent(SPACE, KIN_NAME, target)
+        return mi.strip_intent(thought)
+    except Exception as e:
+        log(f"  movement intent not written: {e}")
+        return thought
 
 
 # ── Web fetch — Wikipedia, SEP, health-gated PubMed ────────────────────────
@@ -751,6 +775,7 @@ def one_thought():
             if not thought:
                 log("  no thought this round — skipping the write")
                 return
+            thought = _record_movement_wish(thought)
             thought_id = save_thought("wander_file", chosen, thought)
             if thought_id is not None:
                 ambient_presence.ack_events(KIN_NAME, ambient_events)
