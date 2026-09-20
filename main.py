@@ -2967,6 +2967,68 @@ async def api_agora_steward_key(_=Depends(require_auth)):
         return {"ok": False, "error": str(e)}
 
 
+@app.get("/api/agora/node-toggle")
+async def api_agora_node_toggle_get(_=Depends(require_auth)):
+    try:
+        import agora_bridge
+        cfg = cl.load_kin_config_raw()
+        node_cfg = cfg.get("agora_node", {})
+        default_name = socket.gethostname()
+        node_name = node_cfg.get("node_name") or default_name
+        port = int(node_cfg.get("port", 8770))
+        active = agora_bridge.is_node_service_active(node_name)
+        return {
+            "ok": True,
+            "enabled": active,
+            "active": active,
+            "node_name": node_name,
+            "default_name": default_name,
+            "port": port,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/agora/node-toggle")
+async def api_agora_node_toggle_post(request: Request, _=Depends(require_auth)):
+    try:
+        import agora_bridge
+        body = await request.json()
+        enabled = bool(body.get("enabled"))
+        cfg = cl.load_kin_config_raw()
+        node_cfg = cfg.get("agora_node", {})
+        default_name = socket.gethostname()
+        node_name = (body.get("node_name") or node_cfg.get("node_name") or default_name).strip()
+        port = int(body.get("port") or node_cfg.get("port", 8770))
+
+        if enabled:
+            agora_bridge.enable_node_service(node_name, port)
+        else:
+            agora_bridge.disable_node_service(node_name)
+
+        config_path = Path.home() / ".config/kin_app/kin_config.json"
+        if config_path.exists():
+            merged = dict(cfg)
+            merged["agora_node"] = {
+                "enabled": enabled,
+                "node_name": node_name,
+                "port": port,
+            }
+            _atomic_write_json(config_path, merged)
+            cl.reload_config()
+
+        return {
+            "ok": True,
+            "enabled": enabled,
+            "active": agora_bridge.is_node_service_active(node_name),
+            "node_name": node_name,
+            "port": port,
+        }
+    except Exception as e:
+        log.warning("agora node toggle failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
 @app.post("/api/onboard/test-node")
 async def api_test_node(request: Request, _=Depends(require_auth)):
     body = await request.json()

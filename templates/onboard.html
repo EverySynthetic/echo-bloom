@@ -196,6 +196,18 @@
         <blockquote style="margin: 0; padding: 8px 12px; border-left: 2px solid var(--text-dim); background: rgba(0,0,0,0.2); font-size: 0.78rem; font-style: italic; color: var(--text);">
           {{ steward.custody_statement }}
         </blockquote>
+
+        <!-- Agora Node Toggle -->
+        <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.82rem; color: var(--text);">
+            <input type="checkbox" id="agora-node-toggle" onchange="toggleAgoraNode(this.checked)">
+            <span>Stand this install up as an Agora node</span>
+          </label>
+          <span id="agora-toggle-status" style="font-size: 0.78rem; color: var(--text-dim);">off</span>
+        </div>
+        <div id="agora-node-details" style="display:none; margin-top: 8px; font-size: 0.78rem; color: var(--text-dim);">
+          Node: <code id="agora-node-name"></code> on port <code id="agora-node-port">8770</code>
+        </div>
       </div>
       {% endif %}
       <a href="/" class="onboard-vault-link">GO TO DASHBOARD →</a>
@@ -834,5 +846,67 @@ function saveAndContinue() { saveAll(); }
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+
+// ── Agora Node Toggle ────────────────────────────────────────────────────────
+async function loadAgoraToggle() {
+  try {
+    const res = await ebFetch('/api/agora/node-toggle');
+    const toggle = document.getElementById('agora-node-toggle');
+    const status = document.getElementById('agora-toggle-status');
+    const details = document.getElementById('agora-node-details');
+    const nameEl = document.getElementById('agora-node-name');
+    const portEl = document.getElementById('agora-node-port');
+    if (toggle) {
+      toggle.checked = !!res.enabled;
+      if (status) status.textContent = res.active ? 'active (:8770)' : (res.enabled ? 'enabled' : 'off');
+      if (details) details.style.display = res.enabled ? 'block' : 'none';
+      if (nameEl) nameEl.textContent = res.node_name;
+      if (portEl) portEl.textContent = res.port;
+    }
+  } catch(e) {}
+}
+
+async function toggleAgoraNode(enable) {
+  const status = document.getElementById('agora-toggle-status');
+  const details = document.getElementById('agora-node-details');
+  const nameEl = document.getElementById('agora-node-name');
+  const portEl = document.getElementById('agora-node-port');
+  let nodeName = null;
+  if (enable) {
+    let defName = "Node";
+    try {
+      const cur = await (await fetch('/api/agora/node-toggle')).json();
+      defName = cur.default_name || cur.node_name || "Node";
+    } catch(e) {}
+    const chosen = prompt("Agora node name:", defName);
+    if (chosen === null) {
+      document.getElementById('agora-node-toggle').checked = false;
+      return;
+    }
+    nodeName = chosen.trim() || defName;
+  }
+  if (status) status.textContent = enable ? 'starting...' : 'stopping...';
+  try {
+    const res = await ebFetch('/api/agora/node-toggle', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: enable, node_name: nodeName, port: 8770}),
+    });
+    if (res.ok) {
+      if (status) status.textContent = res.active ? 'active (:8770)' : (res.enabled ? 'enabled' : 'off');
+      if (details) details.style.display = res.enabled ? 'block' : 'none';
+      if (nameEl) nameEl.textContent = res.node_name;
+      if (portEl) portEl.textContent = res.port;
+    } else {
+      alert("Agora node toggle failed: " + (res.error || "unknown error"));
+      loadAgoraToggle();
+    }
+  } catch(e) {
+    alert("Agora node toggle error: " + e.message);
+    loadAgoraToggle();
+  }
+}
+
+loadAgoraToggle();
 </script>
 {% endblock %}

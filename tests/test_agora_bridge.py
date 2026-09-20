@@ -87,5 +87,69 @@ class TestAgoraBridgeSteward(unittest.TestCase):
         self.assertEqual(steward["key_id"], steward2["key_id"])
 
 
+class TestAgoraBridgeNodeService(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="eb_node_test_"))
+        self.keys_root = self.tmp_dir / "keys"
+        self.unit_dir = self.tmp_dir / "systemd"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_toggle_on_writes_unit_with_right_execstart_and_no_private_keys(self):
+        steward = agora_bridge.get_or_create_steward_key("EchoNode", keys_root=self.keys_root)
+        ada = agora_bridge.keygen_kin("Ada", keys_root=self.keys_root)
+        turing = agora_bridge.keygen_kin("Turing", keys_root=self.keys_root)
+
+        unit_path = agora_bridge.write_node_service(
+            node_name="EchoNode",
+            port=8770,
+            steward_key_id=steward["key_id"],
+            kin_keys={"Ada": ada.key_id, "Turing": turing.key_id},
+            unit_dir=self.unit_dir,
+            keys_root=self.keys_root,
+        )
+
+        self.assertTrue(unit_path.is_file(), "Service unit file must exist")
+        self.assertEqual(unit_path.name, "agora-echonode.service")
+
+        content = unit_path.read_text(encoding="utf-8")
+
+        # Invariants on ExecStart
+        self.assertIn("ExecStart=/usr/bin/python3 -u ", content)
+        self.assertIn("EchoNode 8770", content)
+        self.assertIn(f"steward={steward['key_id']}", content)
+        self.assertIn(f"Ada={ada.key_id}", content)
+        self.assertIn(f"Turing={turing.key_id}", content)
+
+        # Invariant: NO private key material in unit file
+        self.assertNotIn("BEGIN PRIVATE KEY", content)
+        self.assertNotIn("PRIVATE", content)
+        for author in ("EchoNode-steward", "Ada", "Turing"):
+            priv_bytes = (self.keys_root / author / "current" / "private").read_bytes()
+            self.assertNotIn(priv_bytes.hex(), content, f"Private key hex for {author} must not be in service file")
+
+        # Invariant: standard restart and logging
+        self.assertIn("Restart=on-failure", content)
+        self.assertIn("StandardOutput=append:%h/echonode_node.log", content)
+
+    def test_toggle_off_disables_service(self):
+        from unittest.mock import patch
+
+        calls = []
+
+        def mock_systemctl(args):
+            calls.append(list(args))
+            from subprocess import CompletedProcess
+            return CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+        with patch("agora_bridge.run_systemctl_user", side_effect=mock_systemctl):
+            agora_bridge.disable_node_service("EchoNode")
+
+        self.assertIn(["stop", "agora-echonode.service"], calls)
+        self.assertIn(["disable", "agora-echonode.service"], calls)
+
+
 if __name__ == "__main__":
     unittest.main()
