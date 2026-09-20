@@ -207,6 +207,17 @@ def main():
         print()
         print(f"  Welcome, {result['name']}.")
         print()
+
+        # Generate Agora keypair for this Kin at naming
+        try:
+            repo_dir = Path(__file__).resolve().parent.parent
+            if str(repo_dir) not in sys.path:
+                sys.path.insert(0, str(repo_dir))
+            import agora_bridge
+            agora_bridge.keygen_kin(result["name"])
+        except Exception as e:
+            pass
+
         result_file = os.environ.get("ECHO_BLOOM_RESULT_FILE")
         if result_file:
             with open(result_file, "w", encoding="utf-8") as f:

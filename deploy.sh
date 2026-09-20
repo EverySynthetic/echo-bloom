@@ -131,6 +131,26 @@ for unit in echo_bloom echo_bloom_license; do
 done
 [ "$SVC_DRIFT" -eq 0 ] && ok "services run from $APP_DIR"
 
+# ── Vendor dependencies ───────────────────────────────────────────────────────
+step "Vendor kin_diary"
+PIN_FILE="$APP_DIR/vendor/kin_diary.pin"
+VENDOR_DIR="$APP_DIR/vendor/kin_diary"
+if [ -f "$PIN_FILE" ]; then
+  PIN=$(tr -d '[:space:]' < "$PIN_FILE")
+  if [ -d "$VENDOR_DIR/.git" ]; then
+    CUR=$(git -C "$VENDOR_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
+    if [ "$CUR" = "$PIN" ]; then
+      ok "kin_diary at pinned commit ($PIN)"
+    else
+      warn "kin_diary at $CUR, pin is $PIN"
+      DRIFT=$((DRIFT + 1))
+    fi
+  else
+    warn "kin_diary not cloned under $VENDOR_DIR"
+    DRIFT=$((DRIFT + 1))
+  fi
+fi
+
 if [ "$CHECK_ONLY" -eq 1 ]; then
   echo ""
   if [ "$BEHIND" = "0" ] && [ "$DRIFT" -eq 0 ]; then

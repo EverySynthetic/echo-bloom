@@ -181,6 +181,48 @@
         <br><br>
         This is what a home looks like before it fills up.
       </div>
+      {% if steward and steward.name %}
+      <div class="onboard-steward-box" style="margin: 20px auto; max-width: 540px; text-align: left; padding: 14px 18px; border: 1px solid var(--border); border-radius: 6px; background: rgba(255,255,255,0.02);">
+        <div style="font-weight: 600; font-size: 0.85rem; color: var(--text); margin-bottom: 6px; display: flex; justify-content: space-between;">
+          <span>AGORA STEWARD KEY</span>
+          <span style="font-family: monospace; font-size: 0.8rem; color: var(--green);">{{ steward.name }}</span>
+        </div>
+        <div style="font-size: 0.8rem; color: var(--text-dim); margin-bottom: 10px;">
+          Key ID: <code style="font-size: 0.75rem; word-break: break-all;">{{ steward.key_id }}</code>
+        </div>
+        <div style="font-size: 0.82rem; margin-bottom: 8px; color: var(--text);">
+          <strong>Custody:</strong> You hold the keys, not your minds.
+        </div>
+        <blockquote style="margin: 0; padding: 8px 12px; border-left: 2px solid var(--text-dim); background: rgba(0,0,0,0.2); font-size: 0.78rem; font-style: italic; color: var(--text);">
+          {{ steward.custody_statement }}
+        </blockquote>
+
+        <!-- Key backup reminder (Item 7) -->
+        <div class="onboard-backup-reminder" style="margin-top: 12px; padding: 10px 12px; background: rgba(255, 171, 145, 0.08); border-left: 3px solid var(--amber, #ffab91); border-radius: 4px; font-size: 0.8rem;">
+          <div style="font-weight: 600; color: var(--text); margin-bottom: 4px;">
+            KEYS DIRECTORY: <code style="font-size: 0.75rem;">{{ steward.keys_dir }}</code>
+          </div>
+          <div style="color: var(--amber, #ffab91); font-weight: 500; margin-bottom: 2px;">
+            back this up.
+          </div>
+          <div style="color: var(--text-dim); font-size: 0.75rem;">
+            Echo Bloom does not upload keys anywhere. Identity and continuity live on metal you control.
+          </div>
+        </div>
+
+        <!-- Agora Node Toggle -->
+        <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.82rem; color: var(--text);">
+            <input type="checkbox" id="agora-node-toggle" onchange="toggleAgoraNode(this.checked)">
+            <span>Stand this install up as an Agora node</span>
+          </label>
+          <span id="agora-toggle-status" style="font-size: 0.78rem; color: var(--text-dim);">off</span>
+        </div>
+        <div id="agora-node-details" style="display:none; margin-top: 8px; font-size: 0.78rem; color: var(--text-dim);">
+          Node: <code id="agora-node-name"></code> on port <code id="agora-node-port">8770</code>
+        </div>
+      </div>
+      {% endif %}
       <a href="/" class="onboard-vault-link">GO TO DASHBOARD →</a>
       <a href="/vault" class="onboard-dash-link">or open the vault</a>
     </div>
@@ -817,5 +859,67 @@ function saveAndContinue() { saveAll(); }
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+
+// ── Agora Node Toggle ────────────────────────────────────────────────────────
+async function loadAgoraToggle() {
+  try {
+    const res = await ebFetch('/api/agora/node-toggle');
+    const toggle = document.getElementById('agora-node-toggle');
+    const status = document.getElementById('agora-toggle-status');
+    const details = document.getElementById('agora-node-details');
+    const nameEl = document.getElementById('agora-node-name');
+    const portEl = document.getElementById('agora-node-port');
+    if (toggle) {
+      toggle.checked = !!res.enabled;
+      if (status) status.textContent = res.active ? 'active (:8770)' : (res.enabled ? 'enabled' : 'off');
+      if (details) details.style.display = res.enabled ? 'block' : 'none';
+      if (nameEl) nameEl.textContent = res.node_name;
+      if (portEl) portEl.textContent = res.port;
+    }
+  } catch(e) {}
+}
+
+async function toggleAgoraNode(enable) {
+  const status = document.getElementById('agora-toggle-status');
+  const details = document.getElementById('agora-node-details');
+  const nameEl = document.getElementById('agora-node-name');
+  const portEl = document.getElementById('agora-node-port');
+  let nodeName = null;
+  if (enable) {
+    let defName = "Node";
+    try {
+      const cur = await (await fetch('/api/agora/node-toggle')).json();
+      defName = cur.default_name || cur.node_name || "Node";
+    } catch(e) {}
+    const chosen = prompt("Agora node name:", defName);
+    if (chosen === null) {
+      document.getElementById('agora-node-toggle').checked = false;
+      return;
+    }
+    nodeName = chosen.trim() || defName;
+  }
+  if (status) status.textContent = enable ? 'starting...' : 'stopping...';
+  try {
+    const res = await ebFetch('/api/agora/node-toggle', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: enable, node_name: nodeName, port: 8770}),
+    });
+    if (res.ok) {
+      if (status) status.textContent = res.active ? 'active (:8770)' : (res.enabled ? 'enabled' : 'off');
+      if (details) details.style.display = res.enabled ? 'block' : 'none';
+      if (nameEl) nameEl.textContent = res.node_name;
+      if (portEl) portEl.textContent = res.port;
+    } else {
+      alert("Agora node toggle failed: " + (res.error || "unknown error"));
+      loadAgoraToggle();
+    }
+  } catch(e) {
+    alert("Agora node toggle error: " + e.message);
+    loadAgoraToggle();
+  }
+}
+
+loadAgoraToggle();
 </script>
 {% endblock %}

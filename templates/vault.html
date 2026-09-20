@@ -11,6 +11,7 @@
       <button class="mode-btn mode-active" id="btn-feed" onclick="setMode('feed')">FEED</button>
       <button class="mode-btn" id="btn-semantic" onclick="setMode('semantic')">SEMANTIC SEARCH</button>
       <button class="mode-btn" id="btn-ingest" onclick="setMode('ingest')">INGEST</button>
+      <button class="mode-btn" id="btn-export" onclick="setMode('export')">EXPORT</button>
     </div>
   </div>
 
@@ -67,6 +68,26 @@
     </div>
   </div>
 
+  <!-- Export mode controls -->
+  <div class="vault-controls" id="export-controls" style="display:none; flex-direction:column; align-items:stretch">
+    <div class="ingest-form" style="max-width: 640px;">
+      <div style="font-weight:bold; margin-bottom:6px; font-size:0.9rem;">EXPORT SIGNED DIARY BUNDLE</div>
+      <div class="ingest-hint" style="margin-bottom:14px;">
+        Signed with each Kin's Agora key. Verifiable by any Agora node.
+      </div>
+      <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px;">
+        {% for k in all_kin %}
+        <button class="ctrl-btn" type="button" onclick="exportKinDiary('{{ k.name }}', this)">Export {{ k.name }}'s diary</button>
+        {% endfor %}
+      </div>
+      <div id="export-output" style="display:none; margin-top:12px; padding:14px; border:1px solid var(--border); border-radius:6px; background:rgba(0,0,0,0.25);">
+        <div style="font-size:0.75rem; color:var(--text-dim); text-transform:uppercase; margin-bottom:4px;">Verification Output:</div>
+        <pre id="export-verify-text" style="font-size:0.85rem; color:var(--green); margin:0 0 12px 0; font-family:monospace; background:rgba(0,0,0,0.3); padding:8px; border-radius:4px;"></pre>
+        <a id="export-download-btn" class="ctrl-btn ctrl-start" href="#" download style="text-decoration:none; display:inline-block;">DOWNLOAD SIGNED BUNDLE</a>
+      </div>
+    </div>
+  </div>
+
   <!-- Semantic mode controls -->
   <div class="vault-controls" id="semantic-controls" style="display:none">
     <input class="vault-search-input vault-search-wide" id="semantic-query" type="text"
@@ -109,13 +130,51 @@ function setMode(m) {
   document.getElementById('btn-feed').classList.toggle('mode-active', m === 'feed');
   document.getElementById('btn-semantic').classList.toggle('mode-active', m === 'semantic');
   document.getElementById('btn-ingest').classList.toggle('mode-active', m === 'ingest');
+  document.getElementById('btn-export').classList.toggle('mode-active', m === 'export');
   document.getElementById('feed-controls').style.display     = m === 'feed'     ? 'flex' : 'none';
   document.getElementById('semantic-controls').style.display = m === 'semantic' ? 'flex' : 'none';
   document.getElementById('ingest-controls').style.display   = m === 'ingest'   ? 'flex' : 'none';
+  document.getElementById('export-controls').style.display   = m === 'export'   ? 'flex' : 'none';
   document.getElementById('vault-pagination').style.display  = m === 'feed'     ? 'flex' : 'none';
   if (m === 'feed') loadFeed();
-  else if (m === 'ingest') document.getElementById('vault-entries').innerHTML = '';
+  else if (m === 'ingest' || m === 'export') document.getElementById('vault-entries').innerHTML = '';
   else document.getElementById('vault-entries').innerHTML = '<div class="vault-empty">Enter a query to search memory by meaning.</div>';
+}
+
+// ── Export ───────────────────────────────────────────────────────────────────
+
+async function exportKinDiary(kinName, btn) {
+  const origText = btn.textContent;
+  btn.textContent = 'EXPORTING...';
+  btn.disabled = true;
+  const outBox = document.getElementById('export-output');
+  const verifyEl = document.getElementById('export-verify-text');
+  const dlBtn = document.getElementById('export-download-btn');
+  outBox.style.display = 'none';
+
+  try {
+    const res = await ebFetch('/api/vault/export/' + encodeURIComponent(kinName));
+    if (!res.ok) {
+      alert("Export failed: " + (res.error || "unknown error"));
+      return;
+    }
+
+    // Contract: The page shows verify output before offering the file.
+    verifyEl.textContent = res.verify || 'ok';
+
+    const blob = new Blob([JSON.stringify(res.bundle, null, 2)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    dlBtn.href = url;
+    dlBtn.download = `${kinName.toLowerCase()}.diary.json`;
+    dlBtn.textContent = `DOWNLOAD ${kinName.toUpperCase()}'S DIARY (${(blob.size / 1024).toFixed(1)} KB)`;
+
+    outBox.style.display = 'block';
+  } catch(e) {
+    alert("Export error: " + e.message);
+  } finally {
+    btn.textContent = origText;
+    btn.disabled = false;
+  }
 }
 
 // ── Meta (layers + authors) ──────────────────────────────────────────────────
