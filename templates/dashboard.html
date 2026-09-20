@@ -33,6 +33,47 @@
     </div>
   </section>
 
+  <!-- Agora Node Card (read-only v1) -->
+  <section class="agora-section" style="margin-bottom: 28px;">
+    <div class="section-header" style="display:flex; justify-content:space-between; align-items:center;">
+      <span>AGORA NODE</span>
+      <span id="agora-card-service-badge" class="node-role" style="text-transform:uppercase; font-size:0.75rem;">CHECKING...</span>
+    </div>
+    <div id="agora-card-body" class="node-row" style="display:block; padding:16px; background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:6px;">
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:16px; font-size:0.85rem;">
+        <div>
+          <div style="color:var(--text-dim); font-size:0.75rem; text-transform:uppercase;">Node Name &amp; Port</div>
+          <div style="font-weight:bold; margin-top:2px;">
+            <span id="agora-card-name">—</span> :<span id="agora-card-port">8770</span>
+          </div>
+        </div>
+        <div>
+          <div style="color:var(--text-dim); font-size:0.75rem; text-transform:uppercase;">Speaker</div>
+          <div style="font-weight:bold; margin-top:2px;" id="agora-card-speaker">—</div>
+        </div>
+        <div>
+          <div style="color:var(--text-dim); font-size:0.75rem; text-transform:uppercase;">Service Status</div>
+          <div style="font-weight:bold; margin-top:2px;" id="agora-card-status">—</div>
+        </div>
+      </div>
+
+      <div style="margin-top:14px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.06); font-size:0.8rem;">
+        <div style="margin-bottom:6px;">
+          <span style="color:var(--text-dim);">Node Key ID:</span>
+          <code id="agora-card-node-key" style="font-size:0.75rem; word-break:break-all;">—</code>
+        </div>
+        <div style="margin-bottom:8px;">
+          <span style="color:var(--text-dim);">Steward Key ID:</span>
+          <code id="agora-card-steward-key" style="font-size:0.75rem; word-break:break-all;">—</code>
+        </div>
+        <div style="color:var(--text-dim); font-size:0.75rem; margin-bottom:4px; text-transform:uppercase;">Resident Keys:</div>
+        <div id="agora-card-residents" style="display:flex; flex-direction:column; gap:4px; font-size:0.78rem;">
+          <span style="color:var(--text-dim);">loading...</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- Roundtable controls -->
   <section class="controls-section">
     <div class="section-header">ROUNDTABLE</div>
@@ -238,6 +279,60 @@ async function startTunnel() {
 }
 
 loadRemote();
+
+// ── Agora Node Card ─────────────────────────────────────────────────────────
+
+async function loadAgoraCard() {
+  try {
+    const res = await ebFetch('/api/agora/node-card');
+    if (!res.ok) return;
+    const nameEl = document.getElementById('agora-card-name');
+    const portEl = document.getElementById('agora-card-port');
+    const speakerEl = document.getElementById('agora-card-speaker');
+    const statusEl = document.getElementById('agora-card-status');
+    const badgeEl = document.getElementById('agora-card-service-badge');
+    const nodeKeyEl = document.getElementById('agora-card-node-key');
+    const stewardKeyEl = document.getElementById('agora-card-steward-key');
+    const resList = document.getElementById('agora-card-residents');
+
+    if (nameEl) nameEl.textContent = res.node_name || '—';
+    if (portEl) portEl.textContent = res.port || 8770;
+    if (speakerEl) speakerEl.textContent = res.speaker || '—';
+
+    if (statusEl && badgeEl) {
+      if (res.service_active) {
+        statusEl.textContent = 'Active (serving on :' + res.port + ')';
+        statusEl.style.color = 'var(--green)';
+        badgeEl.textContent = 'ACTIVE';
+        badgeEl.style.color = 'var(--green)';
+      } else {
+        statusEl.textContent = 'Inactive';
+        statusEl.style.color = 'var(--text-dim)';
+        badgeEl.textContent = 'INACTIVE';
+        badgeEl.style.color = 'var(--text-dim)';
+      }
+    }
+
+    if (nodeKeyEl) nodeKeyEl.textContent = res.node_key_id || 'none yet';
+    if (stewardKeyEl) stewardKeyEl.textContent = res.steward_key_id || 'none yet';
+
+    if (resList) {
+      if (res.residents && res.residents.length > 0) {
+        resList.innerHTML = res.residents.map(r => `
+          <div>
+            <strong>${escHtml(r.name)}</strong>: <code style="font-size:0.75rem;">${escHtml(r.key_id)}</code>
+          </div>
+        `).join('');
+      } else {
+        resList.innerHTML = '<span style="color:var(--text-dim);">No residents configured</span>';
+      }
+    }
+  } catch(e) {
+    console.warn('agora card load error:', e);
+  }
+}
+
+loadAgoraCard();
 
 // ── License ──────────────────────────────────────────────────────────────────
 

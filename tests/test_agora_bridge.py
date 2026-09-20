@@ -151,5 +151,61 @@ class TestAgoraBridgeNodeService(unittest.TestCase):
         self.assertIn(["disable", "agora-echonode.service"], calls)
 
 
+class TestAgoraBridgeNodeCard(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="eb_card_test_"))
+        self.keys_root = self.tmp_dir / "keys"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_node_card_data_structure_when_inactive(self):
+        steward = agora_bridge.get_or_create_steward_key("CardNode", keys_root=self.keys_root)
+        data = agora_bridge.get_node_card_data(node_name="CardNode", port=8770, keys_root=self.keys_root)
+
+        self.assertEqual(data["node_name"], "CardNode")
+        self.assertEqual(data["port"], 8770)
+        self.assertFalse(data["service_active"])
+        self.assertEqual(data["steward_key_id"], steward["key_id"])
+        self.assertIn("residents", data)
+        self.assertIn("node_key_id", data)
+        self.assertIn("speaker", data)
+
+    def test_node_card_speaker_formats_from_facts(self):
+        from unittest.mock import patch
+
+        # Case 1: Active node with speaker
+        mock_facts_with_speaker = {
+            "node": "CardNode",
+            "speaker": "Ada",
+            "speaker_key_id": "a" * 64,
+            "residents": ["Ada", "Turing"],
+            "signed": {"node_key_id": "b" * 64},
+        }
+
+        with patch("agora_bridge.is_node_service_active", return_value=True), \
+             patch("agora_bridge.read_loopback_facts", return_value=mock_facts_with_speaker):
+            data = agora_bridge.get_node_card_data(node_name="CardNode", port=8770, keys_root=self.keys_root)
+            self.assertTrue(data["service_active"])
+            self.assertEqual(data["speaker"], "Ada")
+            self.assertEqual(data["node_key_id"], "b" * 64)
+
+        # Case 2: Active node with no Speaker and multiple residents
+        mock_facts_no_speaker = {
+            "node": "CardNode",
+            "speaker": None,
+            "speaker_key_id": None,
+            "residents": ["Ada", "Turing", "Babbage"],
+            "signed": {"node_key_id": "c" * 64},
+        }
+
+        with patch("agora_bridge.is_node_service_active", return_value=True), \
+             patch("agora_bridge.read_loopback_facts", return_value=mock_facts_no_speaker):
+            data = agora_bridge.get_node_card_data(node_name="CardNode", port=8770, keys_root=self.keys_root)
+            self.assertTrue(data["service_active"])
+            self.assertEqual(data["speaker"], "no Speaker, 3 residents")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3029,6 +3029,20 @@ async def api_agora_node_toggle_post(request: Request, _=Depends(require_auth)):
         return {"ok": False, "error": str(e)}
 
 
+@app.get("/api/agora/node-card")
+async def api_agora_node_card(_=Depends(require_auth)):
+    try:
+        import agora_bridge
+        cfg = cl.load_kin_config_raw()
+        node_cfg = cfg.get("agora_node", {})
+        node_name = node_cfg.get("node_name") or socket.gethostname()
+        port = int(node_cfg.get("port", 8770))
+        data = agora_bridge.get_node_card_data(node_name=node_name, port=port)
+        return {"ok": True, **data}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.post("/api/onboard/test-node")
 async def api_test_node(request: Request, _=Depends(require_auth)):
     body = await request.json()

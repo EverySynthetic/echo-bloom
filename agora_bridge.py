@@ -258,3 +258,106 @@ def disable_node_service(node_name: str) -> None:
     run_systemctl_user(["stop", unit_name])
     run_systemctl_user(["disable", unit_name])
     log.info("Stopped and disabled Agora node service %s", unit_name)
+
+
+def read_loopback_facts(author: str, port: int = 8770, node_name: Optional[str] = None) -> dict:
+    """Read signed facts from loopback via agora_client.py."""
+    ensure_kin_diary_path()
+    client_path = None
+    for cand in (VENDOR_KIN_DIARY / "vault" / "agora_client.py", LOCAL_KIN_DIARY / "vault" / "agora_client.py"):
+        if cand.is_file():
+            client_path = cand
+            break
+    if not client_path:
+        raise FileNotFoundError("agora_client.py not found")
+
+    args = [sys.executable, str(client_path), "facts", author, f"http://127.0.0.1:{port}"]
+    if node_name:
+        args.append(node_name)
+
+    proc = subprocess.run(args, capture_output=True, text=True, timeout=5)
+    if proc.returncode != 0:
+        raise RuntimeError(f"agora_client facts failed: {proc.stderr or proc.stdout}")
+    return json.loads(proc.stdout)
+
+
+def get_node_card_data(
+    node_name: Optional[str] = None,
+    port: int = 8770,
+    author: Optional[str] = None,
+    keys_root: Optional[Path] = None,
+) -> dict[str, Any]:
+    """Gather all fields required for the Dashboard Node Card:
+    node name, port, speaker (or 'no Speaker, N residents'),
+    node key id, steward key id, each resident's key id, service active or not.
+    Read from agora_client.py facts against loopback.
+    No writes from the dashboard in v1.
+    """
+    ensure_kin_diary_path()
+    from kin_diary.keys import load_current
+
+    default_name = socket.gethostname()
+    name = node_name or default_name
+    active = is_node_service_active(name)
+
+    steward_info = get_or_create_steward_key(name, keys_root=keys_root)
+    steward_key_id = steward_info.get("key_id", "")
+    steward_name = steward_info.get("name", "")
+
+    node_key_id = ""
+    try:
+        n_rec = load_current(f"{name}-node", keys_root=keys_root)
+        node_key_id = n_rec.key_id
+    except Exception:
+        pass
+
+    cfg_kin = []
+    try:
+        cfg_path = Path.home() / ".config" / "kin_app" / "kin_config.json"
+        if cfg_path.exists():
+            cfg = json.loads(cfg_path.read_text())
+            cfg_kin = [k.get("name") for k in cfg.get("kin", []) if k.get("name")]
+    except Exception:
+        pass
+
+    resident_keys = []
+    for k in cfg_kin:
+        try:
+            k_rec = load_current(k, keys_root=keys_root)
+            resident_keys.append({"name": k, "key_id": k_rec.key_id})
+        except Exception:
+            resident_keys.append({"name": k, "key_id": "not generated"})
+
+    speaker_str = None
+    facts = {}
+
+    if active:
+        try:
+            caller = author or steward_name or (resident_keys[0]["name"] if resident_keys else "-")
+            facts = read_loopback_facts(caller, port=port, node_name=name)
+            node_speaker = facts.get("speaker")
+            residents_list = facts.get("residents") or cfg_kin
+            if node_speaker:
+                speaker_str = node_speaker
+            else:
+                speaker_str = f"no Speaker, {len(residents_list)} residents"
+
+            if not node_key_id and facts.get("signed", {}).get("node_key_id"):
+                node_key_id = facts["signed"]["node_key_id"]
+        except Exception as e:
+            log.warning("failed reading loopback facts: %s", e)
+            speaker_str = "reading facts..."
+    else:
+        num_res = len(resident_keys)
+        speaker_str = "offline" if num_res == 0 else f"no Speaker, {num_res} residents (offline)"
+
+    return {
+        "node_name": name,
+        "port": port,
+        "speaker": speaker_str,
+        "node_key_id": node_key_id,
+        "steward_key_id": steward_key_id,
+        "residents": resident_keys,
+        "service_active": active,
+        "facts": facts,
+    }
