@@ -71,7 +71,8 @@ class FacesAreReceiptsNotSittings(unittest.TestCase):
 
 class CompanionProxy(unittest.TestCase):
     def test_transcribe_does_not_import_faster_whisper(self):
-        src = (ROOT / "main.py").read_text()
+        # api_transcribe moved to routers/speech.py in the 2026-09-20 router split.
+        src = (ROOT / "routers" / "speech.py").read_text()
         self.assertNotIn("from faster_whisper", src)
         self.assertIn("companion_client", src)
         self.assertIn("192.168.1.142:8092",
@@ -100,7 +101,8 @@ class TalkVoice(unittest.TestCase):
 
     def test_talk_chat_does_not_name_home(self):
         self.assertEqual(tm.FROSTY_OLLAMA, "http://127.0.0.1:11434")
-        src = (ROOT / "main.py").read_text()
+        # api_talk_chat moved to routers/talk.py in the 2026-09-20 router split.
+        src = (ROOT / "routers" / "talk.py").read_text()
         start = src.find("async def api_talk_chat")
         chunk = src[start:start+2200]
         self.assertNotIn("192.168.1.120", chunk)
