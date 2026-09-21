@@ -82,10 +82,19 @@ async def api_agora_node_toggle_post(request: Request, _=Depends(require_auth)):
         node_name = (body.get("node_name") or node_cfg.get("node_name") or default_name).strip()
         port = int(body.get("port") or node_cfg.get("port", 8770))
 
+        # Toggling this node can stop or restart OTHER units systemd binds
+        # to it (presence-heartbeat, on Frosty). enable/disable_node_service
+        # report what happened to those rather than us assuming success —
+        # see REPORT_sonnet_bridge_toggle.md.
         if enabled:
-            agora_bridge.enable_node_service(node_name, port)
+            result = agora_bridge.enable_node_service(node_name, port)
+            dependents_info = {
+                "restored_dependents": result.get("restored_dependents", []),
+                "failed_to_restore_dependents": result.get("failed_to_restore_dependents", []),
+            }
         else:
-            agora_bridge.disable_node_service(node_name)
+            result = agora_bridge.disable_node_service(node_name)
+            dependents_info = {"stopped_dependents": result.get("stopped_dependents", [])}
 
         config_path = Path.home() / ".config/kin_app/kin_config.json"
         if config_path.exists():
@@ -104,6 +113,7 @@ async def api_agora_node_toggle_post(request: Request, _=Depends(require_auth)):
             "active": agora_bridge.is_node_service_active(node_name),
             "node_name": node_name,
             "port": port,
+            **dependents_info,
         }
     except Exception as e:
         log.warning("agora node toggle failed: %s", e)

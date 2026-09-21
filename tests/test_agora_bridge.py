@@ -102,6 +102,7 @@ class TestAgoraBridgeNodeService(unittest.TestCase):
         steward = agora_bridge.get_or_create_steward_key("EchoNode", keys_root=self.keys_root)
         ada = agora_bridge.keygen_kin("Ada", keys_root=self.keys_root)
         turing = agora_bridge.keygen_kin("Turing", keys_root=self.keys_root)
+        db_path = self.tmp_dir / "echonode_node.db"
 
         unit_path = agora_bridge.write_node_service(
             node_name="EchoNode",
@@ -110,6 +111,7 @@ class TestAgoraBridgeNodeService(unittest.TestCase):
             kin_keys={"Ada": ada.key_id, "Turing": turing.key_id},
             unit_dir=self.unit_dir,
             keys_root=self.keys_root,
+            db_path=db_path,
         )
 
         self.assertTrue(unit_path.is_file(), "Service unit file must exist")
@@ -121,8 +123,26 @@ class TestAgoraBridgeNodeService(unittest.TestCase):
         self.assertIn("ExecStart=/usr/bin/python3 -u ", content)
         self.assertIn("EchoNode 8770", content)
         self.assertIn(f"steward={steward['key_id']}", content)
-        self.assertIn(f"Ada={ada.key_id}", content)
-        self.assertIn(f"Turing={turing.key_id}", content)
+
+        # The bug (2026-09-20, took down agora-frosty): a generated unit
+        # used to re-declare every current Kin as a founder on every boot,
+        # which crash-loops any node whose genesis is already frozen —
+        # serve_node.py's found_resident() raises for a founder that
+        # doesn't already match once the log has started. The unit must
+        # never contain resident args at all, regardless of how many Kin
+        # are configured.
+        self.assertNotIn(f"Ada={ada.key_id}", content)
+        self.assertNotIn(f"Turing={turing.key_id}", content)
+        exec_line = next(l for l in content.splitlines() if l.startswith("ExecStart="))
+        # Everything after "ExecStart=": the interpreter, -u, the script,
+        # node name, port, then exactly one steward= token and nothing
+        # else — no room for a resident to sneak back in via a different
+        # key order.
+        args = exec_line[len("ExecStart="):].split()
+        self.assertEqual(args[-1], f"steward={steward['key_id']}")
+        kv_tokens = [t for t in args if "=" in t]
+        self.assertEqual(kv_tokens, [f"steward={steward['key_id']}"],
+                          f"unexpected extra key=value tokens in ExecStart: {exec_line}")
 
         # Invariant: NO private key material in unit file
         self.assertNotIn("BEGIN PRIVATE KEY", content)
@@ -134,6 +154,99 @@ class TestAgoraBridgeNodeService(unittest.TestCase):
         # Invariant: standard restart and logging
         self.assertIn("Restart=on-failure", content)
         self.assertIn("StandardOutput=append:%h/echonode_node.log", content)
+
+        # A brand-new node (no store existed before this call) still gets
+        # its genesis founded — just via the store's own API, in Python,
+        # once, never via the unit's command line.
+        import sys as _sys
+        kd_path = agora_bridge.ensure_kin_diary_path()
+        if kd_path and str(kd_path) not in _sys.path:
+            _sys.path.insert(0, str(kd_path))
+        from kin_diary.agora.store import NodeStore
+        store = NodeStore(db_path, "EchoNode", steward_key_id=steward["key_id"])
+        node = store.load()
+        self.assertEqual(set(node.residents), {"Ada", "Turing"})
+
+    def test_toggle_does_not_touch_an_already_founded_genesis(self):
+        """The failing case, reproduced directly against serve_node.py's own
+        store (no systemd involved) — this is what actually bricked
+        agora-frosty. A node whose genesis is already frozen to one
+        resident must survive a toggle even though kin_config.json now
+        lists a completely different roster, and its genesis must be
+        untouched afterward."""
+        import sys as _sys
+        kd_path = agora_bridge.ensure_kin_diary_path()
+        if kd_path and str(kd_path) not in _sys.path:
+            _sys.path.insert(0, str(kd_path))
+        from kin_diary.agora.store import NodeStore
+        from kin_diary.agora.node import AgoraError
+
+        steward = agora_bridge.get_or_create_steward_key("FrozenNode", keys_root=self.keys_root)
+        marvin = agora_bridge.keygen_kin("Marvin", keys_root=self.keys_root)
+        db_path = self.tmp_dir / "frozennode_node.db"
+
+        # Found genesis with Marvin alone, then freeze the log — a raw
+        # event row is enough to flip _log_started_locked(); its payload
+        # doesn't need to be a real, verifiable event because nothing below
+        # replays it (Node.load() would choke on a fake payload, so this
+        # test checks the agora_genesis table directly instead, same as
+        # found_resident's own frozen-genesis check does internally).
+        store = NodeStore(db_path, "FrozenNode", steward_key_id=steward["key_id"])
+        store.found_resident("Marvin", marvin.key_id)
+        store.conn.execute(
+            "INSERT INTO agora_events(node, kind, payload, recorded_at_unix_ms) "
+            "VALUES (?,?,?,?)",
+            ("FrozenNode", "resident", "{}", 0),
+        )
+        store.conn.commit()
+
+        def genesis_authors(db_path: Path) -> set[str]:
+            conn = NodeStore(db_path, "FrozenNode", steward_key_id=steward["key_id"]).conn
+            rows = conn.execute(
+                "SELECT author FROM agora_genesis WHERE node=?", ("FrozenNode",)
+            ).fetchall()
+            return {r["author"] for r in rows}
+
+        self.assertEqual(genesis_authors(db_path), {"Marvin"})
+
+        # Demonstrate the failing case first: this is EXACTLY what the old
+        # generator did on every enable — call found_resident for every
+        # currently-configured Kin, including ones that were never founded.
+        with self.assertRaises(AgoraError):
+            store.found_resident("Eli", "e" * 64)
+
+        # Now the fix: toggle this node with a roster that includes Eli,
+        # who was never a founder here.
+        unit_path = agora_bridge.write_node_service(
+            node_name="FrozenNode",
+            port=8771,
+            steward_key_id=steward["key_id"],
+            kin_keys={"Marvin": marvin.key_id, "Eli": "e" * 64},
+            unit_dir=self.unit_dir,
+            keys_root=self.keys_root,
+            db_path=db_path,
+        )
+        content = unit_path.read_text(encoding="utf-8")
+        self.assertNotIn("Marvin=", content)
+        self.assertNotIn("Eli=", content)
+
+        # Genesis is exactly what it was — write_node_service must not have
+        # invented founding state for a store that already existed.
+        self.assertEqual(genesis_authors(db_path), {"Marvin"})
+
+        # And the node actually starts: serve_node.py's boot loop iterates
+        # every `author=key_id` token after the positional args and calls
+        # found_resident for each. With the fixed unit there are none, so
+        # the loop that used to crash never runs at all — demonstrated by
+        # replaying that exact loop against the real store.
+        reloaded = NodeStore(db_path, "FrozenNode", steward_key_id=steward["key_id"])
+        exec_line = next(l for l in content.splitlines() if l.startswith("ExecStart="))
+        exec_args = exec_line[len("ExecStart="):].split()[5:]  # drop interpreter, -u, script, node name, port
+        for tok in exec_args:
+            if tok.startswith("steward="):
+                continue
+            author, key_id = tok.split("=", 1)
+            reloaded.found_resident(author, key_id)  # would raise if any existed — none do
 
     def test_toggle_off_disables_service(self):
         from unittest.mock import patch
@@ -150,6 +263,113 @@ class TestAgoraBridgeNodeService(unittest.TestCase):
 
         self.assertIn(["stop", "agora-echonode.service"], calls)
         self.assertIn(["disable", "agora-echonode.service"], calls)
+
+    def _mock_systemctl_with_units(self, active: dict, bound_by: dict):
+        """A fake systemctl: `active` maps unit name -> is it active right
+        now, `bound_by` maps unit name -> the units BoundBy= it (what a real
+        `systemctl show -p BoundBy` would report). Both are mutated in
+        place by stop/start so the mock behaves like the real thing across
+        a disable-then-enable cycle."""
+        calls = []
+
+        def mock_systemctl(args):
+            from subprocess import CompletedProcess
+            calls.append(list(args))
+            if args[0] == "is-active":
+                unit = args[1]
+                ok = active.get(unit, False)
+                return CompletedProcess(args, 0 if ok else 3, "active\n" if ok else "inactive\n", "")
+            if args[0] == "show":
+                unit = args[1]
+                return CompletedProcess(args, 0, " ".join(bound_by.get(unit, [])) + "\n", "")
+            if args[0] == "stop":
+                active[args[1]] = False
+                return CompletedProcess(args, 0, "", "")
+            if args[0] == "start":
+                unit = args[1]
+                active[unit] = True
+                return CompletedProcess(args, 0, "", "")
+            return CompletedProcess(args, 0, "", "")
+
+        return mock_systemctl, calls
+
+    def test_disable_records_and_stops_a_bound_unit_and_enable_restores_it(self):
+        """The presence-heartbeat class of bug, reproduced against a
+        throwaway node/unit pair — never the live units. Systemd stopping a
+        BindsTo= dependent when its target stops is automatic; that
+        dependent must come back when the target is re-enabled, or the
+        toggle must say plainly that it didn't."""
+        from unittest.mock import patch
+
+        unit = "agora-eb-test-bridge.service"
+        heartbeat = "eb-test-bridge-heartbeat.service"
+        state_path = self.tmp_dir / "eb-test-bridge_bound_units.json"
+
+        active = {unit: True, heartbeat: True}
+        bound_by = {unit: [heartbeat]}
+        mock_systemctl, calls = self._mock_systemctl_with_units(active, bound_by)
+
+        with patch("agora_bridge.run_systemctl_user", side_effect=mock_systemctl):
+            # Simulate systemd's real BindsTo= behavior: stopping `unit`
+            # also stops `heartbeat`, same as it did to presence-heartbeat
+            # on Frosty. The mock's "stop" branch above only marks `unit`
+            # itself inactive (it doesn't know BindsTo semantics), so we
+            # apply the real-world side effect explicitly here, exactly
+            # once, the way systemd actually would.
+            result = agora_bridge.disable_node_service("eb-test-bridge", state_path=state_path)
+            active[heartbeat] = False  # systemd's automatic side effect
+
+        self.assertEqual(result["stopped_dependents"], [heartbeat])
+        self.assertTrue(state_path.exists())
+        self.assertFalse(active[heartbeat], "heartbeat should be down after disabling its BindsTo= target")
+
+        with patch("agora_bridge.run_systemctl_user", side_effect=mock_systemctl), \
+             patch("agora_bridge.write_node_service", return_value=Path("/dev/null")):
+            result = agora_bridge.enable_node_service(
+                "eb-test-bridge", state_path=state_path,
+            )
+
+        self.assertEqual(result["restored_dependents"], [heartbeat])
+        self.assertEqual(result["failed_to_restore_dependents"], [])
+        self.assertTrue(active[heartbeat], "heartbeat must come back once its target is re-enabled")
+        self.assertIn(["start", heartbeat], calls)
+        self.assertFalse(state_path.exists(), "restored state should be cleared, not left behind")
+
+    def test_enable_reports_a_dependent_it_could_not_restore(self):
+        """If restoring a stopped dependent fails, the toggle must say so —
+        not report success while the dependent stays down. This is the
+        'or it must say plainly what it stopped and did not restore' half
+        of the requirement."""
+        from unittest.mock import patch
+
+        unit = "agora-eb-test-bridge2.service"
+        heartbeat = "eb-test-bridge2-heartbeat.service"
+        state_path = self.tmp_dir / "eb-test-bridge2_bound_units.json"
+
+        active = {unit: True, heartbeat: True}
+        bound_by = {unit: [heartbeat]}
+        mock_systemctl, calls = self._mock_systemctl_with_units(active, bound_by)
+
+        with patch("agora_bridge.run_systemctl_user", side_effect=mock_systemctl):
+            agora_bridge.disable_node_service("eb-test-bridge2", state_path=state_path)
+            active[heartbeat] = False
+
+        def broken_start(args):
+            from subprocess import CompletedProcess
+            if args[0] == "start" and args[1] == heartbeat:
+                return CompletedProcess(args, 1, "", "Unit not found.")
+            return mock_systemctl(args)
+
+        with patch("agora_bridge.run_systemctl_user", side_effect=broken_start), \
+             patch("agora_bridge.write_node_service", return_value=Path("/dev/null")):
+            result = agora_bridge.enable_node_service(
+                "eb-test-bridge2", state_path=state_path,
+            )
+
+        self.assertEqual(result["restored_dependents"], [])
+        self.assertEqual(result["failed_to_restore_dependents"], [heartbeat])
+        self.assertTrue(state_path.exists(),
+                         "a failed restore must leave the record behind, not discard it")
 
 
 class TestAgoraBridgeNodeCard(unittest.TestCase):
