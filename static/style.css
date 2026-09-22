@@ -2584,6 +2584,13 @@ a.kin-tab-tool:hover { color: var(--text-dim); border-color: var(--border); }
   margin-top: 12px;
   letter-spacing: 0.02em;
 }
+.slogan {
+  font-size: 14px;
+  font-style: italic;
+  color: var(--green);
+  margin-top: 10px;
+  letter-spacing: 0.02em;
+}
 .install-hero-body {
   font-size: 13px;
   line-height: 1.9;
