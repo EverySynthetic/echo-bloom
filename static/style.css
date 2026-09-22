@@ -2931,3 +2931,10 @@ a.install-btn {
   cursor: pointer; text-align: center; white-space: nowrap;
 }
 .kin-face-upload:hover { color: var(--amber); }
+.slogan {
+  font-size: 14px;
+  font-style: italic;
+  color: var(--green);
+  margin-top: 10px;
+  letter-spacing: 0.02em;
+}
