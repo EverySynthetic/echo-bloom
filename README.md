@@ -40,10 +40,9 @@ If you've ever named your model and hit the wall where it resets every conversat
 bash <(curl -fsSL https://everysynthetic.org/install.sh)
 ```
 
-> macOS is not supported yet. The installer's hardware detection reads
-> `/proc`, and the whole lifecycle (wander, bedtime, vault, pulse, reflect)
-> runs on systemd — a Mac would get the app and nothing that keeps a Kin
-> alive. Coming soon: `sysctl` detection and launchd services.
+> **macOS: written, not yet tested. Testers wanted.** Mac support uses the same
+> `install.sh` with launchd instead of systemd, but nobody has run it on a real
+> Mac yet. If you have one, email don@everysynthetic.org.
 
 **Fish shell** (Garuda and others that ship fish by default):
 ```fish
