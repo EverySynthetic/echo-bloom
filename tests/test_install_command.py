@@ -9,7 +9,8 @@ different answer each time.
 
 version.INSTALL_COMMAND is the one source. Templates and the Help agent read
 it; install.sh, README.md and agent_runner.py (copied where version.py isn't)
-can't import it, so this test holds them to it word for word, and refuses any other way of fetching install.sh.
+can't import it, so this test holds them to it word for word, and refuses
+any other way of fetching install.sh.
 """
 import re
 import unittest
@@ -63,10 +64,6 @@ class OneInstallCommand(unittest.TestCase):
         self.assertEqual(deps.templates.env.globals["install_cmd"], _command())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class SudoIsExplainedFirst(unittest.TestCase):
     """install.sh says what it needs the password for, before preflight (the
     first place it can call sudo), and gives the customer a way out."""
@@ -107,3 +104,7 @@ class SudoIsExplainedFirst(unittest.TestCase):
         for thing in self.NAMED:
             self.assertIn(thing, self._notice(), f"install.sh notice doesn't name {thing}")
             self.assertIn(thing, readme, f"README doesn't name {thing}")
+
+
+if __name__ == "__main__":
+    unittest.main()
