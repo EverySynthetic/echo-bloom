@@ -122,5 +122,100 @@ class NamingGetsTheModelToItself(unittest.TestCase):
             self.assertTrue(all(i > naming for i in starts), f"{unit} starts before naming")
 
 
+class ASkippedTunnelIsNotASilentTunnel(unittest.TestCase):
+    """The A15's old August install had left cloudflared.service running,
+    putting the dashboard on the internet. Choosing "Skip" for remote access
+    said nothing about it."""
+
+    STUBS = r"""
+PORT=8090
+warn() { echo "! $*"; }
+systemctl() {
+    case "$*" in
+        *list-units*) printf '%s\n' $ACTIVE_UNITS ;;
+        *"cat cloudflared.service"*) echo "ExecStart=/usr/bin/cloudflared tunnel --url http://localhost:8090" ;;
+        *"cat cloudflared-other.service"*) echo "ExecStart=/usr/bin/cloudflared tunnel --url http://localhost:3000" ;;
+        *disable*|*stop*) echo "STOPPED $*" ;;
+    esac
+}
+pgrep() { printf '%s\n' "$PROCS"; }
+"""
+
+    def run_skip(self, units="", procs=""):
+        script = (self.STUBS + fn("report_existing_tunnel") + fn("setup_remote_access")
+                  + f"\nHAS_WHIPTAIL=false; ACTIVE_UNITS='{units}'; PROCS='{procs}'\n"
+                  "setup_remote_access <<< 3\n")
+        out, err, rc = bash(script)
+        self.assertEqual(rc, 0, err)
+        return out
+
+    def test_a_leftover_unit_is_named_with_the_command_to_stop_it(self):
+        out = self.run_skip(units="cloudflared.service")
+        self.assertIn("A Cloudflare tunnel is already putting this dashboard on the internet "
+                      "(cloudflared.service).", out)
+        self.assertIn("systemctl --user disable --now cloudflared.service", out)
+        self.assertNotIn("STOPPED", out)          # told, never stopped silently
+
+    def test_a_tunnel_for_something_else_is_not_reported(self):
+        self.assertNotIn("already putting", self.run_skip(units="cloudflared-other.service"))
+
+    def test_a_bare_process_is_reported_too(self):
+        out = self.run_skip(procs="4242 cloudflared tunnel --url http://localhost:8090")
+        self.assertIn("already putting this dashboard on the internet", out)
+        self.assertIn("4242", out)
+
+    def test_nothing_running_says_nothing(self):
+        self.assertNotIn("already putting", self.run_skip())
+
+
+class WhiptailMenusSayArrowKeys(unittest.TestCase):
+    """On the A15, typing "3" then Enter in the model menu picked item 1.
+    Reproduced in whiptail 0.52 (2026-09-24): 3, Enter -> 1; down, down,
+    Enter -> 3. whiptail doesn't jump to a typed number, so every menu says
+    to use the arrow keys."""
+
+    def test_every_whiptail_menu_says_use_the_arrow_keys(self):
+        for name in ("pick_model_whiptail", "setup_remote_access"):
+            body = fn(name)
+            self.assertIn("--menu", body, name)
+            self.assertIn("arrow keys", body, f"{name}: a whiptail menu that doesn't say arrow keys")
+
+
+class StaleFailuresAreCleared(unittest.TestCase):
+    """The A15's August install left echo_bloom units in a failed state that
+    outlived the reinstall. After deploying the new lifecycle scripts, the
+    installer clears them."""
+
+    def test_reset_failed_runs_after_the_new_units_load(self):
+        deploy = fn("deploy_scripts")
+        self.assertRegex(deploy, r"systemctl --user reset-failed +'echo_bloom\*'")
+        self.assertLess(deploy.index("daemon-reload"), deploy.index("reset-failed"))
+        self.assertLess(deploy.index("reset-failed"), deploy.index("enable echo_bloom_vault"))
+
+
+class SixGigabyteCardsGetASevenB(unittest.TestCase):
+    """The A15 (6GB) was offered 3-4B models only. A 7B at Q4 is ~4.7GB and
+    fits; offer one, with its real size on the label."""
+
+    def labels(self, vram, ram):
+        defs = "\n".join(fn(n) for n in MENU_FNS)
+        out, err, rc = bash(f"{defs}\nINSTALLED_MODELS=()\nbuild_model_menu {vram} {ram}\n"
+                            "paste -d'|' <(printf '%s\\n' \"${MODEL_IDS[@]}\") "
+                            "<(printf '%s\\n' \"${MODEL_LABELS[@]}\")")
+        self.assertEqual(rc, 0, err)
+        return dict(line.split("|", 1) for line in out.splitlines())
+
+    def test_a_6gb_card_is_offered_a_7b_that_fits(self):
+        menu6 = self.labels(6, 30)
+        big = {m: l for m, l in menu6.items() if re.search(r"[:-](7|8)b\b", m)}
+        self.assertTrue(big, f"no 7-8B on a 6GB card: {list(menu6)}")
+        for m, label in big.items():
+            size = float(re.search(r"\[(\d+(?:\.\d+)?) GB\]", label).group(1))
+            self.assertLessEqual(size, 5.0, f"{m} is labelled {size}GB, too big for 6GB")
+
+    def test_a_4gb_card_is_not(self):
+        self.assertNotIn("qwen2.5:7b", self.labels(4, 8))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -254,6 +254,13 @@ build_model_menu() {
     _add_model "qwen2.5-coder:1.5b" "qwen2.5-coder:1.5b [1.2 GB]  Coding specialist, fast autocomplete"
     _add_model "phi4-mini"          "phi4-mini          [2.3 GB]  Microsoft 3.8B — high reasoning density"
 
+    # A 7B at Q4 on a 6GB card. Don's A15 (1660 Ti 6GB) was offered 3-4B
+    # only; Ollama's default qwen2.5:7b tag is Q4_K_M at 4.7GB, which leaves
+    # room for the 2-8K context a Kin uses. Labelled with its real size.
+    if [[ $vram -ge 6 ]]; then
+        _add_model "qwen2.5:7b"     "qwen2.5:7b         [4.7 GB]  7B at Q4 — the most that fits 6GB, snug"
+    fi
+
     # Tier 2 — 8+ GB VRAM or 16+ GB RAM (CPU offload)
     # 6-7GB cards: context spills to RAM on 8B+ models — use tier 1 or the door below
     if [[ $vram -ge 8 ]] || [[ $ram -ge 16 && $vram -eq 0 ]]; then
@@ -350,6 +357,10 @@ pick_model_whiptail() {
                 msg="$(printf 'Detected: %dGB VRAM · %dGB RAM\nChoose the model your AI will think with:' "$vram" "$ram")"
             fi
         fi
+
+        # whiptail doesn't jump to a typed number: on Don's A15, "3" then
+        # Enter picked item 1 (reproduced 2026-09-24). Say so on the menu.
+        msg+=$'\n\nUse the arrow keys to move, Enter to choose. Typing a number does not select it.'
 
         for label in "${cur_labels[@]}"; do
             menu_args+=("$i" "$label")
@@ -1328,6 +1339,10 @@ SVCEOF
 
     if command -v systemctl &>/dev/null; then
         systemctl --user daemon-reload 2>/dev/null || true
+        # An earlier install's units can still be marked failed (Don's A15,
+        # 2026-09-24, from an August install); that state outlives the new
+        # unit files and reads as "broken" in systemctl status.
+        systemctl --user reset-failed 'echo_bloom*' 2>/dev/null || true
         systemctl --user enable echo_bloom_vault   2>/dev/null || true
         systemctl --user start  echo_bloom_vault   2>/dev/null || true
         systemctl --user enable echo_bloom_pulse   2>/dev/null || true
@@ -1614,13 +1629,42 @@ open_browser() {
 
 # ── Remote access setup ───────────────────────────────────────────────────────
 
+# ── Is this dashboard already on the internet? ───────────────────────────────
+# Don's A15 (2026-09-24): an old install had left cloudflared.service running
+# a public tunnel to :8090, and choosing "Skip" said nothing about it. Tell
+# the customer and give them the command; never stop it for them.
+report_existing_tunnel() {
+    local unit found=false
+    if command -v systemctl &>/dev/null; then
+        for unit in $(systemctl --user list-units --type=service --state=active \
+                        --no-legend --plain 'cloudflared*' 2>/dev/null | awk '{print $1}'); do
+            if systemctl --user cat "$unit" 2>/dev/null \
+                    | grep -qE "(localhost|127\.0\.0\.1):${PORT}([^0-9]|$)"; then
+                warn "A Cloudflare tunnel is already putting this dashboard on the internet ($unit)."
+                echo "  Stop it with: systemctl --user disable --now $unit"
+                found=true
+            fi
+        done
+    fi
+    $found && return 0
+    # Not a unit: a cloudflared started by hand. -x matches the process name
+    # exactly; pgrep -f would match its own command line.
+    local line
+    while IFS= read -r line; do
+        [[ "$line" =~ (localhost|127\.0\.0\.1):${PORT}([^0-9]|$) ]] || continue
+        warn "A Cloudflare tunnel is already putting this dashboard on the internet (cloudflared, PID ${line%% *})."
+        echo "  Stop it with: kill ${line%% *}"
+    done < <(pgrep -a -x cloudflared 2>/dev/null)
+    return 0
+}
+
 setup_remote_access() {
     local choice
 
     if $HAS_WHIPTAIL; then
         choice=$(whiptail --title " Echo Bloom — Remote Access " \
-            --menu "How do you want to reach your Kin from anywhere?\n\nAll options are free. Pick what fits." \
-            20 72 4 \
+            --menu "How do you want to reach your Kin from anywhere?\n\nAll options are free. Pick what fits.\nUse the arrow keys to move, Enter to choose (typing a number does not select it)." \
+            21 72 4 \
             "1" "Cloudflare  — Instant public URL. No account needed. Ready in 30 sec." \
             "2" "Tailscale   — Private. Your devices only, no public URL." \
             "3" "Skip        — Set this up later." \
@@ -1638,7 +1682,8 @@ setup_remote_access() {
     case "$choice" in
         1) setup_cloudflare ;;
         2) setup_tailscale ;;
-        *) warn "Skipping remote access. Run the installer again to add it later." ;;
+        *) warn "Skipping remote access. Run the installer again to add it later."
+           report_existing_tunnel ;;
     esac
 }
 
@@ -2097,6 +2142,7 @@ if $APP_UP; then
     setup_remote_access
 else
     warn "Skipping remote access — the app isn't running yet."
+    report_existing_tunnel
     echo "  Fix that first, then set it up from inside the app (Remote Access card)."
 fi
 
