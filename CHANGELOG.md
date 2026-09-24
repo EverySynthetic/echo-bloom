@@ -11,8 +11,21 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ## 1.3.5
 
-A hotfix built from what customers actually install. Pure fixes, no new
-features.
+A hotfix built from what customers actually install. It also names two Room
+changes that reached installs on 2026-09-21 with the version still reading
+1.3.4 and no notes: they're listed here so the record matches what you have.
+
+**The Room forgot the conversation when you reloaded it.** Now it keeps it,
+in your browser like the one-to-one chats do (the last 200 turns), in the
+right order (your message before the replies it prompted, not after), and
+with you under one name instead of "You" in the past and your name in the
+present. *(Shipped 2026-09-21.)*
+
+**The Room's group chat takes turns across machines**, readying the next
+Kin while the current one is still talking, and saving each reply as it
+lands instead of all at the end. A reply that broke off partway used to be
+saved as that Kin's finished words and shown as done; now it's reported as
+an error and not kept. *(Shipped 2026-09-21.)*
 
 **The microphone waited two minutes and gave up.** Speech-to-text was wired
 to a companion machine on the developer's own network, by default. On any
