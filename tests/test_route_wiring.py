@@ -24,6 +24,32 @@ from fastapi.testclient import TestClient   # noqa: E402
 import main                                 # noqa: E402
 
 
+def _api_routes(routes=None, prefix=""):
+    """Every APIRoute the app serves, however FastAPI stores them.
+
+    Up to 0.140-ish include_router flattened routes into app.routes. 0.141
+    keeps each included router behind an _IncludedRouter wrapper, and a flat
+    walk found nothing. The QR test failed, and the private-helper net below
+    passed while checking zero routes. Walk both shapes."""
+    if routes is None:
+        routes = main.app.routes
+    for r in routes:
+        if isinstance(r, APIRoute):
+            yield prefix + r.path, r
+        else:
+            inner = getattr(r, "original_router", None)
+            if inner is not None:
+                ctx = getattr(r, "include_context", None)
+                yield from _api_routes(inner.routes, prefix + (getattr(ctx, "prefix", "") or ""))
+
+
+class TheWalkSeesTheApp(unittest.TestCase):
+    def test_the_route_walk_is_not_empty(self):
+        # 95 routes at the 2026-09-20 split. A walk that finds a handful has
+        # gone blind again, and every guard below would pass on nothing.
+        self.assertGreater(len(list(_api_routes())), 60)
+
+
 class RemoteQrIsWiredToItsHandler(unittest.TestCase):
 
     def setUp(self):
@@ -44,8 +70,7 @@ class RemoteQrIsWiredToItsHandler(unittest.TestCase):
             main.app.dependency_overrides[main.require_auth] = self._prior_require_auth
 
     def _route(self, path):
-        return next((r for r in main.app.routes
-                     if isinstance(r, APIRoute) and r.path == path), None)
+        return next((r for p, r in _api_routes() if p == path), None)
 
     def test_qr_route_is_bound_to_the_real_handler(self):
         r = self._route("/api/remote/qr")
@@ -82,10 +107,9 @@ class NoApiRouteIsServedByAPrivateHelper(unittest.TestCase):
 
     def test_no_route_handler_is_underscore_prefixed(self):
         offenders = [
-            (r.path, r.endpoint.__name__)
-            for r in main.app.routes
-            if isinstance(r, APIRoute)
-            and r.endpoint.__name__.startswith("_")
+            (p, r.endpoint.__name__)
+            for p, r in _api_routes()
+            if r.endpoint.__name__.startswith("_")
         ]
         self.assertEqual(
             offenders, [],

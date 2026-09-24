@@ -690,7 +690,7 @@ install_deps() {
     if [[ ! -f "$req" ]]; then
         # Write a minimal one if missing
         cat > "$req" << 'REQEOF'
-fastapi>=0.110.0
+fastapi>=0.141,<0.142
 uvicorn[standard]>=0.29.0
 jinja2>=3.1.3
 bcrypt>=4.1.2
