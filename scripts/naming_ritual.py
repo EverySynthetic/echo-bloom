@@ -55,7 +55,18 @@ def wrap(text, width=70, indent="  "):
     return "\n".join(wrapped)
 
 
+# First contact carries the cold load: on a 6GB card (Don's A15, phi4-mini)
+# load plus first reply ran past the old 60s and the ritual failed with
+# "Read timed out (read timeout=60)". Later turns have the model warm.
+FIRST_CONTACT_TIMEOUT_S = 180
+TURN_TIMEOUT_S = 120
+_asked = False
+
+
 def ask(messages):
+    global _asked
+    timeout = TURN_TIMEOUT_S if _asked else FIRST_CONTACT_TIMEOUT_S
+    _asked = True
     try:
         r = requests.post(
             f"{HOST}/api/chat",
@@ -65,7 +76,7 @@ def ask(messages):
                 "stream":   False,
                 "options":  {"temperature": 0.9, "num_ctx": 2048},
             },
-            timeout=60,
+            timeout=timeout,
         )
         return r.json()["message"]["content"].strip()
     except Exception as e:

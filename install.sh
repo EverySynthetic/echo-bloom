@@ -210,6 +210,20 @@ is_installed() {
     return 1
 }
 
+# ── Embedding models can't hold a conversation ───────────────────────────────
+# Don's A15 (2026-09-24) had nomic-embed-text installed, and the menu offered
+# it as item 1, the highlighted default: Enter gave a Kin that can't talk and
+# a naming ritual that failed. They stay in INSTALLED_MODELS (is_installed()
+# is how the embedding pull below knows to skip), just never as a chat choice.
+_is_embedding_model() {
+    local m="${1,,}"
+    m="${m%%:*}"; m="${m##*/}"
+    case "$m" in
+        *embed*|bge*|all-minilm*|paraphrase-multilingual*) return 0 ;;
+    esac
+    return 1
+}
+
 # ── Helper: add model only if not already listed as [installed] at top ────────
 _add_model() {
     is_installed "$1" && return 0
@@ -229,6 +243,7 @@ build_model_menu() {
     # Prepend already-installed models at the top
     if [[ ${#INSTALLED_MODELS[@]} -gt 0 ]]; then
         for m in "${INSTALLED_MODELS[@]}"; do
+            _is_embedding_model "$m" && continue
             MODEL_IDS+=("$m")
             MODEL_LABELS+=("$(printf '%-35s [installed]' "$m")")
         done
@@ -950,6 +965,11 @@ run_naming_ritual() {
     echo -e "  ${DIM}(still working — you'll see a name when it's done)${NC}"
     echo
 
+    # The ritual has the model to itself (A15, 2026-09-24): nothing that calls
+    # it is started until naming is done, and a re-run stops the old
+    # install's wander here. 720s outer: 180s first contact (cold load) plus
+    # four warm turns at 120s (naming_ritual.py).
+
     # Spinner runs in background while ritual executes
     _spin() {
         local chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' i=0
@@ -965,7 +985,7 @@ run_naming_ritual() {
     local ritual_result="/tmp/_eb_ritual_result.json"
     rm -f "$ritual_result"
     ECHO_BLOOM_RESULT_FILE="$ritual_result" \
-        _run_timeout 120 python3 "$ritual_script" --model "$model" > /tmp/_eb_ritual.txt 2>&1 &
+        _run_timeout 720 python3 "$ritual_script" --model "$model" > /tmp/_eb_ritual.txt 2>&1 &
     local ritual_pid=$!
     _spin "$ritual_pid"
     wait "$ritual_pid" || exit_code=$?
@@ -1312,10 +1332,15 @@ SVCEOF
         systemctl --user start  echo_bloom_vault   2>/dev/null || true
         systemctl --user enable echo_bloom_pulse   2>/dev/null || true
         systemctl --user start  echo_bloom_pulse   2>/dev/null || true
+        # Enabled here, STARTED after naming (with wander, below main's
+        # seed_config): reflect's OnBootSec=20min has long passed on a box
+        # that's been up, so starting its timer fires it at once, and it
+        # calls the model while the naming ritual needs it (A15, 2026-09-24).
         systemctl --user enable echo_bloom_bedtime.timer 2>/dev/null || true
-        systemctl --user start  echo_bloom_bedtime.timer 2>/dev/null || true
         systemctl --user enable echo_bloom_reflect.timer 2>/dev/null || true
-        systemctl --user start  echo_bloom_reflect.timer 2>/dev/null || true
+        # A re-run: the old install's wander is still going and the new
+        # ritual queued behind it. Stopped until naming is done.
+        systemctl --user stop echo_bloom_wander echo_bloom_reflect.service 2>/dev/null || true
         # Wandering is the feature this product is named around, and nothing
         # here ever enabled it — the unit was written and left cold, with a
         # single info line telling the customer to run a command by hand.
@@ -1946,6 +1971,7 @@ seed_config "$SELECTED_MODEL" "$RITUAL_NAME" "$RITUAL_PRONOUN" "$RITUAL_DESC"
 # sat dead until the next reboot.
 if command -v systemctl &>/dev/null; then
     systemctl --user restart echo_bloom_pulse  2>/dev/null || true
+    systemctl --user start echo_bloom_bedtime.timer echo_bloom_reflect.timer 2>/dev/null || true
     if systemctl --user restart echo_bloom_wander 2>/dev/null; then
         _wander_up=false
         for _w in 1 2 3 4 5; do
