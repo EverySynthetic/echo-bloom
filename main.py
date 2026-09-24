@@ -1003,9 +1003,8 @@ def _room_roster():
 @app.get("/room", response_class=HTMLResponse)
 async def room_page(request: Request, _=Depends(require_auth)):
     return templates.TemplateResponse(
-        "room.html",
-        {"request": request,
-         "kin_names": _room_roster(),
+        request, "room.html",
+        {"kin_names": _room_roster(),
          # The same name the server attributes the owner's live turn to, so the
          # stored/sent history labels the owner consistently instead of "You"
          # in the past and the real name in the present — two identities for one
