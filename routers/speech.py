@@ -27,7 +27,7 @@ router = APIRouter()
 
 @router.post("/api/transcribe")
 async def api_transcribe(request: Request, _=Depends(require_auth)):
-    """STT lives on therug. Never import faster_whisper on host 3.14."""
+    """Companion if ECHO_BLOOM_COMPANION is set, else local faster-whisper."""
     audio = await request.body()
     ct = request.headers.get("content-type", "audio/webm").lower()
     return await cc.transcribe(audio, ct)
@@ -321,17 +321,21 @@ PIPER_VOICE_CATALOGUE = [
 
 @router.get("/api/speech/status")
 async def api_speech_status(_=Depends(require_auth)):
+    url = cc.companion_url()
     stt_ok = False
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(
-                f"{cc.COMPANION_URL}/health",
-                timeout=aiohttp.ClientTimeout(total=3),
-            ) as r:
-                body = await r.json(content_type=None)
-                stt_ok = bool(body.get("stt"))
-    except Exception:
-        pass
+    if not url:
+        stt_ok = cc.local_stt_available()
+    else:
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(
+                    f"{url}/health",
+                    timeout=aiohttp.ClientTimeout(total=3),
+                ) as r:
+                    body = await r.json(content_type=None)
+                    stt_ok = bool(body.get("stt"))
+        except Exception:
+            pass
 
     piper_bin  = _find_piper_binary()
     voice_path = _find_piper_voice()
@@ -340,7 +344,7 @@ async def api_speech_status(_=Depends(require_auth)):
         "piper_ok":   piper_bin is not None,
         "voice_ok":   voice_path is not None,
         "voice_path": voice_path,
-        "companion":  cc.COMPANION_URL,
+        "companion":  url or None,
     }
 
 

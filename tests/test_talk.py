@@ -75,8 +75,14 @@ class CompanionProxy(unittest.TestCase):
         src = (ROOT / "routers" / "speech.py").read_text()
         self.assertNotIn("from faster_whisper", src)
         self.assertIn("companion_client", src)
-        self.assertIn("192.168.1.142:8092",
-                      (ROOT / "companion_client.py").read_text())
+        # Local STT is a lazy import inside a function, so a host with no
+        # wheel (Don's 3.14) never loads it just by starting the app. And no
+        # LAN address as a default: that was the customer mic bug (2026-09-24).
+        cc_src = (ROOT / "companion_client.py").read_text()
+        top_level = [l for l in cc_src.splitlines()
+                     if l.startswith(("import ", "from ")) and "faster_whisper" in l]
+        self.assertEqual(top_level, [])
+        self.assertNotIn("192.168.", cc_src)
 
     def test_transcribe_fail_open_when_companion_down(self):
         r = client.post("/api/transcribe", content=b"not-audio",
