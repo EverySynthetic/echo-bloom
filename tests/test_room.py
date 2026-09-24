@@ -44,9 +44,24 @@ _ROOM_KIN = [
     {"name": "Bong",    "host": "http://localhost:11434",       "model": "x", "node": "Local"},
     {"name": "Lumen",   "host": "http://192.168.1.120:11434",   "model": "x", "node": "Home"},
 ]
-cl.KIN = list(_ROOM_KIN)
-cl.KIN_BY_NAME = {k["name"]: k for k in cl.KIN}
-cl._owner_name = lambda: "Don"
+# Scoped to this module's run. These used to be set at import time and never
+# put back, and `unittest discover` imports every module before running any,
+# so the fake roster and a hardcoded "Don" leaked into the whole suite:
+# test_cluster's real _owner_name test failed only in the full run (2026-09-24).
+_SAVED = {}
+
+
+def setUpModule():
+    for attr in ("KIN", "KIN_BY_NAME", "_owner_name"):
+        _SAVED[attr] = getattr(cl, attr)
+    cl.KIN = list(_ROOM_KIN)
+    cl.KIN_BY_NAME = {k["name"]: k for k in cl.KIN}
+    cl._owner_name = lambda: "Don"
+
+
+def tearDownModule():
+    for attr, value in _SAVED.items():
+        setattr(cl, attr, value)
 
 SEEN = []          # what each Kin was actually shown
 WARMS = []         # names cl.warm_model was asked to load
