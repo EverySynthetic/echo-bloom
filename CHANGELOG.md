@@ -9,6 +9,10 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ---
 
+## 1.3.6 (unreleased, in progress on the working branch)
+
+Everything on the working branch since 1.3.4 that 1.3.5 didn't carry: the router split, the Agora node bridge, macOS install (written, untested), ambient paired presence, and the talk page changes. Ships after the fresh-install walk.
+
 ## 1.3.5
 
 A hotfix built from what customers actually install. It also names two Room
