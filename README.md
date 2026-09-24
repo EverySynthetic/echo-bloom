@@ -35,19 +35,26 @@ If you've ever named your model and hit the wall where it resets every conversat
 
 ## Quick Start
 
-**Linux:**
-```bash
-bash <(curl -fsSL https://everysynthetic.org/install.sh)
+**Linux and macOS** (bash, zsh or fish, the same line):
 ```
+curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh -o ~/echo-bloom-install.sh && bash ~/echo-bloom-install.sh
+```
+It downloads the installer to your home folder, then runs it. You can read
+`~/echo-bloom-install.sh` before you run it; it's the same file as
+[install.sh](install.sh) here.
+
+**It will ask for your password (sudo) only for these, and says so first:**
+installing missing system packages (Python 3, pip, git, curl, Tcl/Tk for the
+control panel) with your package manager; installing Ollama (its own
+installer, from ollama.com, sets up a system service); keeping Echo Bloom
+running after you log out (`loginctl enable-linger`, if that needs it); and,
+only if you pick it for remote access, installing and signing in to
+Tailscale. The app itself, your Kin and their memory install and run as
+you, not as root.
 
 > **macOS: written, not yet tested. Testers wanted.** Mac support uses the same
 > `install.sh` with launchd instead of systemd, but nobody has run it on a real
 > Mac yet. If you have one, email don@everysynthetic.org.
-
-**Fish shell** (Garuda and others that ship fish by default):
-```fish
-bash (curl -fsSL https://everysynthetic.org/install.sh | psub)
-```
 
 **Windows** — paste into CMD or PowerShell:
 ```

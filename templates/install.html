@@ -150,10 +150,11 @@
           COPY INSTALL COMMAND
         </button>
         <div class="install-cmd-wrap">
-          <code class="install-cmd" id="linux-cmd">bash &lt;(curl -fsSL https://everysynthetic.org/install.sh)</code>
+          <code class="install-cmd" id="linux-cmd">{{ install_cmd }}</code>
         </div>
         <div class="install-card-note install-card-note-tight install-card-dim">
-          fish shell (Garuda, etc.): <code>bash (curl -fsSL https://everysynthetic.org/install.sh | psub)</code>
+          The same line in bash, zsh and fish. It downloads the installer to your
+          home folder, then runs it.
         </div>
         <div class="install-card-links">
           <a href="/install.sh" class="install-view-link" target="_blank" rel="noopener">view script ↗</a>
@@ -161,6 +162,8 @@
         <div class="install-card-note">
           Installs Python, Ollama, and dependencies. Creates a systemd service
           that starts automatically. Interactive — picks the right model for your hardware.
+          It will ask for your password (sudo) to install missing system packages
+          and Ollama, and tells you what for before it does.
         </div>
       </div>
 

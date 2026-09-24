@@ -27,7 +27,7 @@ log = logging_setup.get("main")
 import auth
 import cluster as cl
 import license as lic
-from version import VERSION
+from version import INSTALL_COMMAND, VERSION
 
 # ── App-wide paths and templates ────────────────────────────────────────────────
 
@@ -49,6 +49,7 @@ templates.env.globals["nav_license"] = lambda: lic.get_status_cached_only()
 # machine whose disk had the correct script. Keying on VERSION means every
 # release invalidates it and nothing else does.
 templates.env.globals["asset_v"] = VERSION
+templates.env.globals["install_cmd"] = INSTALL_COMMAND
 
 # Configurable at deploy time
 PORT            = int(os.environ.get("ECHO_BLOOM_PORT", 8090))

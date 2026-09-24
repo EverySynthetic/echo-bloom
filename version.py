@@ -8,6 +8,19 @@ what customer installs compare their own version against.
 
 VERSION = "1.3.6"
 
+# The one install command (and update command: re-running it is how an
+# install updates). Every page, the README, the Help agent and install.sh
+# itself say exactly this; tests/test_install_command.py fails if any of
+# them drift. Download-then-run instead of bash <(curl ...): it works the
+# same in bash, zsh and fish (no separate fish line), stdin stays the
+# terminal the questions need, and the customer can read the file before
+# running it. Saved in ~ rather than the current directory, so running it
+# inside an existing install can't dirty that checkout and block its update.
+INSTALL_COMMAND = (
+    "curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh"
+    " -o ~/echo-bloom-install.sh && bash ~/echo-bloom-install.sh"
+)
+
 # (version, one-line descriptor) — newest first, shown on /about. Add one
 # line per release. Security-shaped fixes get the generic "security
 # patches" descriptor rather than exploit specifics, so this stays honest

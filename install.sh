@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Echo Bloom installer
-# Usage: curl -sSL <url>/install.sh -o install.sh && bash install.sh
+# Usage (the one command; version.py INSTALL_COMMAND, held by tests/test_install_command.py):
+#   curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh -o ~/echo-bloom-install.sh && bash ~/echo-bloom-install.sh
 
 set -euo pipefail
 
@@ -22,9 +23,9 @@ trap 'echo "INSTALL EXIT: line $LINENO, exit $?" >> "$INSTALL_LOG"' EXIT
 if [ ! -t 0 ]; then
     echo ""
     echo "  Echo Bloom installer requires an interactive terminal."
-    echo "  Use process substitution so stdin stays attached to your terminal:"
+    echo "  Download it first, then run it, so it can ask you questions:"
     echo ""
-    echo "    bash <(curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh)"
+    echo "    curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh -o ~/echo-bloom-install.sh && bash ~/echo-bloom-install.sh"
     echo ""
     exit 1
 fi
@@ -1774,6 +1775,35 @@ SVCEOF
 # ─────────────────────────────────────────────────────────────────────────────
 
 banner
+
+# ── Before anything asks for a password: say what for ─────────────────────────
+# The 2026-09-24 install rehearsal: a stranger got a sudo prompt with nothing
+# on the page or in the terminal saying why. This is every sudo in this file
+# (grep sudo), said once, up front, before preflight's first one, with a way
+# out. Keep it in step: a new sudo below needs a line here and in README.md
+# (tests/test_install_command.py checks the two lists name the same things).
+sudo_notice() {
+    echo
+    echo -e "${BOLD}Before we start: when this installer asks for your password${NC}"
+    echo
+    echo "  Your password (sudo) is only used for these, and only if they're needed:"
+    echo "   - installing missing system packages with your package manager:"
+    echo "     Python 3, pip, git, curl, and Tcl/Tk for the control panel"
+    echo "   - installing Ollama with its own installer from ollama.com, which"
+    echo "     sets it up as a system service; and starting that service if"
+    echo "     starting Ollama as you doesn't work"
+    echo "   - letting Echo Bloom keep running after you log out (loginctl enable-linger)"
+    echo "   - Tailscale, only if you pick it for remote access at the end:"
+    echo "     installing it, starting its service and signing in"
+    echo
+    echo "  Echo Bloom itself, your Kin and their memory install and run as you,"
+    echo "  in your home folder, never as root. Each step says what it's doing."
+    echo
+    read -rp "  Continue? [Y/n] " _sudo_ok
+    [[ "${_sudo_ok:-Y}" =~ ^[Nn] ]] && die "Stopped before anything was installed."
+    return 0
+}
+sudo_notice
 
 # ── Preflight — check everything, ask once, install all ───────────────────────
 preflight

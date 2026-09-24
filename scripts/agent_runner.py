@@ -94,9 +94,12 @@ HELP_SYSTEM = (
     "dashboard is at localhost port 8090.\n\n"
 
     "INSTALLING\n"
-    "Linux and macOS: bash <(curl -fsSL https://everysynthetic.org/install.sh) "
-    "-- on fish shell, bash (curl -fsSL https://everysynthetic.org/install.sh "
-    "| psub). Windows: powershell -ExecutionPolicy Bypass -Command \"iwr "
+    # Word for word version.INSTALL_COMMAND (tests/test_install_command.py).
+    # Not imported: this file is copied into the scripts dir, where
+    # version.py isn't.
+    "Linux and macOS (bash, zsh and fish alike): curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh -o ~/echo-bloom-install.sh && bash ~/echo-bloom-install.sh . "
+    "It asks for the password (sudo) only to install missing system packages, "
+    "Ollama, linger for the background services, or Tailscale if chosen. Windows: powershell -ExecutionPolicy Bypass -Command \"iwr "
     "-useb https://everysynthetic.org/install_wizard.ps1 | iex\". macOS is "
     "early access and uses launchd instead of systemd; the install log is at "
     "/tmp/echo_bloom_install.log.\n\n"
