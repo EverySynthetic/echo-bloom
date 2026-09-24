@@ -6,7 +6,7 @@ server always reflects whatever commit is actually deployed there — that's
 what customer installs compare their own version against.
 """
 
-VERSION = "1.3.4"
+VERSION = "1.3.5"
 
 # (version, one-line descriptor) — newest first, shown on /about. Add one
 # line per release. Security-shaped fixes get the generic "security
@@ -14,6 +14,7 @@ VERSION = "1.3.4"
 # without handing anyone a working recipe before every install has had a
 # chance to update.
 CHANGELOG = [
+    ("1.3.5", "the mic works on your own machine instead of waiting two minutes for hardware you don't have; the Room page loads; dashboard status is right again; security patches"),
     ("1.3.4", "expired-trial banner is $20, not $50; uninstall commands on the install and license pages"),
     ("1.3.3", "long answers from your Kin no longer get cut off at two minutes, and errors say what actually went wrong"),
     ("1.3.2", "remote access is detected correctly on macOS and Windows, not just Linux"),

@@ -9,6 +9,35 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ---
 
+## 1.3.5
+
+A hotfix built from what customers actually install. Pure fixes, no new
+features.
+
+**The microphone waited two minutes and gave up.** Speech-to-text was wired
+to a companion machine on the developer's own network, by default. On any
+other install that address doesn't exist: press the mic, wait two minutes,
+read "companion unreachable". All the while the speech engine the installer
+had just put on your machine sat unused. Now, unless you point it at a
+companion (`ECHO_BLOOM_COMPANION`), speech is transcribed on your machine.
+If the engine is missing, the message says so and says how to fix it.
+To tell it's fixed: the mic answers in seconds, and Settings shows speech
+as available.
+
+**The Room page returned a server error on every visit.** An outdated call
+signature. It loads now.
+
+**The dashboard showed an internal word for a Kin's status.** A thinking
+Kin read "alive" instead of thinking / quiet / offline. The computed status
+wins again.
+
+**Installs now get one tested web framework version**, instead of whatever
+was newest on install day.
+
+**Security patches.**
+
+---
+
 ## 1.2.9
 
 First-run setup told remote users to go read a file on the computer.
