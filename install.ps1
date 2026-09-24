@@ -310,7 +310,7 @@ Write-Step "Echo Bloom: ready" 'Green'
 
 Write-Step "Installing Python packages (this may take a minute)..."
 $packages = @(
-    'fastapi',
+    'fastapi>=0.141,<0.142',
     'uvicorn[standard]',
     'aiohttp',
     'jinja2',

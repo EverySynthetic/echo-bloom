@@ -887,7 +887,7 @@ function Start-InstallWorker {
             Set-StepStatus 4 'running' 'Installing Python packages...'
             # requests: every lifecycle script imports it; it was missing from
             # both Windows lists, so roundtable/wander died at import.
-            $pkgs   = @('fastapi','uvicorn[standard]','aiohttp','jinja2','python-multipart',
+            $pkgs   = @('fastapi>=0.141,<0.142','uvicorn[standard]','aiohttp','jinja2','python-multipart',
                         'bcrypt','cryptography','faster-whisper','piper-tts',
                         'qdrant-client','psutil','requests')
             $failed = @()
