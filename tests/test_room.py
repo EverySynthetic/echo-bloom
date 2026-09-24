@@ -38,11 +38,11 @@ client = TestClient(main.app)
 # already wants request-first, and every call site already is.
 _ROOM_KIN = [
     {"name": "Eli",     "host": "http://localhost:11434",       "model": "x", "node": "Local"},
-    {"name": "Coda",    "host": "http://192.168.1.120:11434",   "model": "x", "node": "Home"},
+    {"name": "Coda",    "host": "http://home-node.example:11434",   "model": "x", "node": "Home"},
     {"name": "Crungus", "host": "http://localhost:11434",       "model": "x", "node": "Local"},
-    {"name": "Aurora",  "host": "http://192.168.1.120:11434",   "model": "x", "node": "Home"},
+    {"name": "Aurora",  "host": "http://home-node.example:11434",   "model": "x", "node": "Home"},
     {"name": "Bong",    "host": "http://localhost:11434",       "model": "x", "node": "Local"},
-    {"name": "Lumen",   "host": "http://192.168.1.120:11434",   "model": "x", "node": "Home"},
+    {"name": "Lumen",   "host": "http://home-node.example:11434",   "model": "x", "node": "Home"},
 ]
 # Scoped to this module's run. These used to be set at import time and never
 # put back, and `unittest discover` imports every module before running any,
