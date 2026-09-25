@@ -28,6 +28,7 @@ INSTALL_COMMAND = (
 # chance to update.
 CHANGELOG = [
     ("1.3.6", "talk: Eli's lightning face, bigger circle, long answers get spoken"),
+    ("1.3.5.1", "the installer tells you what it needs your password for before asking, never offers an embedding model as your AI, gives your Kin time to wake on smaller cards, and keeps the name your Kin chooses"),
     ("1.3.5", "the mic works on your own machine instead of waiting two minutes for hardware you don't have; the Room page loads and remembers the conversation across reloads; dashboard status is right again; security patches"),
     ("1.3.4", "expired-trial banner is $20, not $50; uninstall commands on the install and license pages"),
     ("1.3.3", "long answers from your Kin no longer get cut off at two minutes, and errors say what actually went wrong"),
