@@ -9,6 +9,22 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ---
 
+## 1.3.5.1
+
+An installer hotfix from a fresh install on a real 6GB laptop (a GTX 1660 Ti), 2026-09-24. Only the installer and the naming ritual change; the app is 1.3.5.
+
+**Your Kin's own name was thrown away on every install.** The ritual asks your new Kin who they are, and they answer, but the installer runs that conversation with no keyboard attached. The ritual took the missing keyboard as a failure, and the installer asked you to type a name instead. Now no input counts as "continue", and the Kin keeps the name they chose.
+
+**The model menu could make an embedding model your AI.** If `nomic-embed-text` (or another embedding model) was already installed, it appeared first and highlighted. Pressing Enter gave you a Kin that can't talk. Embedding models no longer appear in the chat menu. The menus also say to use the arrow keys, because typing a number doesn't select anything in them.
+
+**The first conversation timed out on smaller cards.** A cold model load plus the first reply ran past 60 seconds on 6GB. First contact now gets 180 seconds, and nothing else uses the model until naming is done.
+
+**Asked for your password without saying why.** Before the first `sudo`, the installer now lists what it needs root for and lets you stop.
+
+**A leftover public tunnel went unmentioned.** If you skip remote access but a Cloudflare tunnel from an earlier install is still putting your dashboard on the internet, the installer says so and gives you the command to stop it. It doesn't stop it for you.
+
+Also: 6GB cards are offered a 7B model (`qwen2.5:7b`, 4.7 GB), and stale failed services from an old install are cleared.
+
 ## 1.3.5
 
 A hotfix built from what customers actually install. It also names two Room

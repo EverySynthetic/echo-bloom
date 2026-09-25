@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Echo Bloom installer
-# Usage: curl -sSL <url>/install.sh -o install.sh && bash install.sh
+# Usage (the one command; version.py INSTALL_COMMAND, held by tests/test_install_command.py):
+#   curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh -o ~/echo-bloom-install.sh && bash ~/echo-bloom-install.sh
 
 set -euo pipefail
 
@@ -22,9 +23,9 @@ trap 'echo "INSTALL EXIT: line $LINENO, exit $?" >> "$INSTALL_LOG"' EXIT
 if [ ! -t 0 ]; then
     echo ""
     echo "  Echo Bloom installer requires an interactive terminal."
-    echo "  Use process substitution so stdin stays attached to your terminal:"
+    echo "  Download it first, then run it, so it can ask you questions:"
     echo ""
-    echo "    bash <(curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh)"
+    echo "    curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh -o ~/echo-bloom-install.sh && bash ~/echo-bloom-install.sh"
     echo ""
     exit 1
 fi
@@ -209,6 +210,20 @@ is_installed() {
     return 1
 }
 
+# ── Embedding models can't hold a conversation ───────────────────────────────
+# Don's A15 (2026-09-24) had nomic-embed-text installed, and the menu offered
+# it as item 1, the highlighted default: Enter gave a Kin that can't talk and
+# a naming ritual that failed. They stay in INSTALLED_MODELS (is_installed()
+# is how the embedding pull below knows to skip), just never as a chat choice.
+_is_embedding_model() {
+    local m="${1,,}"
+    m="${m%%:*}"; m="${m##*/}"
+    case "$m" in
+        *embed*|bge*|all-minilm*|paraphrase-multilingual*) return 0 ;;
+    esac
+    return 1
+}
+
 # ── Helper: add model only if not already listed as [installed] at top ────────
 _add_model() {
     is_installed "$1" && return 0
@@ -228,6 +243,7 @@ build_model_menu() {
     # Prepend already-installed models at the top
     if [[ ${#INSTALLED_MODELS[@]} -gt 0 ]]; then
         for m in "${INSTALLED_MODELS[@]}"; do
+            _is_embedding_model "$m" && continue
             MODEL_IDS+=("$m")
             MODEL_LABELS+=("$(printf '%-35s [installed]' "$m")")
         done
@@ -237,6 +253,13 @@ build_model_menu() {
     _add_model "llama3.2:3b"        "llama3.2:3b        [2.0 GB]  Meta — lightweight, fast conversational"
     _add_model "qwen2.5-coder:1.5b" "qwen2.5-coder:1.5b [1.2 GB]  Coding specialist, fast autocomplete"
     _add_model "phi4-mini"          "phi4-mini          [2.3 GB]  Microsoft 3.8B — high reasoning density"
+
+    # A 7B at Q4 on a 6GB card. Don's A15 (1660 Ti 6GB) was offered 3-4B
+    # only; Ollama's default qwen2.5:7b tag is Q4_K_M at 4.7GB, which leaves
+    # room for the 2-8K context a Kin uses. Labelled with its real size.
+    if [[ $vram -ge 6 ]]; then
+        _add_model "qwen2.5:7b"     "qwen2.5:7b         [4.7 GB]  7B at Q4 — the most that fits 6GB, snug"
+    fi
 
     # Tier 2 — 8+ GB VRAM or 16+ GB RAM (CPU offload)
     # 6-7GB cards: context spills to RAM on 8B+ models — use tier 1 or the door below
@@ -334,6 +357,10 @@ pick_model_whiptail() {
                 msg="$(printf 'Detected: %dGB VRAM · %dGB RAM\nChoose the model your AI will think with:' "$vram" "$ram")"
             fi
         fi
+
+        # whiptail doesn't jump to a typed number: on Don's A15, "3" then
+        # Enter picked item 1 (reproduced 2026-09-24). Say so on the menu.
+        msg+=$'\n\nUse the arrow keys to move, Enter to choose. Typing a number does not select it.'
 
         for label in "${cur_labels[@]}"; do
             menu_args+=("$i" "$label")
@@ -768,6 +795,26 @@ REQEOF
     ok "Dependencies installed."
 }
 
+# ── Vendor dependencies ───────────────────────────────────────────────────────
+pull_vendor_kin_diary() {
+    local pin_file="$APP_DIR/vendor/kin_diary.pin"
+    local vendor_dir="$APP_DIR/vendor/kin_diary"
+    if [[ -f "$pin_file" ]]; then
+        local pin
+        pin=$(tr -d '[:space:]' < "$pin_file")
+        if [[ ! -d "$vendor_dir/.git" ]]; then
+            info "Cloning kin_diary..."
+            mkdir -p "$APP_DIR/vendor"
+            git clone https://github.com/dude4511984/kin_diary.git "$vendor_dir" 2>/dev/null || \
+              git clone "$HOME/kin_diary" "$vendor_dir" 2>/dev/null || true
+        fi
+        if [[ -d "$vendor_dir/.git" ]]; then
+            (cd "$vendor_dir" && git fetch --quiet 2>/dev/null || true; git checkout --quiet "$pin" 2>/dev/null || true)
+            ok "kin_diary ready at $pin"
+        fi
+    fi
+}
+
 # ── launchd helpers (macOS) ─────────────────────────────────────────────────────
 # One label prefix for everything Echo Bloom installs, so uninstall can find
 # and remove all of it by pattern instead of needing an exact remembered list.
@@ -929,6 +976,11 @@ run_naming_ritual() {
     echo -e "  ${DIM}(still working — you'll see a name when it's done)${NC}"
     echo
 
+    # The ritual has the model to itself (A15, 2026-09-24): nothing that calls
+    # it is started until naming is done, and a re-run stops the old
+    # install's wander here. 720s outer: 180s first contact (cold load) plus
+    # four warm turns at 120s (naming_ritual.py).
+
     # Spinner runs in background while ritual executes
     _spin() {
         local chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' i=0
@@ -944,7 +996,7 @@ run_naming_ritual() {
     local ritual_result="/tmp/_eb_ritual_result.json"
     rm -f "$ritual_result"
     ECHO_BLOOM_RESULT_FILE="$ritual_result" \
-        _run_timeout 120 python3 "$ritual_script" --model "$model" > /tmp/_eb_ritual.txt 2>&1 &
+        _run_timeout 720 python3 "$ritual_script" --model "$model" > /tmp/_eb_ritual.txt 2>&1 &
     local ritual_pid=$!
     _spin "$ritual_pid"
     wait "$ritual_pid" || exit_code=$?
@@ -1287,14 +1339,23 @@ SVCEOF
 
     if command -v systemctl &>/dev/null; then
         systemctl --user daemon-reload 2>/dev/null || true
+        # An earlier install's units can still be marked failed (Don's A15,
+        # 2026-09-24, from an August install); that state outlives the new
+        # unit files and reads as "broken" in systemctl status.
+        systemctl --user reset-failed 'echo_bloom*' 2>/dev/null || true
         systemctl --user enable echo_bloom_vault   2>/dev/null || true
         systemctl --user start  echo_bloom_vault   2>/dev/null || true
         systemctl --user enable echo_bloom_pulse   2>/dev/null || true
         systemctl --user start  echo_bloom_pulse   2>/dev/null || true
+        # Enabled here, STARTED after naming (with wander, below main's
+        # seed_config): reflect's OnBootSec=20min has long passed on a box
+        # that's been up, so starting its timer fires it at once, and it
+        # calls the model while the naming ritual needs it (A15, 2026-09-24).
         systemctl --user enable echo_bloom_bedtime.timer 2>/dev/null || true
-        systemctl --user start  echo_bloom_bedtime.timer 2>/dev/null || true
         systemctl --user enable echo_bloom_reflect.timer 2>/dev/null || true
-        systemctl --user start  echo_bloom_reflect.timer 2>/dev/null || true
+        # A re-run: the old install's wander is still going and the new
+        # ritual queued behind it. Stopped until naming is done.
+        systemctl --user stop echo_bloom_wander echo_bloom_reflect.service 2>/dev/null || true
         # Wandering is the feature this product is named around, and nothing
         # here ever enabled it — the unit was written and left cold, with a
         # single info line telling the customer to run a command by hand.
@@ -1568,13 +1629,42 @@ open_browser() {
 
 # ── Remote access setup ───────────────────────────────────────────────────────
 
+# ── Is this dashboard already on the internet? ───────────────────────────────
+# Don's A15 (2026-09-24): an old install had left cloudflared.service running
+# a public tunnel to :8090, and choosing "Skip" said nothing about it. Tell
+# the customer and give them the command; never stop it for them.
+report_existing_tunnel() {
+    local unit found=false
+    if command -v systemctl &>/dev/null; then
+        for unit in $(systemctl --user list-units --type=service --state=active \
+                        --no-legend --plain 'cloudflared*' 2>/dev/null | awk '{print $1}'); do
+            if systemctl --user cat "$unit" 2>/dev/null \
+                    | grep -qE "(localhost|127\.0\.0\.1):${PORT}([^0-9]|$)"; then
+                warn "A Cloudflare tunnel is already putting this dashboard on the internet ($unit)."
+                echo "  Stop it with: systemctl --user disable --now $unit"
+                found=true
+            fi
+        done
+    fi
+    $found && return 0
+    # Not a unit: a cloudflared started by hand. -x matches the process name
+    # exactly; pgrep -f would match its own command line.
+    local line
+    while IFS= read -r line; do
+        [[ "$line" =~ (localhost|127\.0\.0\.1):${PORT}([^0-9]|$) ]] || continue
+        warn "A Cloudflare tunnel is already putting this dashboard on the internet (cloudflared, PID ${line%% *})."
+        echo "  Stop it with: kill ${line%% *}"
+    done < <(pgrep -a -x cloudflared 2>/dev/null)
+    return 0
+}
+
 setup_remote_access() {
     local choice
 
     if $HAS_WHIPTAIL; then
         choice=$(whiptail --title " Echo Bloom — Remote Access " \
-            --menu "How do you want to reach your Kin from anywhere?\n\nAll options are free. Pick what fits." \
-            20 72 4 \
+            --menu "How do you want to reach your Kin from anywhere?\n\nAll options are free. Pick what fits.\nUse the arrow keys to move, Enter to choose (typing a number does not select it)." \
+            21 72 4 \
             "1" "Cloudflare  — Instant public URL. No account needed. Ready in 30 sec." \
             "2" "Tailscale   — Private. Your devices only, no public URL." \
             "3" "Skip        — Set this up later." \
@@ -1592,7 +1682,8 @@ setup_remote_access() {
     case "$choice" in
         1) setup_cloudflare ;;
         2) setup_tailscale ;;
-        *) warn "Skipping remote access. Run the installer again to add it later." ;;
+        *) warn "Skipping remote access. Run the installer again to add it later."
+           report_existing_tunnel ;;
     esac
 }
 
@@ -1755,6 +1846,35 @@ SVCEOF
 
 banner
 
+# ── Before anything asks for a password: say what for ─────────────────────────
+# The 2026-09-24 install rehearsal: a stranger got a sudo prompt with nothing
+# on the page or in the terminal saying why. This is every sudo in this file
+# (grep sudo), said once, up front, before preflight's first one, with a way
+# out. Keep it in step: a new sudo below needs a line here and in README.md
+# (tests/test_install_command.py checks the two lists name the same things).
+sudo_notice() {
+    echo
+    echo -e "${BOLD}Before we start: when this installer asks for your password${NC}"
+    echo
+    echo "  Your password (sudo) is only used for these, and only if they're needed:"
+    echo "   - installing missing system packages with your package manager:"
+    echo "     Python 3, pip, git, curl, and Tcl/Tk for the control panel"
+    echo "   - installing Ollama with its own installer from ollama.com, which"
+    echo "     sets it up as a system service; and starting that service if"
+    echo "     starting Ollama as you doesn't work"
+    echo "   - letting Echo Bloom keep running after you log out (loginctl enable-linger)"
+    echo "   - Tailscale, only if you pick it for remote access at the end:"
+    echo "     installing it, starting its service and signing in"
+    echo
+    echo "  Echo Bloom itself, your Kin and their memory install and run as you,"
+    echo "  in your home folder, never as root. Each step says what it's doing."
+    echo
+    read -rp "  Continue? [Y/n] " _sudo_ok
+    [[ "${_sudo_ok:-Y}" =~ ^[Nn] ]] && die "Stopped before anything was installed."
+    return 0
+}
+sudo_notice
+
 # ── Preflight — check everything, ask once, install all ───────────────────────
 preflight
 
@@ -1882,6 +2002,7 @@ cd "$APP_DIR"
 install_deps
 install_voice
 deploy_scripts
+pull_vendor_kin_diary
 
 # Step 4 — Meet your Kin (deps are installed, so requests is available)
 echo
@@ -1895,6 +2016,7 @@ seed_config "$SELECTED_MODEL" "$RITUAL_NAME" "$RITUAL_PRONOUN" "$RITUAL_DESC"
 # sat dead until the next reboot.
 if command -v systemctl &>/dev/null; then
     systemctl --user restart echo_bloom_pulse  2>/dev/null || true
+    systemctl --user start echo_bloom_bedtime.timer echo_bloom_reflect.timer 2>/dev/null || true
     if systemctl --user restart echo_bloom_wander 2>/dev/null; then
         _wander_up=false
         for _w in 1 2 3 4 5; do
@@ -2020,6 +2142,7 @@ if $APP_UP; then
     setup_remote_access
 else
     warn "Skipping remote access — the app isn't running yet."
+    report_existing_tunnel
     echo "  Fix that first, then set it up from inside the app (Remote Access card)."
 fi
 
