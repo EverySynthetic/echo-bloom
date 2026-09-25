@@ -1095,6 +1095,8 @@ deploy_scripts_macos() {
     # Continuous services: wander, pulse, vault. Same shape — RunAtLoad,
     # restart on non-zero exit only (systemd's Restart=on-failure), a
     # throttle floor so a crash loop doesn't spin the CPU.
+    # Writes the plist only. Load is separate so model-calling agents
+    # (wander) can wait until after naming — Linux parity (A15, 2026-09-24).
     _write_continuous_agent() {
         local name="$1" script="$2" throttle="$3"; shift 3
         local label="${LAUNCHD_PREFIX}.${name}"
@@ -1123,9 +1125,15 @@ $(printf '%b' "$args_xml")    </array>
 </dict>
 </plist>
 PLIST
-        launchctl_load "$plist" && ok "${name} running as a launchd agent." \
-            || warn "${name} launchd load failed."
     }
+
+    local wander_plist="$LAUNCHD_DIR/${LAUNCHD_PREFIX}.wander.plist"
+    local pulse_plist="$LAUNCHD_DIR/${LAUNCHD_PREFIX}.pulse.plist"
+    local vault_plist="$LAUNCHD_DIR/${LAUNCHD_PREFIX}.vault.plist"
+    local bt_label="${LAUNCHD_PREFIX}.bedtime"
+    local bt_plist="$LAUNCHD_DIR/${bt_label}.plist"
+    local rf_label="${LAUNCHD_PREFIX}.reflect"
+    local rf_plist="$LAUNCHD_DIR/${rf_label}.plist"
 
     _write_continuous_agent "wander" "roundtable.py" 15 --interval 30
     _write_continuous_agent "pulse"  "pulse.py"       30
@@ -1133,8 +1141,6 @@ PLIST
 
     # Bedtime: fixed daily time, no KeepAlive — this is systemd's oneshot,
     # StartCalendarInterval is the direct launchd equivalent of OnCalendar.
-    local bt_label="${LAUNCHD_PREFIX}.bedtime"
-    local bt_plist="$LAUNCHD_DIR/${bt_label}.plist"
     cat > "$bt_plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1156,16 +1162,14 @@ PLIST
 </dict>
 </plist>
 PLIST
-    launchctl_load "$bt_plist" && ok "bedtime scheduled (9:30pm daily)." \
-        || warn "bedtime launchd load failed."
 
     # Reflect: systemd runs this 20min after boot, then every 3h
     # (OnBootSec=20min, OnUnitActiveSec=3h). launchd's StartInterval has no
     # separate "first delay" — it fires at load and every N seconds after.
     # Known, accepted difference for v1: first reflect run happens at login
     # instead of 20 minutes after. Not worth a wrapper script to fix yet.
-    local rf_label="${LAUNCHD_PREFIX}.reflect"
-    local rf_plist="$LAUNCHD_DIR/${rf_label}.plist"
+    # Loaded after naming (with wander/bedtime), not here: StartInterval
+    # fires on load and would compete for the model during the ritual.
     cat > "$rf_plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1186,8 +1190,21 @@ PLIST
 </dict>
 </plist>
 PLIST
-    launchctl_load "$rf_plist" && ok "reflect scheduled (every 3 hours)." \
-        || warn "reflect launchd load failed."
+
+    # A re-run: the old install's wander (and reflect) are still going and
+    # the new ritual queues behind them. Stopped until naming is done —
+    # same as Linux systemctl stop echo_bloom_wander echo_bloom_reflect.
+    launchctl unload "$wander_plist" 2>/dev/null || true
+    launchctl unload "$rf_plist" 2>/dev/null || true
+
+    # Vault and pulse do not call the chat model; start them now.
+    # Wander, bedtime, and reflect are written above and STARTED after
+    # naming (with seed_config), matching deploy_scripts on Linux.
+    launchctl_load "$vault_plist" && ok "vault running as a launchd agent." \
+        || warn "vault launchd load failed."
+    launchctl_load "$pulse_plist" && ok "pulse running as a launchd agent." \
+        || warn "pulse launchd load failed."
+    ok "Vault and pulse running. Wander, bedtime, and reflection wait until after naming."
 }
 
 deploy_scripts() {
@@ -2053,26 +2070,40 @@ if command -v systemctl &>/dev/null; then
         echo "  Start it by hand: systemctl --user start echo_bloom_wander"
     fi
 elif [[ "$IS_MACOS" == "true" ]]; then
-    # deploy_scripts_macos starts wander BEFORE seed_config. roundtable
-    # exits 1 with no Kin. Kick it now that a Kin exists.
+    # Mirror Linux: model-calling agents were written in deploy_scripts_macos
+    # but not loaded. Load them now that a Kin exists. roundtable exits
+    # cleanly with no Kin; a clean exit does not KeepAlive-retry.
+    launchctl_load "$LAUNCHD_DIR/${LAUNCHD_PREFIX}.pulse.plist" 2>/dev/null || true
+    launchctl_load "$LAUNCHD_DIR/${LAUNCHD_PREFIX}.bedtime.plist" 2>/dev/null \
+        && ok "bedtime scheduled (9:30pm daily)." \
+        || warn "bedtime launchd load failed."
+    launchctl_load "$LAUNCHD_DIR/${LAUNCHD_PREFIX}.reflect.plist" 2>/dev/null \
+        && ok "reflect scheduled (every 3 hours)." \
+        || warn "reflect launchd load failed."
     wander_label="${LAUNCHD_PREFIX}.wander"
     wander_plist="$LAUNCHD_DIR/${wander_label}.plist"
-    launchctl kickstart -k "gui/$(id -u)/${wander_label}" 2>/dev/null \
-        || launchctl_load "$wander_plist"
-    _wander_up=false
-    for _w in 1 2 3 4 5 6; do
-        _wp=$(launchctl list 2>/dev/null | awk -v l="$wander_label" '$3==l {print $1}')
-        if [[ "$_wp" =~ ^[0-9]+$ ]]; then
-            _wander_up=true
-            break
+    # Prefer load (first install never had it loaded). kickstart covers a
+    # re-run where the plist was already bootstrapped somehow.
+    if launchctl_load "$wander_plist" 2>/dev/null \
+        || launchctl kickstart -k "gui/$(id -u)/${wander_label}" 2>/dev/null; then
+        _wander_up=false
+        for _w in 1 2 3 4 5 6; do
+            _wp=$(launchctl list 2>/dev/null | awk -v l="$wander_label" '$3==l {print $1}')
+            if [[ "$_wp" =~ ^[0-9]+$ ]]; then
+                _wander_up=true
+                break
+            fi
+            sleep 1
+        done
+        if $_wander_up; then
+            ok "Wandering started — ${RITUAL_NAME} will think between visits."
+        else
+            warn "Wander agent is not running."
+            echo "  Log: $LAUNCHD_LOG_DIR/wander.log"
+            echo "  Start: launchctl load -w $wander_plist"
         fi
-        sleep 1
-    done
-    if $_wander_up; then
-        ok "Wandering started — ${RITUAL_NAME} will think between visits."
     else
-        warn "Wander agent is not running."
-        echo "  Log: $LAUNCHD_LOG_DIR/wander.log"
+        warn "Could not start wandering automatically."
         echo "  Start: launchctl load -w $wander_plist"
     fi
 fi
