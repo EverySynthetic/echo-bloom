@@ -122,6 +122,107 @@ class NamingGetsTheModelToItself(unittest.TestCase):
             self.assertTrue(all(i > naming for i in starts), f"{unit} starts before naming")
 
 
+class MacOSNamingGetsTheModelToItself(unittest.TestCase):
+    """macOS had the same A15 race: deploy_scripts_macos loaded wander
+    (RunAtLoad) and reflect (StartInterval fires on load) before naming.
+    Mirror Linux — write the plists, stop any old wander, start model users
+    only after seed_config."""
+
+    MODEL_PLISTS = ("wander", "reflect", "bedtime")
+    OK_NOW = ("vault", "pulse")
+
+    def _run_deploy_macos(self):
+        """deploy_scripts_macos with launchctl stubbed; returns recorded calls."""
+        import tempfile
+        tmp = tempfile.mkdtemp()
+        log = f"{tmp}/launchctl.log"
+        scripts = f"{tmp}/scripts"
+        # Pre-create an "old install" wander plist so unload is meaningful.
+        old_agents = f"{tmp}/home/Library/LaunchAgents"
+        stubs = rf"""
+set +e
+HOME="{tmp}/home"
+mkdir -p "$HOME" "{scripts}" "{old_agents}"
+LAUNCHD_PREFIX="com.everysynthetic.echobloom"
+LAUNCHD_DIR="$HOME/Library/LaunchAgents"
+LAUNCHD_LOG_DIR="$HOME/Library/Logs/EchoBloom"
+ok() {{ :; }}
+warn() {{ :; }}
+_real_python() {{ echo /usr/bin/python3; }}
+LAUNCHCTL_LOG="{log}"
+: > "$LAUNCHCTL_LOG"
+launchctl() {{
+    # Record every call. load/unload/kickstart are what the installer uses.
+    printf '%s\n' "$*" >> "$LAUNCHCTL_LOG"
+    return 0
+}}
+"""
+        script = (stubs + fn("launchctl_load") + "\n" + fn("deploy_scripts_macos")
+                  + f'\ndeploy_scripts_macos "{scripts}"\n')
+        out, err, rc = bash(script)
+        self.assertEqual(rc, 0, f"stderr={err!r} stdout={out!r}")
+        calls = Path(log).read_text(encoding="utf-8").splitlines()
+        return calls
+
+    @staticmethod
+    def _loads(calls):
+        """Plist basenames that were launchctl load'd (starts the agent)."""
+        loaded = []
+        for c in calls:
+            # "load -w /path/to/com.everysynthetic.echobloom.wander.plist"
+            if re.match(r"load\b", c):
+                m = re.search(r"\.(wander|reflect|bedtime|vault|pulse)\.plist", c)
+                if m:
+                    loaded.append(m.group(1))
+        return loaded
+
+    @staticmethod
+    def _unloads(calls):
+        unloaded = []
+        for c in calls:
+            if re.match(r"unload\b", c):
+                m = re.search(r"\.(wander|reflect|bedtime|vault|pulse)\.plist", c)
+                if m:
+                    unloaded.append(m.group(1))
+        return unloaded
+
+    def test_deploy_does_not_start_anything_that_calls_the_model(self):
+        # On the OLD code this fails: wander and reflect were load'd here.
+        calls = self._run_deploy_macos()
+        loaded = self._loads(calls)
+        for name in self.MODEL_PLISTS:
+            self.assertNotIn(name, loaded,
+                             f"{name} is launchctl-load'd in deploy_scripts_macos, before naming")
+        for name in self.OK_NOW:
+            self.assertIn(name, loaded, f"{name} should still start in deploy")
+
+    def test_a_rerun_stops_the_old_wander_before_naming(self):
+        calls = self._run_deploy_macos()
+        unloaded = self._unloads(calls)
+        self.assertIn("wander", unloaded,
+                      "re-run must unload the old wander before the ritual")
+        self.assertIn("reflect", unloaded,
+                      "re-run must unload reflect (StartInterval would fire on a leftover load)")
+
+    def test_model_users_are_started_only_after_naming(self):
+        naming = SRC.index('\nrun_naming_ritual "$SELECTED_MODEL"')
+        after = SRC[naming:]
+        deploy = fn("deploy_scripts_macos")
+        # deploy writes plists and loads only vault/pulse.
+        self.assertRegex(deploy, r'launchctl_load "\$vault_plist"')
+        self.assertRegex(deploy, r'launchctl_load "\$pulse_plist"')
+        self.assertNotRegex(deploy, r'launchctl_load "\$wander_plist"')
+        self.assertNotRegex(deploy, r'launchctl_load "\$rf_plist"')
+        self.assertNotRegex(deploy, r'launchctl_load "\$bt_plist"')
+        self.assertNotRegex(deploy, r'launchctl kickstart')
+        # After naming: bedtime, reflect, wander get loaded (Linux start mirror).
+        self.assertIn('launchctl_load "$LAUNCHD_DIR/${LAUNCHD_PREFIX}.bedtime.plist"', after)
+        self.assertIn('launchctl_load "$LAUNCHD_DIR/${LAUNCHD_PREFIX}.reflect.plist"', after)
+        wander_starts = list(re.finditer(
+            r'launchctl_load "\$wander_plist"|launchctl kickstart[^\n]*wander', after))
+        self.assertTrue(wander_starts, "wander is never started on macOS after naming")
+
+
 class ASkippedTunnelIsNotASilentTunnel(unittest.TestCase):
     """The A15's old August install had left cloudflared.service running,
     putting the dashboard on the internet. Choosing "Skip" for remote access
