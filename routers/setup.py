@@ -165,6 +165,21 @@ async def api_test_node(request: Request, _=Depends(require_auth)):
         return {"ok": False, "error": str(e)}
 
 
+def is_embedding_model(name: str) -> bool:
+    """True if name is an embedding model, not a chat model.
+    Matches install.sh _is_embedding_model: *embed*, bge*, all-minilm*, paraphrase-multilingual*.
+    """
+    m = (name or "").lower().strip()
+    m = m.split(":", 1)[0]
+    m = m.rsplit("/", 1)[-1]
+    return (
+        "embed" in m
+        or m.startswith("bge")
+        or m.startswith("all-minilm")
+        or m.startswith("paraphrase-multilingual")
+    )
+
+
 @router.post("/api/onboard/models")
 async def api_onboard_models(request: Request, _=Depends(require_auth)):
     body = await request.json()
@@ -178,7 +193,11 @@ async def api_onboard_models(request: Request, _=Depends(require_auth)):
                 timeout=aiohttp.ClientTimeout(total=8),
             ) as r:
                 data = await r.json()
-                models = [m["name"] for m in data.get("models", [])]
+                models = [
+                    m["name"]
+                    for m in data.get("models", [])
+                    if not is_embedding_model(m.get("name", ""))
+                ]
                 models.sort()
                 return {"ok": True, "models": models}
     except Exception as e:
