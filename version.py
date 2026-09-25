@@ -21,6 +21,17 @@ INSTALL_COMMAND = (
     " -o ~/echo-bloom-install.sh && bash ~/echo-bloom-install.sh"
 )
 
+# The one Windows install command. Same job as INSTALL_COMMAND: every page,
+# the README and the Help agent say exactly this; tests/test_install_command.py
+# fails if any of them drift. This is the guided wizard — what the install
+# page offers customers as the copyable command. install.ps1 stays the
+# headless path and is linked from the page as secondary, not advertised as
+# a second primary command.
+WINDOWS_INSTALL_COMMAND = (
+    'powershell -ExecutionPolicy Bypass -Command '
+    '"iwr -useb https://everysynthetic.org/install_wizard.ps1 | iex"'
+)
+
 # (version, one-line descriptor) — newest first, shown on /about. Add one
 # line per release. Security-shaped fixes get the generic "security
 # patches" descriptor rather than exploit specifics, so this stays honest

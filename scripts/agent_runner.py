@@ -99,8 +99,10 @@ HELP_SYSTEM = (
     # version.py isn't.
     "Linux and macOS (bash, zsh and fish alike): curl -fsSL https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main/install.sh -o ~/echo-bloom-install.sh && bash ~/echo-bloom-install.sh . "
     "It asks for the password (sudo) only to install missing system packages, "
-    "Ollama, linger for the background services, or Tailscale if chosen. Windows: powershell -ExecutionPolicy Bypass -Command \"iwr "
-    "-useb https://everysynthetic.org/install_wizard.ps1 | iex\". macOS is "
+    "Ollama, linger for the background services, or Tailscale if chosen. "
+    # Word for word version.WINDOWS_INSTALL_COMMAND (tests/test_install_command.py).
+    'Windows: powershell -ExecutionPolicy Bypass -Command "iwr -useb https://everysynthetic.org/install_wizard.ps1 | iex". '
+    "macOS is "
     "early access and uses launchd instead of systemd; the install log is at "
     "/tmp/echo_bloom_install.log.\n\n"
 

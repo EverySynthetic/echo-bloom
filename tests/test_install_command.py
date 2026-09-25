@@ -64,6 +64,81 @@ class OneInstallCommand(unittest.TestCase):
         self.assertEqual(deps.templates.env.globals["install_cmd"], _command())
 
 
+# Any iwr of an Echo Bloom Windows installer (not uninstall.ps1).
+WIN_FETCH = re.compile(
+    r"iwr[^\n`<]*?everysynthetic\.org[^\n`<]*?(?<!un)install(?:_wizard)?\.ps1[^\n`<]*"
+)
+
+WIN_SURFACES = ["README.md", "scripts/agent_runner.py", "templates/install.html"]
+
+
+def _win_command():
+    import sys
+    sys.path.insert(0, str(ROOT))
+    import version
+    return version.WINDOWS_INSTALL_COMMAND
+
+
+class OneWindowsInstallCommand(unittest.TestCase):
+    """Windows had two installers on purpose (wizard + headless) but three
+    different answers for which is *the* command: the install page and Help
+    said install_wizard.ps1; README said install.ps1. Same bug Linux had.
+
+    version.WINDOWS_INSTALL_COMMAND is the one source — the command the
+    install page offers customers today. README and Help carry it word for
+    word; the page reads the template global. Headless stays a labelled
+    secondary link, not a competing command.
+    """
+
+    def test_there_is_one_source(self):
+        cmd = _win_command()
+        self.assertTrue(
+            cmd.startswith('powershell -ExecutionPolicy Bypass -Command "iwr -useb '),
+            cmd,
+        )
+        self.assertIn("install_wizard.ps1", cmd)
+        self.assertNotIn("install.ps1 |", cmd.replace("install_wizard.ps1", ""))
+
+    def test_no_customer_surface_advertises_a_different_fetch(self):
+        cmd = _win_command()
+        for name in WIN_SURFACES:
+            src = (ROOT / name).read_text(encoding="utf-8")
+            for m in WIN_FETCH.finditer(src):
+                hit = m.group(0)
+                # Template placeholder is fine; resolved at render time.
+                if "windows_install_cmd" in hit or "{{" in hit:
+                    continue
+                self.assertIn(
+                    "install_wizard.ps1", hit,
+                    f"{name}: headless install.ps1 is not the customer command: {hit!r}",
+                )
+                # The fetch URL/path inside the one command.
+                self.assertIn(
+                    "https://everysynthetic.org/install_wizard.ps1", hit,
+                    f"{name}: a different Windows install fetch: {hit!r}",
+                )
+
+    def test_readme_and_help_say_it_word_for_word(self):
+        cmd = _win_command()
+        for name in ("README.md", "scripts/agent_runner.py"):
+            src = (ROOT / name).read_text(encoding="utf-8")
+            self.assertIn(cmd, src, f"{name} doesn't carry the Windows install command")
+
+    def test_page_reads_it_from_the_source(self):
+        src = (ROOT / "templates/install.html").read_text(encoding="utf-8")
+        self.assertIn("{{ windows_install_cmd }}", src)
+        # Headless stays secondary and labelled — link, not a second copy command.
+        self.assertIn("headless", src.lower())
+        self.assertIn('href="/install.ps1"', src)
+        self.assertIn('href="/install_wizard.ps1"', src)
+
+    def test_the_template_global_is_the_command(self):
+        import deps
+        self.assertEqual(
+            deps.templates.env.globals["windows_install_cmd"], _win_command()
+        )
+
+
 class SudoIsExplainedFirst(unittest.TestCase):
     """install.sh says what it needs the password for, before preflight (the
     first place it can call sudo), and gives the customer a way out."""

@@ -58,9 +58,10 @@ you, not as root.
 
 **Windows** — paste into CMD or PowerShell:
 ```
-powershell -ExecutionPolicy Bypass -Command "iwr -useb https://everysynthetic.org/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "iwr -useb https://everysynthetic.org/install_wizard.ps1 | iex"
 ```
 A window will appear showing exactly what will be installed before anything happens.
+(Headless / no window: `install.ps1` instead of `install_wizard.ps1`.)
 
 Requires [Ollama](https://ollama.com). The installer will offer to set it up if it's missing.
 
