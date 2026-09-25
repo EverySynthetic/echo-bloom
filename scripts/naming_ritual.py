@@ -128,7 +128,14 @@ def run_ritual():
     for _ in range(3):
         try:
             user_input = input("  You (or Enter to continue): ").strip()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
+            # The installer runs the ritual with no keyboard attached (a spinner,
+            # output to a file). No input is Enter: go on to the name the Kin
+            # chose. Returning None here threw away every self-chosen name on
+            # every install (A15, 2026-09-24: the Kin said "Nova", and the
+            # installer asked for a name anyway).
+            break
+        except KeyboardInterrupt:
             return None
 
         if user_input.lower() == "skip":
