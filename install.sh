@@ -731,6 +731,7 @@ psutil>=5.9.0
 qrcode>=7.4.2
 faster-whisper>=1.0.0
 piper-tts>=1.2.0
+Pillow>=10.0,<12.4
 REQEOF
     fi
 

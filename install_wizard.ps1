@@ -889,7 +889,7 @@ function Start-InstallWorker {
             # both Windows lists, so roundtable/wander died at import.
             $pkgs   = @('fastapi>=0.141,<0.142','uvicorn[standard]','aiohttp','jinja2','python-multipart',
                         'bcrypt','cryptography','faster-whisper','piper-tts',
-                        'qdrant-client','psutil','requests')
+                        'qdrant-client','psutil','requests','Pillow>=10.0,<12.4')
             $failed = @()
 
             foreach ($pkg in $pkgs) {

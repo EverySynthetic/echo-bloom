@@ -324,7 +324,8 @@ $packages = @(
     # Every lifecycle script imports requests. It was in requirements.txt and
     # neither Windows list — the roundtable died on its import line, so no
     # Windows Kin ever wandered. Same disease that made piper mute.
-    'requests'
+    'requests',
+    'Pillow>=10.0,<12.4'
 )
 
 $pipFailed = @()
