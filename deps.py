@@ -164,15 +164,21 @@ def get_hw_caps() -> dict:
                 pass
 
     if vram_mb == 0 and sys.platform != "darwin":
-        log.warning("VRAM detection failed on every method — vision will show as unavailable")
+        log.warning("VRAM detection failed on every method — vision model table will use the CPU tier")
     if ram_gb == 0.0:
         log.warning("RAM detection failed on every method — speech will show as unavailable")
 
+    vram_gb = round(vram_mb / 1024, 1)
+    # vision_ok follows the photo/vision model table, not an 8 GB cutoff.
+    # Even CPU-only gets one-camera mode (gemma3:4b); missing models are a
+    # download prompt, not a hardware gate.
+    vision_ok = True
+
     _hw_caps_cache = {
         "vram_mb":   vram_mb,
-        "vram_gb":   round(vram_mb / 1024, 1),
+        "vram_gb":   vram_gb,
         "ram_gb":    round(ram_gb, 1),
-        "vision_ok": vram_mb >= 8192 or (sys.platform == "darwin" and ram_gb >= 8.0),
+        "vision_ok": vision_ok,
         "speech_ok": ram_gb >= 8.0,
         "fetch_ok":  True,
         "platform":  sys.platform,

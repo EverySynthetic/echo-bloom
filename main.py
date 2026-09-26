@@ -97,6 +97,22 @@ async def check_setup():
     import threading
     threading.Thread(target=get_hw_caps, daemon=True).start()
 
+    # Photo retention sweep: drop expired 90-day keeps. Same daemon-thread
+    # style as the hardware warm — no new scheduler. Once at start, then
+    # every 6 hours for the life of the process.
+    def _photo_sweep_loop():
+        import photo_store as _ps
+        while True:
+            try:
+                n = _ps.sweep()
+                if n:
+                    log.info("photo sweep removed %s expired file(s)", n)
+            except Exception:
+                log.warning("photo sweep failed", exc_info=True)
+            time.sleep(6 * 60 * 60)
+
+    threading.Thread(target=_photo_sweep_loop, daemon=True, name="photo-sweep").start()
+
     # On Linux, systemd owns the wander/roundtable lifecycle. Windows has no
     # equivalent — the scheduled task starts only this app, so on every Windows
     # install the Kin sat idle until someone found the START button on the
@@ -125,8 +141,8 @@ async def check_setup():
 
 from routers import (  # noqa: E402
     agent, agora, auth as auth_router, chat, cluster as cluster_router,
-    dashboard, formation, license as license_router, setup, speech, talk,
-    vault,
+    dashboard, formation, license as license_router, photos, setup, speech,
+    talk, vault,
 )
 
 app.include_router(setup.router)
@@ -141,3 +157,4 @@ app.include_router(license_router.router)
 app.include_router(vault.router)
 app.include_router(agora.router)
 app.include_router(formation.router)
+app.include_router(photos.router)

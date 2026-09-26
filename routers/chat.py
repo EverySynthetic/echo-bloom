@@ -414,13 +414,22 @@ async def api_fetch_whitelist(_=Depends(require_auth)):
     return {"whitelist": sorted(_FETCH_WHITELIST)}
 
 
-# ── Vision endpoint ─────────────────────────────────────────────────────────────
+# ── Vision endpoint (webcam) — same pipeline as photo share ────────────────────
 
 @router.post("/api/vision/{name}")
 async def api_vision(name: str, request: Request, _=Depends(require_auth)):
+    """Webcam button. Same two-eyes / one-camera path as POST /api/photo/describe.
+
+    Response shape stays {ok, description} so the existing page does not break.
+    description is the for_kin block (agreed slots only — never raw eye text).
+    """
+    import base64
+    import asyncio
+    from routers.photos import describe_image_bytes
+
     hw = get_hw_caps()
     if not hw["vision_ok"]:
-        return {"ok": False, "error": "Vision requires 8GB+ VRAM."}
+        return {"ok": False, "error": "Vision is not available on this machine."}
 
     body    = await request.json()
     img_b64 = (body.get("image") or "").strip()
@@ -429,40 +438,28 @@ async def api_vision(name: str, request: Request, _=Depends(require_auth)):
     if not img_b64:
         return {"ok": False, "error": "No image data."}
 
-    prompt = body.get("prompt", "Describe what you see in this image concisely.")
-    kin    = cl.KIN_BY_NAME.get(name)
-    host   = kin["host"] if kin else "http://localhost:11434"
-
-    # Try kin's node; fall back to first available node with a vision model
-    cfg          = cl.load_kin_config_raw()
-    vision_model = cfg.get("vision_model", "llava-phi3:latest")
-    vision_host  = cfg.get("vision_host", host)
-
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(
-                f"{vision_host}/api/chat",
-                json={
-                    "model":    vision_model,
-                    "messages": [{"role": "user", "content": prompt, "images": [img_b64]}],
-                    "stream":   False,
-                },
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as r:
-                data = await r.json()
-        if data.get("error"):
-            log.warning("vision failed for %s: %s", name, data["error"])
-            err = str(data["error"])
-            if "not found" in err.lower():
-                err = (f"The vision model '{vision_model}' is not installed. "
-                       f"Run: ollama pull {vision_model}")
-            return {"ok": False, "error": err}
-        desc = data.get("message", {}).get("content", "")
-        if not desc.strip():
-            return {"ok": False, "error": "The model returned an empty description."}
-        return {"ok": True, "description": desc}
-    except Exception as e:
-        # str(asyncio.TimeoutError()) is "" — the UI showed a blank error.
-        log.warning("vision request failed for %s", name, exc_info=True)
-        return {"ok": False,
-                "error": str(e) or f"{type(e).__name__} — the vision model may still be loading."}
+        raw = base64.b64decode(img_b64)
+    except Exception:
+        return {"ok": False, "error": "Image data was not readable."}
+
+    kin_name = name if name in cl.KIN_BY_NAME else "room"
+    result = await asyncio.to_thread(describe_image_bytes, raw, kin_name)
+
+    if not result.get("ok"):
+        # Preserve needs_models for the page if the frontend learns it later;
+        # description-shaped errors stay plain.
+        out = {"ok": False, "error": result.get("error") or "Vision failed."}
+        if result.get("needs_models"):
+            out["needs_models"] = result["needs_models"]
+        return out
+
+    return {
+        "ok": True,
+        "description": result["for_kin"],
+        # Extras the old page ignores; useful if the UI grows.
+        "id": result.get("id"),
+        "mode": result.get("mode"),
+        "kept": result.get("kept"),
+        "thumb_url": result.get("thumb_url"),
+    }
