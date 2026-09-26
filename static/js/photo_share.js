@@ -700,13 +700,15 @@
             let ev;
             try { ev = JSON.parse(payload); } catch (e) { continue; }
 
+            // A pull that fails must not end in "downloaded!" and a full bar.
+            if (ev.error) throw new Error(ev.error);
             if (ev.percent != null && this.els.modelsBar) {
               this.els.modelsBar.style.width = `${ev.percent}%`;
             }
-            if (this.els.modelsStatus) {
-              const modelName = ev.model || 'model';
+            if (this.els.modelsStatus && ev.model) {
               const pct = ev.percent != null ? `${ev.percent}%` : '';
-              this.els.modelsStatus.textContent = `Downloading ${modelName} ${pct}`.trim();
+              const step = ev.steps > 1 ? ` (${ev.step} of ${ev.steps})` : '';
+              this.els.modelsStatus.textContent = `Downloading ${ev.model}${step} ${pct}`.trim();
             }
           }
         }

@@ -52,5 +52,38 @@ class PhotoIdsAreExact(unittest.TestCase):
             root.glob.assert_called_once()
 
 
+
+class ThePagesDownloadButtonWorks(unittest.TestCase):
+    """Walked on the A15, 2026-09-26: the page's "Download now" posts no body,
+    and the route demanded a model name, so a customer's click failed. Each
+    side's tests had stubbed the other."""
+
+    def _client(self, missing):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routers import photos
+        from deps import require_auth
+        app = FastAPI()
+        app.include_router(photos.router)
+        app.dependency_overrides[require_auth] = lambda: True
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(photos.ve, "missing_cameras", return_value=missing).start()
+        mock.patch.object(photos, "_cameras", return_value=["gemma3:4b", "qwen2.5vl:3b"]).start()
+        return TestClient(app)
+
+    def test_no_body_with_nothing_missing_says_done(self):
+        r = self._client([]).post("/api/photo/models/pull")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('"status": "done"', r.text)
+
+    def test_a_model_outside_the_camera_list_is_refused(self):
+        r = self._client([]).post("/api/photo/models/pull", json={"model": "llama3:70b"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_the_page_throws_on_a_stream_error(self):
+        src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "static", "js", "photo_share.js")).read()
+        self.assertIn("if (ev.error) throw new Error(ev.error);", src)
+
 if __name__ == "__main__":
     unittest.main()

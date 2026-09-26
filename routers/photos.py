@@ -173,44 +173,75 @@ async def api_photo_get(photo_id: str, _=Depends(require_auth)):
 
 @router.post("/api/photo/models/pull")
 async def api_photo_models_pull(request: Request, _=Depends(require_auth)):
-    """Stream Ollama pull progress as data: {...} lines (chat-stream style)."""
-    body = await request.json()
-    model = str(body.get("model") or body.get("name") or "").strip()
-    if not model:
-        return {"ok": False, "error": "model required"}
-    host = _ollama_host()
+    """Stream Ollama pull progress as data: {...} lines (chat-stream style).
+
+    No body (what the page's "Download now" sends): pull every missing camera,
+    one after another. A named model must be one of this install's cameras;
+    this route is not a general "pull anything" door.
+    """
+    raw = await request.body()
+    try:
+        body = json.loads(raw) if raw.strip() else {}
+    except Exception:
+        body = {}
+    cfg = auth.load_config()
+    host = _ollama_host(cfg)
+    cameras = _cameras(cfg)
+    named = str(body.get("model") or body.get("name") or "").strip()
+    if named:
+        if named not in cameras:
+            return JSONResponse(status_code=400, content={
+                "ok": False, "error": f"{named} isn't one of this install's photo cameras."})
+        models = [named]
+    else:
+        models = [m["name"] for m in await asyncio.to_thread(ve.missing_cameras, cameras, host)]
+
+    def line(payload: dict) -> bytes:
+        return f"data: {json.dumps(payload)}\n\n".encode()
+
+    async def pull_one(session, model):
+        failed = None
+        async with session.post(
+            f"{host}/api/pull",
+            json={"name": model, "stream": True},
+            timeout=aiohttp.ClientTimeout(total=None, sock_read=120),
+        ) as resp:
+            async for chunk in resp.content:
+                chunk = chunk.strip()
+                if not chunk:
+                    continue
+                try:
+                    evt = json.loads(chunk.decode(errors="replace"))
+                except Exception:
+                    continue
+                percent = None
+                completed, total = evt.get("completed"), evt.get("total")
+                if isinstance(completed, int) and isinstance(total, int) and total > 0:
+                    percent = round(100.0 * completed / total, 1)
+                payload = {"model": model, "status": evt.get("status"), "percent": percent,
+                           "step": models.index(model) + 1, "steps": len(models)}
+                if evt.get("error"):
+                    failed = payload["error"] = str(evt["error"])
+                yield payload
+        # Only say done when Ollama didn't report an error: a failed pull used
+        # to be followed by "done" and a green bar.
+        if not failed:
+            yield {"model": model, "status": "done", "percent": 100,
+                   "step": models.index(model) + 1, "steps": len(models)}
 
     async def pull_stream() -> AsyncGenerator[bytes, None]:
+        if not models:
+            yield line({"status": "done", "percent": 100, "note": "nothing missing"})
+            return
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{host}/api/pull",
-                    json={"name": model, "stream": True},
-                    timeout=aiohttp.ClientTimeout(total=None, sock_read=120),
-                ) as resp:
-                    async for line in resp.content:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            evt = json.loads(line.decode() if isinstance(line, bytes) else line)
-                        except Exception:
-                            yield f"data: {json.dumps({'model': model, 'raw': line.decode(errors='replace')})}\n\n".encode()
-                            continue
-                        # Normalise a percent when Ollama sends completed/total.
-                        percent = None
-                        completed = evt.get("completed")
-                        total = evt.get("total")
-                        if isinstance(completed, int) and isinstance(total, int) and total > 0:
-                            percent = round(100.0 * completed / total, 1)
-                        payload = {"model": model, "status": evt.get("status"), "percent": percent}
-                        if evt.get("error"):
-                            payload["error"] = evt["error"]
-                        yield f"data: {json.dumps(payload)}\n\n".encode()
-            yield f"data: {json.dumps({'model': model, 'status': 'done', 'percent': 100})}\n\n".encode()
+                for model in models:
+                    async for payload in pull_one(session, model):
+                        yield line(payload)
+                        if payload.get("error"):
+                            return
         except Exception as e:
-            msg = str(e) or f"{type(e).__name__} (no detail)"
-            yield f"data: {json.dumps({'model': model, 'error': msg})}\n\n".encode()
+            yield line({"error": str(e) or f"{type(e).__name__} (no detail)"})
 
     return StreamingResponse(
         pull_stream(),
