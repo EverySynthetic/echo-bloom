@@ -451,6 +451,13 @@
     }
 
     async describeChip(chip) {
+      // The first photo loads two vision models one after the other: about a
+      // minute and a half on a 6 GB card (walked on the A15). Say so, rather
+      // than leave "looking…" to look stuck.
+      const slowHint = setTimeout(() => {
+        const t = chip.el && chip.el.querySelector('.photo-chip-status-text');
+        if (chip.status === 'looking' && t) t.textContent = 'looking… the first photo can take a minute or two';
+      }, 15000);
       try {
         // The file itself as the body (not FormData): the server streams it
         // against the size cap and never spools it to disk.
@@ -477,6 +484,7 @@
         chip.status = 'error';
         chip.error = err.message || 'Network error';
       } finally {
+        clearTimeout(slowHint);
         this.updateChipUI(chip);
         this.updateSendGating();
       }
