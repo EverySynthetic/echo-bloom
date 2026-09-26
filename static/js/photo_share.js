@@ -750,8 +750,10 @@
       if (!bodyEl) return;
       bodyEl.innerHTML = '';
 
-      // Regex to parse [Don shared a photo...] ... [/photo]
-      const photoRegex = /\[([^\]]*shared a photo[^\]]*)\]([\s\S]*?)\[\/photo\]/g;
+      // The block vision_eyes writes: "[I'm sharing an image. …]" … "[/photo]".
+      // Also "a photo" (the first wording) and "shared a photo" (older saved
+      // chats), so history reloaded from localStorage still renders as a photo.
+      const photoRegex = /\[([^\]]*(?:sharing an? (?:photo|image)|shared a photo)[^\]]*)\]([\s\S]*?)\[\/photo\]/g;
       const photoBlocks = [];
       let match;
       let lastIndex = 0;
