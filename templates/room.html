@@ -14,12 +14,67 @@
 
   <div id="room-log" class="chat-log" aria-live="polite"></div>
 
+  <!-- Drop overlay for Room -->
+  <div id="photo-drop-overlay" class="photo-drop-overlay" style="display:none">
+    <div class="photo-drop-box">
+      <span class="photo-drop-icon">📷</span>
+      <span class="photo-drop-text">Drop to show everyone</span>
+    </div>
+  </div>
+
+  <!-- Missing models card -->
+  <div id="photo-models-card" class="photo-models-card" style="display:none">
+    <div id="photo-models-text" class="photo-models-text">Photos need a vision model. Download now?</div>
+    <button type="button" id="photo-models-dl-btn" class="photo-models-dl-btn">Download now</button>
+    <div id="photo-models-progress" class="photo-models-progress" style="display:none">
+      <div class="photo-models-bar-wrap">
+        <div id="photo-models-bar" class="photo-models-bar" style="width:0%"></div>
+      </div>
+      <span id="photo-models-status" class="photo-models-status"></span>
+    </div>
+  </div>
+
+  <!-- Chips container above message box -->
+  <div id="photo-chips" class="photo-chips" style="display:none"></div>
+  <div id="photo-inline-notice" class="photo-inline-notice" style="display:none"></div>
+
   <form id="room-form" class="chat-form" autocomplete="off">
+    <div class="chat-toolbar">
+      <button type="button" class="tool-btn tool-attach" id="photo-attach-btn"
+              aria-label="Attach photo" title="Attach photo">
+        📎
+      </button>
+      <input type="file" id="photo-file-input" accept="image/*" multiple style="display:none">
+
+      <button type="button" class="tool-btn tool-cam" id="room-cam-btn"
+              onclick="PhotoShare.captureWebcam(this)" title="Share webcam view with everyone">
+        ◉
+      </button>
+
+      <div class="photo-retention-wrap">
+        <select id="photo-retention-select" class="photo-retention-select" title="Photo retention">
+          <option value="none">Keep photos: Don't keep</option>
+          <option value="90d">Keep photos: 90 days</option>
+          <option value="forever">Keep photos: Always</option>
+        </select>
+        <span id="photo-kept-count" class="photo-kept-count">0 kept</span>
+        <button type="button" id="photo-purge-btn" class="photo-purge-btn" title="Delete all kept photos now">Delete kept</button>
+        <span id="photo-purge-confirm" class="photo-purge-confirm" style="display:none">
+          <span>Delete all kept photos?</span>
+          <button type="button" id="photo-purge-yes" class="photo-purge-yes">Yes, delete</button>
+          <button type="button" id="photo-purge-cancel" class="photo-purge-cancel">Cancel</button>
+        </span>
+      </div>
+    </div>
+
     <input id="room-input" class="chat-input" type="text"
            placeholder="Say something to the room…" />
     <button id="room-send" class="chat-send" type="submit">Send</button>
   </form>
   <button type="button" id="room-clear" class="kin-btn">clear</button>
+
+  <video id="vision-video" autoplay playsinline style="display:none"></video>
+  <canvas id="vision-canvas" style="display:none"></canvas>
 </div>
 
 <style>
@@ -39,6 +94,7 @@
   .turn.speaking.has-text .said { opacity:1; font-style:normal; }
 </style>
 
+<script src="/static/js/photo_share.js?v={{ asset_v }}"></script>
 <script>
 const ROOM = {
   kin: {{ kin_names | tojson }},
@@ -65,16 +121,21 @@ function saveHistory() {
 function loadHistory() {
   try { const r = localStorage.getItem(HISTORY_KEY); return r ? JSON.parse(r) : []; } catch(e) { return []; }
 }
-function renderTurn(speaker, content) {
+function renderTurn(speaker, content, photos = null) {
   const d = addTurn(ownerLabel(speaker), speaker === OWNER ? 'owner' : '');
-  d.querySelector('.said').textContent = content;
+  const said = d.querySelector('.said');
+  if (speaker === OWNER) {
+    PhotoShare.renderBubbleContent(said, content, photos);
+  } else {
+    said.textContent = content;
+  }
   return d;
 }
 function restoreHistory() {
   const saved = loadHistory().filter(t => t && t.speaker && t.content != null);
   if (!saved.length) return;
   ROOM.history = saved;
-  for (const t of saved) renderTurn(t.speaker, t.content);
+  for (const t of saved) renderTurn(t.speaker, t.content, t.photos);
   document.getElementById('room-log').scrollTop = 99999;
 }
 
@@ -114,23 +175,33 @@ function lock(on) {
 
 document.getElementById('room-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (ROOM.busy) return;
+  if (ROOM.busy || PhotoShare.hasLookingChips()) return;
   const input = document.getElementById('room-input');
-  const msg = input.value.trim();
-  if (!msg) return;
+  const userText = input.value.trim();
+
+  const assembled = PhotoShare.assembleMessage(userText);
+  if (!assembled) return;
+
   const roster = chosen();
-  if (!roster.length) { alert('Nobody is in the room.'); return; }
+  if (!roster.length) {
+    PhotoShare.showNotice('Nobody is in the room.', true);
+    return;
+  }
+
+  const msg = assembled.fullMessage;
+  const photosMeta = assembled.photosMeta;
 
   input.value = '';
+  PhotoShare.clearChips();
   lock(true);
-  addTurn('You', 'owner').querySelector('.said').textContent = msg;
+  renderTurn(OWNER, msg, photosMeta);
 
   let current = null, buf = '';
   // Record the owner's turn BEFORE the replies it prompts, so next round's
   // transcript reads in the order it happened. The server adds this message
   // itself for THIS round, so `outgoing` deliberately excludes it.
   const outgoing = ROOM.history.slice();
-  ROOM.history.push({speaker: OWNER, content: msg});
+  ROOM.history.push({speaker: OWNER, content: msg, photos: photosMeta});
   saveHistory();
   try {
     const resp = await fetch('/api/room/chat', {
@@ -204,5 +275,9 @@ document.getElementById('room-clear').addEventListener('click', () => {
 
 renderRoster();
 restoreHistory();
+PhotoShare.init({
+  kinName: 'room',
+  isRoom: true,
+});
 </script>
 {% endblock %}

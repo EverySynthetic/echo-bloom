@@ -42,7 +42,15 @@
   <div class="kin-layout">
 
     <!-- Chat panel -->
-    <div class="chat-panel">
+    <div class="chat-panel" id="chat-panel">
+      <!-- Drop overlay for photo sharing -->
+      <div id="photo-drop-overlay" class="photo-drop-overlay" style="display:none">
+        <div class="photo-drop-box">
+          <span class="photo-drop-icon">📷</span>
+          <span class="photo-drop-text">Drop to show {{ kin.name }}</span>
+        </div>
+      </div>
+
       <div class="chat-log" id="chat-log">
         <div class="chat-welcome" id="chat-welcome-msg">
           Ask them something you'd want them to remember.
@@ -73,22 +81,55 @@
         </div>
       </div>
 
+      <!-- Missing models card -->
+      <div id="photo-models-card" class="photo-models-card" style="display:none">
+        <div id="photo-models-text" class="photo-models-text">Photos need a vision model. Download now?</div>
+        <button type="button" id="photo-models-dl-btn" class="photo-models-dl-btn">Download now</button>
+        <div id="photo-models-progress" class="photo-models-progress" style="display:none">
+          <div class="photo-models-bar-wrap">
+            <div id="photo-models-bar" class="photo-models-bar" style="width:0%"></div>
+          </div>
+          <span id="photo-models-status" class="photo-models-status"></span>
+        </div>
+      </div>
+
+      <!-- Chips container above message box -->
+      <div id="photo-chips" class="photo-chips" style="display:none"></div>
+      <div id="photo-inline-notice" class="photo-inline-notice" style="display:none"></div>
+
       <form class="chat-form" id="chat-form" onsubmit="sendMessage(event)">
         <!-- Tool buttons -->
         <div class="chat-toolbar">
+          <button type="button" class="tool-btn tool-attach" id="photo-attach-btn"
+                  aria-label="Attach photo" title="Attach photo">
+            📎
+          </button>
+          <input type="file" id="photo-file-input" accept="image/*" multiple style="display:none">
+
+          <button type="button" class="tool-btn tool-cam" id="cam-btn"
+                  onclick="PhotoShare.captureWebcam(this)" title="Share webcam view with {{ kin.name }}">
+            ◉
+          </button>
+
+          <div class="photo-retention-wrap">
+            <select id="photo-retention-select" class="photo-retention-select" title="Photo retention">
+              <option value="none">Keep photos: Don't keep</option>
+              <option value="90d">Keep photos: 90 days</option>
+              <option value="forever">Keep photos: Always</option>
+            </select>
+            <span id="photo-kept-count" class="photo-kept-count">0 kept</span>
+            <button type="button" id="photo-purge-btn" class="photo-purge-btn" title="Delete all kept photos now">Delete kept</button>
+            <span id="photo-purge-confirm" class="photo-purge-confirm" style="display:none">
+              <span>Delete all kept photos?</span>
+              <button type="button" id="photo-purge-yes" class="photo-purge-yes">Yes, delete</button>
+              <button type="button" id="photo-purge-cancel" class="photo-purge-cancel">Cancel</button>
+            </span>
+          </div>
+
           <button type="button" class="tool-btn tool-fetch"
                   onclick="toggleFetchBar()" title="Fetch a webpage into context">
             ⛓
           </button>
-          {% if hw.vision_ok %}
-          <button type="button" class="tool-btn tool-cam" id="cam-btn"
-                  onclick="captureVision()" title="Share webcam view with {{ kin.name }}">
-            ◉
-          </button>
-          {% else %}
-          <span class="tool-btn tool-disabled"
-                title="Vision requires 8GB+ VRAM (you have {{ hw.vram_gb }}GB)">◉</span>
-          {% endif %}
           {% if hw.speech_ok %}
           <button type="button" class="tool-btn tool-mic" id="mic-btn"
                   title="Hold to speak">
@@ -137,6 +178,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/js/photo_share.js?v={{ asset_v }}"></script>
 <script>
 // tojson, not a quoted interpolation: autoescape turns an
 // apostrophe into &#39; inside <script>, and every /api/... call
@@ -197,7 +239,7 @@ function restoreHistory() {
   chatHistory = saved;
   const w = document.getElementById('chat-welcome-msg');
   if (w) w.remove();
-  for (const msg of saved) renderMessage(msg.role, msg.content);
+  for (const msg of saved) renderMessage(msg.role, msg.content, msg.photos);
   document.getElementById('chat-log').scrollTop = 99999;
 }
 
@@ -206,20 +248,26 @@ function restoreHistory() {
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
-function renderMessage(role, content) {
+function renderMessage(role, content, photos = null) {
   const log = document.getElementById('chat-log');
   const div = document.createElement('div');
   div.className = `chat-msg chat-msg-${role}`;
   div.innerHTML = `<span class="msg-role">${role === 'user' ? 'You' : KIN_NAME}</span>
-    <div class="msg-body">${escHtml(content)}</div>`;
+    <div class="msg-body"></div>`;
+  const body = div.querySelector('.msg-body');
+  if (role === 'user') {
+    PhotoShare.renderBubbleContent(body, content, photos);
+  } else {
+    body.textContent = content;
+  }
   log.appendChild(div);
-  return div.querySelector('.msg-body');
+  return body;
 }
-function appendMessage(role, content) {
+function appendMessage(role, content, photos = null) {
   const log = document.getElementById('chat-log');
   const w   = log.querySelector('.chat-welcome');
   if (w) w.remove();
-  const body = renderMessage(role, content);
+  const body = renderMessage(role, content, photos);
   log.scrollTop = log.scrollHeight;
   return body;
 }
@@ -228,14 +276,22 @@ function appendMessage(role, content) {
 
 async function sendMessage(e) {
   if (e) e.preventDefault();
+  if (PhotoShare.hasLookingChips()) return;
+
   const input = document.getElementById('chat-input');
-  const msg   = input.value.trim();
-  if (!msg) return;
+  const userText = input.value.trim();
+
+  const assembled = PhotoShare.assembleMessage(userText);
+  if (!assembled) return;
+
+  const msg = assembled.fullMessage;
+  const photosMeta = assembled.photosMeta;
 
   input.value  = '';
+  PhotoShare.clearChips();
   setInputLocked(true);
-  appendMessage('user', msg);
-  chatHistory.push({role: 'user', content: msg});
+  appendMessage('user', msg, photosMeta);
+  chatHistory.push({role: 'user', content: msg, photos: photosMeta});
 
   const replyEl = appendMessage('assistant', '');
   replyEl.textContent = '';
@@ -328,43 +384,7 @@ async function doFetch() {
 // ── Vision ────────────────────────────────────────────────────────────────────
 
 async function captureVision() {
-  const btn = document.getElementById('cam-btn');
-  const video  = document.getElementById('vision-video');
-  const canvas = document.getElementById('vision-canvas');
-  btn.textContent = '…';
-  btn.disabled = true;
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({video: true});
-    video.srcObject = stream;
-    await new Promise(r => video.onloadedmetadata = r);
-    await new Promise(r => setTimeout(r, 800)); // let camera warm up
-    canvas.width  = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
-    stream.getTracks().forEach(t => t.stop());
-    const b64 = canvas.toDataURL('image/jpeg', 0.8);
-
-    const r = await fetch(`/api/vision/${KIN_PATH}`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({image: b64}),
-    });
-    ebCheck(r);
-    const d = await r.json();
-    if (d.ok) {
-      const input = document.getElementById('chat-input');
-      input.value = (input.value ? input.value + '\n' : '') +
-        `[I'm sharing my camera view]\n${d.description}`;
-      input.focus();
-    } else {
-      alert(d.error || 'Vision failed.');
-    }
-  } catch(err) {
-    alert('Camera error: ' + err.message);
-  } finally {
-    btn.textContent = '◉';
-    btn.disabled = false;
-  }
+  await PhotoShare.captureWebcam(document.getElementById('cam-btn'));
 }
 
 // ── Speech — STT ──────────────────────────────────────────────────────────────
@@ -797,5 +817,9 @@ async function loadThoughts() {
 loadThoughts();
 loadVoiceSelect();
 restoreHistory();
+PhotoShare.init({
+  kinName: KIN_NAME,
+  isRoom: false,
+});
 </script>
 {% endblock %}

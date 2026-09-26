@@ -2938,3 +2938,308 @@ a.install-btn {
   cursor: pointer; text-align: center; white-space: nowrap;
 }
 .kin-face-upload:hover { color: var(--amber); }
+
+/* ── Photo Sharing UI ──────────────────────────────────────────────── */
+
+.photo-drop-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 10, 10, 0.88);
+  border: 2px dashed var(--kin-color, #4caf50);
+  border-radius: var(--radius, 6px);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.photo-drop-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--text, #eee);
+  font-weight: 500;
+  font-size: 1.1rem;
+}
+.photo-drop-icon {
+  font-size: 2rem;
+}
+
+.photo-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.25);
+  border-top: 1px solid var(--border, #333);
+}
+.photo-chip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px;
+  background: var(--bg-card, #1c1c1c);
+  border: 1px solid var(--border, #333);
+  border-radius: var(--radius, 6px);
+  max-width: 100%;
+}
+.photo-chip-thumb-wrap {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
+}
+.photo-chip-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #000;
+}
+.photo-chip-remove {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #333;
+  color: #eee;
+  border: 1px solid #555;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.photo-chip-remove:hover {
+  background: #d32f2f;
+  border-color: #d32f2f;
+}
+.photo-chip-content {
+  flex: 1;
+  min-width: 180px;
+  font-size: 0.85rem;
+}
+.photo-chip-status-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.photo-chip-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+}
+.photo-chip-status.looking {
+  color: var(--text-dim, #888);
+}
+.photo-chip-status.ready {
+  color: var(--green, #4caf50);
+  font-weight: 500;
+}
+.photo-chip-status.needs-models {
+  color: var(--amber, #ffb300);
+}
+.photo-chip-status.error {
+  color: var(--red, #f44336);
+}
+.photo-chip-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid #555;
+  border-top-color: var(--kin-color, #4caf50);
+  border-radius: 50%;
+  display: inline-block;
+  animation: photo-spin 0.8s linear infinite;
+}
+@keyframes photo-spin {
+  to { transform: rotate(360deg); }
+}
+.photo-chip-details {
+  margin-top: 4px;
+  font-size: 0.8rem;
+}
+.photo-chip-summary {
+  cursor: pointer;
+  color: var(--text-dim, #aaa);
+  user-select: none;
+}
+.photo-chip-summary:hover {
+  color: var(--text, #eee);
+}
+.photo-chip-for-kin {
+  margin-top: 4px;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 0.78rem;
+  opacity: 0.85;
+  max-height: 120px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+.photo-chip-eyes {
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: var(--text-dim, #777);
+  border-top: 1px dashed var(--border, #333);
+  padding-top: 3px;
+}
+.photo-chip-eyes-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.photo-retention-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+  font-size: 0.8rem;
+}
+.photo-retention-select {
+  background: var(--bg-card, #222);
+  color: var(--text, #eee);
+  border: 1px solid var(--border, #444);
+  border-radius: var(--radius, 4px);
+  padding: 2px 6px;
+  font-size: 0.8rem;
+}
+.photo-kept-count {
+  font-size: 0.75rem;
+  color: var(--text-dim, #888);
+}
+.photo-purge-btn {
+  background: none;
+  border: 1px solid var(--border, #444);
+  color: var(--text-dim, #888);
+  border-radius: var(--radius, 4px);
+  padding: 2px 6px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.photo-purge-btn:hover {
+  color: var(--red, #f44336);
+  border-color: var(--red, #f44336);
+}
+.photo-purge-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--amber, #ffb300);
+}
+.photo-purge-yes {
+  background: #d32f2f;
+  color: #fff;
+  border: none;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.photo-purge-cancel {
+  background: #333;
+  color: #ccc;
+  border: none;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.photo-models-card {
+  padding: 8px 12px;
+  background: var(--bg-card, #222);
+  border: 1px solid var(--amber, #ffb300);
+  border-radius: var(--radius, 6px);
+  margin: 6px 10px;
+  font-size: 0.85rem;
+}
+.photo-models-dl-btn {
+  margin-top: 6px;
+  background: var(--kin-color, #4caf50);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-weight: 500;
+}
+.photo-models-progress {
+  margin-top: 6px;
+}
+.photo-models-bar-wrap {
+  width: 100%;
+  height: 6px;
+  background: #333;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.photo-models-bar {
+  height: 100%;
+  background: var(--kin-color, #4caf50);
+  transition: width 0.2s ease;
+}
+.photo-models-status {
+  font-size: 0.75rem;
+  color: var(--text-dim, #888);
+}
+.photo-inline-notice {
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  color: var(--amber, #ffb300);
+}
+
+.chat-photos-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.chat-photo-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.chat-photo-thumb {
+  max-width: 240px;
+  max-height: 240px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border, #333);
+}
+.chat-photo-not-kept {
+  font-size: 0.85rem;
+  color: var(--text-dim, #888);
+  font-style: italic;
+}
+.chat-photo-desc {
+  font-size: 0.8rem;
+}
+.chat-photo-desc-summary {
+  cursor: pointer;
+  color: var(--text-dim, #aaa);
+}
+.chat-photo-desc-summary:hover {
+  color: var(--text, #eee);
+}
+.chat-photo-desc-body {
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 0.78rem;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 4px 6px;
+  border-radius: 4px;
+  margin-top: 2px;
+}
+.chat-user-text {
+  white-space: pre-wrap;
+}

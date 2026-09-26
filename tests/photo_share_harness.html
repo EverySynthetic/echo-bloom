@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Photo Share Headless Test Harness</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #111; color: #eee; }
+    .chat-panel { position: relative; width: 600px; padding: 20px; border: 1px solid #444; }
+    #photo-drop-overlay { display: none; position: absolute; inset: 0; background: rgba(0,0,0,0.8); align-items: center; justify-content: center; }
+    #photo-chips { display: none; gap: 8px; margin-bottom: 10px; }
+    .photo-chip { border: 1px solid #555; padding: 6px; display: flex; gap: 8px; }
+    .photo-inline-notice { display: none; color: #ffaa55; margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <h1>Photo Share Harness</h1>
+
+  <div class="chat-panel" id="chat-panel">
+    <div id="photo-drop-overlay">
+      <div class="photo-drop-text">Drop to show Coda</div>
+    </div>
+
+    <div id="photo-models-card" style="display:none; border:1px solid #666; padding:10px; margin-bottom:10px;">
+      <div id="photo-models-text">Photos need a vision model</div>
+      <button type="button" id="photo-models-dl-btn">Download now</button>
+      <div id="photo-models-progress" style="display:none">
+        <div style="width:200px; height:8px; background:#333;">
+          <div id="photo-models-bar" style="width:0%; height:100%; background:#4caf50;"></div>
+        </div>
+        <span id="photo-models-status"></span>
+      </div>
+    </div>
+
+    <div id="photo-chips"></div>
+
+    <div id="photo-inline-notice" class="photo-inline-notice"></div>
+
+    <form id="chat-form">
+      <div class="chat-toolbar">
+        <button type="button" id="photo-attach-btn" aria-label="Attach photo" title="Attach photo">📎</button>
+        <input type="file" id="photo-file-input" accept="image/*" multiple style="display:none">
+        
+        <button type="button" id="cam-btn" title="Webcam">◉</button>
+
+        <select id="photo-retention-select" title="Photo retention">
+          <option value="none">Keep photos: Don't keep</option>
+          <option value="90d">Keep photos: 90 days</option>
+          <option value="forever">Keep photos: Always</option>
+        </select>
+        <span id="photo-kept-count">0 kept</span>
+        <button type="button" id="photo-purge-btn">Delete kept</button>
+        <span id="photo-purge-confirm" style="display:none">
+          <span>Delete all kept photos?</span>
+          <button type="button" id="photo-purge-yes">Yes, delete</button>
+          <button type="button" id="photo-purge-cancel">Cancel</button>
+        </span>
+      </div>
+
+      <textarea id="chat-input" rows="2"></textarea>
+      <button type="submit" id="chat-send-btn">SEND</button>
+    </form>
+  </div>
+
+  <div id="test-log" style="margin-top:20px; white-space:pre-wrap;"></div>
+  <div id="test-results" data-status="RUNNING" style="margin-top:20px; font-weight:bold; font-size:1.2rem;">RUNNING TESTS...</div>
+
+  <!-- Hidden video/canvas for webcam mock -->
+  <video id="vision-video" style="display:none"></video>
+  <canvas id="vision-canvas" style="display:none"></canvas>
+
+  <script src="../static/js/photo_share.js"></script>
+
+  <script>
+  (async function() {
+    const logEl = document.getElementById('test-log');
+    const resultsEl = document.getElementById('test-results');
+    const logs = [];
+
+    function log(msg) {
+      logs.push(msg);
+      logEl.textContent = logs.join('\n');
+    }
+
+    function assert(cond, msg) {
+      if (!cond) {
+        throw new Error('Assertion Failed: ' + msg);
+      }
+      log('  ✓ ' + msg);
+    }
+
+    // ── Stub Fetch ────────────────────────────────────────────────────────────
+    let serverSettings = { retention: 'none', kept_count: 3 };
+    let lastPostedSettings = null;
+    let purged = false;
+
+    window.fetch = async function(url, opts = {}) {
+      const u = String(url);
+      const method = (opts.method || 'GET').toUpperCase();
+
+      if (u.includes('/api/photo/settings')) {
+        if (method === 'GET') {
+          return new Response(JSON.stringify({
+            retention: serverSettings.retention,
+            kept_count: serverSettings.kept_count,
+            models: { camera1: 'gemma3:4b', camera2: 'qwen2.5vl:3b', installed: ['gemma3:4b'], missing: [] }
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        } else if (method === 'POST') {
+          const body = JSON.parse(opts.body || '{}');
+          lastPostedSettings = body;
+          serverSettings.retention = body.retention;
+          return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+      }
+
+      if (u.includes('/api/photo/purge')) {
+        purged = true;
+        const count = serverSettings.kept_count;
+        serverSettings.kept_count = 0;
+        return new Response(JSON.stringify({ deleted: count }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      if (u.includes('/api/photo/describe')) {
+        const fd = opts.body;
+        const img = fd ? fd.get('image') : null;
+        const name = (img && img.name) ? img.name : 'photo.png';
+
+        if (name.includes('needs_models')) {
+          return new Response(JSON.stringify({
+            ok: false,
+            error: 'Photos need a vision model',
+            needs_models: [{ name: 'gemma3:4b', size_gb: 3.3 }]
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        if (name.includes('invalid_file')) {
+          return new Response(JSON.stringify({
+            ok: false,
+            error: 'Not a valid image'
+          }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+        }
+
+        // Standard success response matching contract
+        return new Response(JSON.stringify({
+          ok: true,
+          id: 'p_' + Math.random().toString(36).substring(2, 8),
+          for_kin: '[Don shared a photo. Two cameras looked; this is only what both saw:]\nSCENE: living room\nPEOPLE: 1 person\n[/photo]',
+          mode: 'two',
+          agreed: ['SCENE', 'PEOPLE'],
+          disputed: ['TEXT'],
+          eyes: [
+            { model: 'gemma3:4b', text: 'SCENE: living room\nPEOPLE: 1 person\nTHINGS: couch' },
+            { model: 'qwen2.5vl:3b', text: 'SCENE: living room\nPEOPLE: 1 person' }
+          ],
+          kept: true,
+          expires_at: null,
+          thumb_url: '/api/photo/p_thumb_123'
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
+      if (u.includes('/api/photo/models/pull')) {
+        // SSE stream
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"model": "gemma3:4b", "percent": 50}\n\n'));
+            controller.enqueue(encoder.encode('data: {"model": "gemma3:4b", "percent": 100}\n\n'));
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            controller.close();
+          }
+        });
+        return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }
+
+      return new Response('{}', { status: 404 });
+    };
+
+    function createSyntheticPng(name = 'test.png') {
+      const pngBytes = new Uint8Array([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+        0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+        0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41,
+        0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+        0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
+        0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+        0x42, 0x60, 0x82
+      ]);
+      return new File([pngBytes], name, { type: 'image/png' });
+    }
+
+    try {
+      log('Starting Photo Share Test Suite...');
+
+      // ── Initialize PhotoShare ──
+      PhotoShare.init({
+        kinName: 'Coda',
+        isRoom: false,
+      });
+
+      // Wait a tick for loadSettings
+      await new Promise(r => setTimeout(r, 50));
+
+      // Test 1: Settings loaded
+      log('Test 1: Settings loaded');
+      assert(PhotoShare.retention === 'none', 'Retention initialized to none');
+      assert(PhotoShare.keptCount === 3, 'Kept count initialized to 3');
+      const keptEl = document.getElementById('photo-kept-count');
+      assert(keptEl.textContent === '3 kept', 'Kept count text is "3 kept"');
+
+      // Test 2: Retention change
+      log('Test 2: Retention change');
+      const sel = document.getElementById('photo-retention-select');
+      sel.value = '90d';
+      sel.dispatchEvent(new Event('change'));
+      await new Promise(r => setTimeout(r, 50));
+      assert(lastPostedSettings && lastPostedSettings.retention === '90d', 'POST /api/photo/settings received 90d');
+
+      // Test 3: Purge with inline confirm
+      log('Test 3: Purge with inline confirm');
+      const purgeBtn = document.getElementById('photo-purge-btn');
+      const purgeConfirm = document.getElementById('photo-purge-confirm');
+      const purgeYes = document.getElementById('photo-purge-yes');
+      const purgeCancel = document.getElementById('photo-purge-cancel');
+
+      purgeBtn.click();
+      assert(purgeConfirm.style.display !== 'none', 'Inline confirm displayed on purge click');
+      assert(purgeBtn.style.display === 'none', 'Purge button hidden while confirm open');
+
+      purgeCancel.click();
+      assert(purgeConfirm.style.display === 'none', 'Inline confirm hidden on Cancel click');
+      assert(purgeBtn.style.display !== 'none', 'Purge button restored after Cancel');
+
+      purgeBtn.click();
+      purgeYes.click();
+      await new Promise(r => setTimeout(r, 50));
+      assert(purged === true, 'Purge API called');
+      assert(PhotoShare.keptCount === 0, 'Kept count updated to 0');
+      assert(keptEl.textContent === '0 kept', 'Kept count text updated to "0 kept"');
+
+      // Test 4: Synthetic drop event with PNG file
+      log('Test 4: Synthetic drop event');
+      const chatPanel = document.getElementById('chat-panel');
+      const overlay = document.getElementById('photo-drop-overlay');
+      const sendBtn = document.getElementById('chat-send-btn');
+
+      const dtDrop = new DataTransfer();
+      dtDrop.items.add(createSyntheticPng('dropped.png'));
+
+      const dragEnterEv = new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dtDrop });
+      chatPanel.dispatchEvent(dragEnterEv);
+      assert(overlay.style.display === 'flex', 'Drop overlay visible on dragenter');
+
+      const dropEv = new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dtDrop });
+      chatPanel.dispatchEvent(dropEv);
+      assert(overlay.style.display === 'none', 'Drop overlay hidden on drop');
+
+      // Verify chip created and send button gated
+      assert(PhotoShare.chips.length === 1, '1 chip created after drop');
+      const chip1 = PhotoShare.chips[0];
+      assert(chip1.status === 'looking', 'Chip status initially "looking"');
+      assert(sendBtn.disabled === true, 'Send button disabled while looking');
+      assert(sendBtn.textContent === 'LOOKING…', 'Send button text is LOOKING…');
+
+      // Wait for describe to complete
+      await new Promise(r => setTimeout(r, 100));
+      assert(chip1.status === 'ready', 'Chip status updated to "ready"');
+      assert(sendBtn.disabled === false, 'Send button re-enabled after ready');
+      assert(sendBtn.textContent === 'SEND', 'Send button text restored to SEND');
+
+      // Check collapsible details
+      const details = chip1.el.querySelector('.photo-chip-details');
+      assert(details !== null && details.style.display !== 'none', 'Collapsible details element visible');
+      const forKin = chip1.el.querySelector('.photo-chip-for-kin');
+      assert(forKin.textContent.includes('living room'), 'Agreed description in for_kin details');
+      const eyes = chip1.el.querySelector('.photo-chip-eyes');
+      assert(eyes.textContent.includes('gemma3:4b'), 'Raw camera texts visible in details');
+
+      // Test 5: Synthetic paste event with image
+      log('Test 5: Synthetic paste event with image');
+      const dtPasteImg = new DataTransfer();
+      dtPasteImg.items.add(createSyntheticPng('pasted.png'));
+      const pasteImgEv = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dtPasteImg });
+      document.dispatchEvent(pasteImgEv);
+      assert(pasteImgEv.defaultPrevented === true, 'Image paste called preventDefault');
+      assert(PhotoShare.chips.length === 2, 'Second chip created via paste');
+
+      await new Promise(r => setTimeout(r, 100));
+      assert(PhotoShare.chips[1].status === 'ready', 'Second chip ready');
+
+      // Test 6: Synthetic paste event with text only (untouched!)
+      log('Test 6: Synthetic paste event with text only');
+      const dtPasteText = new DataTransfer();
+      dtPasteText.setData('text/plain', 'Plain pasted text');
+      const pasteTextEv = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dtPasteText });
+      document.dispatchEvent(pasteTextEv);
+      assert(pasteTextEv.defaultPrevented === false, 'Text paste was NOT prevented');
+      assert(PhotoShare.chips.length === 2, 'Chips count did not increase from text paste');
+
+      // Test 7: Outgoing message assembly
+      log('Test 7: Outgoing message assembly');
+      const input = document.getElementById('chat-input');
+      input.value = 'Check out this photo!';
+      const assembled = PhotoShare.assembleMessage(input.value);
+      assert(assembled !== null, 'Message payload assembled');
+      assert(assembled.fullMessage.includes('Check out this photo!'), 'Payload contains user text');
+      assert(assembled.fullMessage.includes('living room'), 'Payload contains photo description blocks');
+      assert(assembled.photosMeta.length === 2, 'Payload metadata has 2 photos');
+
+      // Test 8: Remove chip (✕)
+      log('Test 8: Remove chip (✕)');
+      const removeBtn = chip1.el.querySelector('.photo-chip-remove');
+      removeBtn.click();
+      assert(PhotoShare.chips.length === 1, 'Chip count reduced to 1 after remove');
+
+      // Test 9: Max 4 photos constraint
+      log('Test 9: Max 4 photos constraint');
+      PhotoShare.handleImageFile(createSyntheticPng('p3.png'));
+      PhotoShare.handleImageFile(createSyntheticPng('p4.png'));
+      PhotoShare.handleImageFile(createSyntheticPng('p5.png'));
+      await new Promise(r => setTimeout(r, 100));
+      assert(PhotoShare.chips.length === 4, 'Capped at 4 chips');
+
+      // 5th photo rejected
+      PhotoShare.handleImageFile(createSyntheticPng('p6.png'));
+      assert(PhotoShare.chips.length === 4, '5th chip not added');
+      const noticeEl = document.getElementById('photo-inline-notice');
+      assert(noticeEl.textContent.includes('4 photos'), 'Inline notice showed max photos limit');
+
+      // Test 10: Missing models inline card flow
+      log('Test 10: Missing models flow');
+      PhotoShare.clearChips();
+      assert(PhotoShare.chips.length === 0, 'Chips cleared');
+
+      PhotoShare.handleImageFile(createSyntheticPng('needs_models.png'));
+      await new Promise(r => setTimeout(r, 100));
+
+      const modelsCard = document.getElementById('photo-models-card');
+      assert(modelsCard.style.display !== 'none', 'Models card shown on needs_models');
+      const modelsText = document.getElementById('photo-models-text');
+      assert(modelsText.textContent.includes('3.3 GB'), 'Models card indicates download size in GB');
+
+      const dlBtn = document.getElementById('photo-models-dl-btn');
+      dlBtn.click();
+      await new Promise(r => setTimeout(r, 150));
+
+      const bar = document.getElementById('photo-models-bar');
+      assert(bar.style.width === '100%', 'Download progress bar reached 100%');
+
+      // Test 11: Chat bubble rendering helper
+      log('Test 11: Chat bubble rendering helper');
+      const testBubble = document.createElement('div');
+      PhotoShare.renderBubbleContent(testBubble, assembled.fullMessage, assembled.photosMeta);
+      const thumb = testBubble.querySelector('.chat-photo-thumb');
+      assert(thumb !== null, 'Chat bubble contains rendered thumbnail');
+      const descSummary = testBubble.querySelector('.chat-photo-desc-summary');
+      assert(descSummary !== null && descSummary.textContent.includes('What Coda was told'), 'Chat bubble has collapsible "What <name> was told"');
+      const userTextDiv = testBubble.querySelector('.chat-user-text');
+      assert(userTextDiv !== null && userTextDiv.textContent === 'Check out this photo!', 'Chat bubble renders user text cleanly');
+
+      log('ALL TESTS PASSED SUCCESSFULLY!');
+      resultsEl.setAttribute('data-status', 'PASS');
+      resultsEl.textContent = 'PASS: All photo share harness tests passed';
+    } catch (err) {
+      log('FAIL: ' + err.message + '\n' + err.stack);
+      resultsEl.setAttribute('data-status', 'FAIL');
+      resultsEl.textContent = 'FAIL: ' + err.message;
+    }
+  })();
+  </script>
+</body>
+</html>
