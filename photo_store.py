@@ -13,6 +13,7 @@ Files are 0600. Sweep drops expired 90d photos at app start and every 6 hours.
 from __future__ import annotations
 
 import io
+import re
 import json
 import os
 import secrets
@@ -204,7 +205,8 @@ def save(jpeg: bytes, kin: str, retention: str, photo_id: str | None = None) -> 
 
 
 def find(photo_id: str) -> Path | None:
-    if not photo_id or not photo_id.startswith("p_") or "/" in photo_id or ".." in photo_id:
+    # Exactly what new_id() makes: no glob characters, no paths.
+    if not photo_id or not re.fullmatch(r"p_[0-9a-f]{16}", photo_id):
         return None
     if not PHOTOS_ROOT.is_dir():
         return None

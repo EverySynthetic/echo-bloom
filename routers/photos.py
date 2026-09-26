@@ -10,8 +10,8 @@ import json
 from typing import AsyncGenerator
 
 import aiohttp
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import auth
 import photo_store as ps
@@ -100,16 +100,24 @@ def describe_image_bytes(raw: bytes, kin: str = "room", host: str | None = None)
 
 
 @router.post("/api/photo/describe")
-async def api_photo_describe(
-    request: Request,
-    image: UploadFile = File(...),
-    kin: str = Form("room"),
-    _=Depends(require_auth),
-):
-    raw = await image.read()
+async def api_photo_describe(request: Request, kin: str = "room", _=Depends(require_auth)):
+    """The photo arrives as the raw request body (the page sends the File as is).
+
+    Not multipart: Starlette spools any multipart file over 1 MB to a temp file
+    on disk, which breaks "Don't keep" means nothing touches the disk. And the
+    body is read in chunks against the cap, so an oversized upload is refused
+    at MAX_BYTES + 1 instead of being read whole into memory first.
+    """
+    buf = bytearray()
+    async for chunk in request.stream():
+        buf.extend(chunk)
+        if len(buf) > ps.MAX_BYTES:
+            return JSONResponse(status_code=413, content={
+                "ok": False,
+                "error": f"That photo is too large (max {ps.MAX_BYTES // (1024 * 1024)} MB). "
+                         "Try a smaller copy or resize it first."})
     # Run the blocking vision calls off the event loop.
-    result = await asyncio.to_thread(describe_image_bytes, raw, kin or "room")
-    return result
+    return await asyncio.to_thread(describe_image_bytes, bytes(buf), kin or "room")
 
 
 @router.get("/api/photo/settings")

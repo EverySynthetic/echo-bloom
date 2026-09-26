@@ -452,13 +452,12 @@
 
     async describeChip(chip) {
       try {
-        const fd = new FormData();
-        fd.append('image', chip.file);
-        fd.append('kin', this.kinName);
-
-        const resp = await fetch('/api/photo/describe', {
+        // The file itself as the body (not FormData): the server streams it
+        // against the size cap and never spools it to disk.
+        const resp = await fetch('/api/photo/describe?kin=' + encodeURIComponent(this.kinName), {
           method: 'POST',
-          body: fd,
+          headers: {'Content-Type': chip.file.type || 'application/octet-stream'},
+          body: chip.file,
         });
 
         const data = await resp.json().catch(() => ({}));

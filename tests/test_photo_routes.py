@@ -51,8 +51,8 @@ class EveryRouteRequiresAuth(unittest.TestCase):
             elif path.endswith("/describe"):
                 r = client.post(
                     path,
-                    files={"image": ("x.png", _png_bytes(), "image/png")},
-                    data={"kin": "Eli"},
+                    content=_png_bytes(), headers={"Content-Type": "image/png"},
+                    params={"kin": "Eli"},
                 )
             elif path.endswith("/settings") and method == "POST":
                 r = client.post(path, json={"retention": "none"})
@@ -79,8 +79,8 @@ class NeedsModels(unittest.TestCase):
                  patch("auth.load_config", return_value={"photo_retention": "none", "vision_models": ["gemma3:4b"]}):
                 r = client.post(
                     "/api/photo/describe",
-                    files={"image": ("x.png", _png_bytes(), "image/png")},
-                    data={"kin": "Eli"},
+                    content=_png_bytes(), headers={"Content-Type": "image/png"},
+                    params={"kin": "Eli"},
                 )
         self.assertEqual(r.status_code, 200, r.text)
         body = r.json()
@@ -126,8 +126,8 @@ class DescribeWithStubs(unittest.TestCase):
         with patches[0], patches[1], patches[2], patches[3], patches[4]:
             r = client.post(
                 "/api/photo/describe",
-                files={"image": ("x.png", _png_bytes(), "image/png")},
-                data={"kin": "Eli"},
+                content=_png_bytes(), headers={"Content-Type": "image/png"},
+                params={"kin": "Eli"},
             )
         self.assertEqual(r.status_code, 200, r.text)
         body = r.json()
@@ -146,8 +146,8 @@ class DescribeWithStubs(unittest.TestCase):
         with patches[0], patches[1], patches[2], patches[3], patches[4]:
             r = client.post(
                 "/api/photo/describe",
-                files={"image": ("x.png", _png_bytes(), "image/png")},
-                data={"kin": "Eli"},
+                content=_png_bytes(), headers={"Content-Type": "image/png"},
+                params={"kin": "Eli"},
             )
             body = r.json()
             self.assertTrue(body["ok"], body)

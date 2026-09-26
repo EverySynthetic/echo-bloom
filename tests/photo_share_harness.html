@@ -120,8 +120,7 @@
       }
 
       if (u.includes('/api/photo/describe')) {
-        const fd = opts.body;
-        const img = fd ? fd.get('image') : null;
+        const img = opts.body;   // the File itself is the body
         const name = (img && img.name) ? img.name : 'photo.png';
 
         if (name.includes('needs_models')) {

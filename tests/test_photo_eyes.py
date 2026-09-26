@@ -98,7 +98,7 @@ class OneCameraMode(unittest.TestCase):
         self.assertEqual(seen.mode, "one")
         self.assertIn("SCENE", seen.agreed)
         block = seen.for_kin()
-        self.assertIn("One camera looked at this; nothing double-checked it", block)
+        self.assertIn("One camera looked at it; nothing double-checked it", block)
         self.assertIn("snowy path", block)
         self.assertNotIn("Two cameras looked", block)
 

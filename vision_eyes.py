@@ -84,12 +84,12 @@ class Seen:
         """The only block a Kin is shown. Never the raw pair."""
         if self.mode == "one":
             intro = (
-                "[Someone shared a photo. One camera looked at this; "
+                "[I'm sharing a photo. One camera looked at it; "
                 "nothing double-checked it.]"
             )
         else:
             intro = (
-                "[Someone shared a photo. Two cameras looked; "
+                "[I'm sharing a photo. Two cameras looked; "
                 "this is only what both saw:]"
             )
         lines = [intro]
