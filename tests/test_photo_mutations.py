@@ -68,7 +68,7 @@ class BrokenOneCameraSilent(unittest.TestCase):
     def test_broken_silent_one_eye_fails_label_contract(self):
         text = "SCENE: park\nPEOPLE: NONE\nTHINGS: NONE\nTEXT: NONE\nDETAILS: NONE\n"
         # Broken: pretend two-camera intro with one camera's data
-        broken_intro = "[I'm sharing a photo. Two cameras looked; this is only what both saw:]"
+        broken_intro = "[I'm sharing an image. Two cameras looked; this is only what both saw:]"
         seen = ve.look(b"x", cameras=["gemma3:4b"],
                        _ask_fn=lambda m, h, i, timeout=300: text)
         self.assertEqual(seen.mode, "one")

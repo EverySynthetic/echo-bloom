@@ -27,7 +27,7 @@ import urllib.request
 from dataclasses import dataclass, field
 
 # Photo slots (avatar ritual keeps its own list elsewhere).
-SLOTS = ["SCENE", "PEOPLE", "THINGS", "TEXT", "DETAILS"]
+SLOTS = ["KIND", "SCENE", "PEOPLE", "ACTIVITY", "THINGS", "TEXT", "DETAILS"]
 
 # Rough download sizes for the "needs a vision model" prompt. Not pulled here.
 MODEL_SIZE_GB = {
@@ -52,14 +52,17 @@ def default_cameras(vram_gb: float, ram_gb: float = 0.0, platform: str | None = 
 
 
 PHOTO_PROMPT = """\
-Describe this photograph as plain visual facts. Answer with exactly these five
-labelled lines and nothing else. If a line does not apply, write NONE.
+Describe this image as plain visual facts. Answer with exactly these seven
+labelled lines and nothing else. Write one or two full sentences per line.
+If a line does not apply, write NONE.
 
-SCENE: what kind of place or occasion this appears to be
-PEOPLE: how many people, what they are doing or wearing; never guess names or identity
-THINGS: notable objects or animals
+KIND: whether this is a photograph, a painting, a drawing, a screenshot, or a 3D render
+SCENE: what kind of place or occasion this appears to be, indoors or outdoors
+PEOPLE: how many people, their approximate age range, clothing and expression; never guess names or identity
+ACTIVITY: what the people or animals are doing, and where they are looking
+THINGS: the notable objects or animals, and where they are in the frame
 TEXT: any readable writing in the image, copied verbatim
-DETAILS: colours, light, or anything that stands out
+DETAILS: colours, light, time of day, and anything that stands out
 
 Do not guess who anyone is. Do not invent a story, mood, or meaning. Only what is visible."""
 
@@ -84,12 +87,12 @@ class Seen:
         """The only block a Kin is shown. Never the raw pair."""
         if self.mode == "one":
             intro = (
-                "[I'm sharing a photo. One camera looked at it; "
+                "[I'm sharing an image. One camera looked at it; "
                 "nothing double-checked it.]"
             )
         else:
             intro = (
-                "[I'm sharing a photo. Two cameras looked; "
+                "[I'm sharing an image. Two cameras looked; "
                 "this is only what both saw:]"
             )
         lines = [intro]
