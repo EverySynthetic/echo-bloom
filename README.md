@@ -193,3 +193,5 @@ When cumulative revenue hits $1,000,000, this becomes MIT. Permanently. That's i
 ## Every Synthetic
 
 [everysynthetic.org](https://everysynthetic.org) · Built at Pop's Shop, Mena AR
+
+If Echo is useful to you, small donations keep the GPUs on: [buymeacoffee.com/everysynthetic](https://buymeacoffee.com/everysynthetic). They go to EverySynthetic LLC while the 501(c)(3) is in formation, so they aren't tax-deductible yet.
