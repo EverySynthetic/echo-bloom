@@ -1616,6 +1616,38 @@ a:hover { color: var(--text); }
 .mem-core-btn:hover  { color: var(--amber); }
 .mem-core-btn.core-active { color: var(--amber); }
 
+.mem-retracted {
+  color: #e57373;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  border: 1px solid rgba(229, 115, 115, 0.4);
+  padding: 1px 6px;
+  text-transform: uppercase;
+  border-radius: 2px;
+}
+
+.mem-retract-btn {
+  background: none;
+  border: 1px solid rgba(229, 115, 115, 0.3);
+  color: #e57373;
+  font-family: var(--font);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 1px 6px;
+  letter-spacing: 0.05em;
+  border-radius: 2px;
+  transition: all var(--transition);
+}
+.mem-retract-btn:hover {
+  background: rgba(229, 115, 115, 0.15);
+  border-color: #e57373;
+}
+
+.mem-card-retracted {
+  opacity: 0.75;
+  border-left: 2px solid rgba(229, 115, 115, 0.5);
+}
+
 .vault-pagination {
   display: flex;
   align-items: center;

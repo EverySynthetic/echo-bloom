@@ -31,6 +31,9 @@
     <label class="vault-toggle-label">
       <input type="checkbox" id="hide-heartbeat" checked onchange="resetAndLoad()"> hide pulse
     </label>
+    <label class="vault-toggle-label">
+      <input type="checkbox" id="show-retracted" onchange="resetAndLoad()"> show retracted
+    </label>
   </div>
 
   <!-- Ingest mode controls -->
@@ -217,6 +220,7 @@ async function loadFeed() {
   const author = document.getElementById('filter-author').value;
   const search = document.getElementById('filter-search').value.trim();
   const hideHeartbeat = document.getElementById('hide-heartbeat').checked;
+  const showRetracted = document.getElementById('show-retracted') && document.getElementById('show-retracted').checked;
 
   document.getElementById('vault-entries').innerHTML = '<div class="vault-loading">loading…</div>';
 
@@ -226,10 +230,11 @@ async function loadFeed() {
   if (offset === -1) {
     try {
       const cp = new URLSearchParams();
-      if (layer)        cp.set('layer',         layer);
-      if (author)       cp.set('author',        author);
-      if (search)       cp.set('search',        search);
-      if (excludeLayer) cp.set('exclude_layer', excludeLayer);
+      if (layer)         cp.set('layer',             layer);
+      if (author)        cp.set('author',            author);
+      if (search)        cp.set('search',            search);
+      if (excludeLayer)  cp.set('exclude_layer',     excludeLayer);
+      if (showRetracted) cp.set('include_retracted', 'true');
       const cd = await ebFetch(`/api/vault/count?${cp}`);
       const t = cd.total || 0;
       offset = Math.max(0, t - LIMIT);
@@ -237,10 +242,11 @@ async function loadFeed() {
   }
 
   const params = new URLSearchParams({limit: LIMIT, offset});
-  if (layer)        params.set('layer',         layer);
-  if (author)       params.set('author',        author);
-  if (search)       params.set('search',        search);
-  if (excludeLayer) params.set('exclude_layer', excludeLayer);
+  if (layer)         params.set('layer',             layer);
+  if (author)        params.set('author',            author);
+  if (search)        params.set('search',            search);
+  if (excludeLayer)  params.set('exclude_layer',     excludeLayer);
+  if (showRetracted) params.set('include_retracted', 'true');
 
   try {
     const d = await ebFetch(`/api/vault?${params}`);
@@ -433,7 +439,10 @@ function renderEntries(entries, isSemantic) {
   el.innerHTML = entries.map((e, i) => {
     const color   = authorColor(e.author || '');
     const content = escHtml(e.content || '');
-    const ts      = isSemantic ? '' : `<span class="mem-ts">${fmtTs(e.timestamp)}</span>`;
+    const isRetracted = !!(e.retracted_at);
+    const retractedBadge = isRetracted
+      ? `<span class="mem-retracted" title="Retracted from live recall on ${fmtTs(e.retracted_at)} (preserved in audit record)">retracted</span>` : '';
+    const ts      = isSemantic ? '' : `<span class="mem-ts">${fmtTs(e.timestamp || e.created_at)}</span>`;
     const score   = isSemantic && e.score !== undefined
       ? `<span class="mem-score">relevance ${e.score}</span>` : '';
     const tags    = e.tags ? `<span class="mem-tags">${escHtml(e.tags)}</span>` : '';
@@ -454,17 +463,23 @@ function renderEntries(entries, isSemantic) {
            onclick="flagCore(this.dataset.author, this.dataset.content, this)">
            ${isFlagged ? '★' : '☆'}
          </button>` : '';
+    const memDbId = e.id;
+    const retractBtn = (memDbId && !isRetracted)
+      ? `<button class="mem-retract-btn"
+           onclick="retractMem(${memDbId}, this)"
+           title="Retract from live recall (stays in audit record)">retract</button>` : '';
     return `
-<div class="mem-card" id="${id}">
+<div class="mem-card${isRetracted ? ' mem-card-retracted' : ''}" id="${id}">
   <div class="mem-meta">
     <span class="mem-author" style="color:${color}">${escHtml(e.author || '')}</span>
     <span class="mem-layer">${escHtml(e.layer || '')}</span>
-    ${ts}${score}
+    ${ts}${score}${retractedBadge}
   </div>
   <div class="mem-content" id="${id}-body">${content}</div>
   <div class="mem-footer">
     ${tags}${votes}
     ${coreBtn}
+    ${retractBtn}
     <button class="mem-expand" onclick="toggleExpand('${id}-body', this)">expand</button>
   </div>
 </div>`;
@@ -531,6 +546,41 @@ async function flagCore(kin_name, content, btn) {
       alert(d.error || 'Could not flag memory.');
     }
   } catch(e) { btn.textContent = '!'; }
+}
+
+async function retractMem(id, btn) {
+  if (!btn.dataset.confirmed) {
+    btn.dataset.confirmed = "1";
+    btn.textContent = "confirm retract?";
+    btn.title = "Click again to retract from live context (preserved in audit record)";
+    setTimeout(() => {
+      if (btn.dataset.confirmed) {
+        btn.dataset.confirmed = "";
+        btn.textContent = "retract";
+        btn.title = "Retract from live recall (stays in audit record)";
+      }
+    }, 4000);
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = "retracting…";
+  try {
+    const res = await ebFetch(`/api/vault/memories/${id}/retract`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+    });
+    if (res.ok) {
+      loadFeed();
+    } else {
+      btn.textContent = '!';
+      btn.title = res.error || "Retract failed";
+      btn.disabled = false;
+    }
+  } catch(e) {
+    btn.textContent = '!';
+    btn.title = e.message || "Retract error";
+    btn.disabled = false;
+  }
 }
 
 // ── Ingest ────────────────────────────────────────────────────────────────────

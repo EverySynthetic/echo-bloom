@@ -21,7 +21,9 @@ Endpoints:
     GET  /layers                        — distinct layers with counts
     GET  /authors                       — distinct authors with counts
     POST /memories/{id}/endorse         — bump endorsement count
-    DELETE /memories/{id}               — delete a memory
+    GET  /memories/{id}                 — audit retrieval of a memory by ID
+    DELETE /memories/{id}               — retract a memory from live recall (audit-preserved)
+    POST /memories/{id}/retract         — retract a memory from live recall (audit-preserved)
 
 POST /remember body:
     { "content": "...", "layer": "wander", "author": "Eli", "tags": "optional" }
@@ -36,7 +38,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 try:
@@ -56,7 +58,7 @@ parser = argparse.ArgumentParser(description="Echo Bloom vault server")
 parser.add_argument("--port", type=int, default=8765)
 parser.add_argument("--host", default="0.0.0.0")
 parser.add_argument("--db",   default=str(Path.home() / ".local/share/echo_bloom/vault.db"))
-args = parser.parse_args()
+args, _ = parser.parse_known_args()
 
 DB_PATH = Path(args.db)
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -104,18 +106,22 @@ def init_db():
     with db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS memories (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                content     TEXT    NOT NULL,
-                layer       TEXT    DEFAULT 'general',
-                author      TEXT    DEFAULT '',
-                tags        TEXT    DEFAULT '',
-                endorsed    INTEGER DEFAULT 0,
-                created_at  TEXT    NOT NULL
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                content      TEXT    NOT NULL,
+                layer        TEXT    DEFAULT 'general',
+                author       TEXT    DEFAULT '',
+                tags         TEXT    DEFAULT '',
+                endorsed     INTEGER DEFAULT 0,
+                created_at   TEXT    NOT NULL,
+                retracted_at TEXT
             )
         """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_layer  ON memories(layer)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_author ON memories(author)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_ts     ON memories(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_layer     ON memories(layer)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_author    ON memories(author)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ts        ON memories(created_at)")
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(memories)")}
+        if "retracted_at" in cols:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_retracted ON memories(retracted_at)")
 
         # Full-text search. This is the recall floor: semantic (vector) recall
         # needs an embedding model AND a Qdrant server, and no installer ever
@@ -183,12 +189,14 @@ def migrate_schema(conn):
         "access_count":  "INTEGER DEFAULT 0",
         "last_accessed": "TEXT",
         "superseded_by": "INTEGER",
+        "retracted_at":  "TEXT",
     }
     added = False
     for col, decl in needed.items():
         if col not in cols:
             conn.execute(f"ALTER TABLE memories ADD COLUMN {col} {decl}")
             added = True
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_retracted ON memories(retracted_at)")
     if not added:
         return
 
@@ -379,7 +387,7 @@ def health():
 
 @app.post("/remember")
 def remember(mem: MemoryIn, background_tasks: BackgroundTasks):
-    ts = datetime.utcnow().isoformat()
+    ts = datetime.now(timezone.utc).isoformat()
     with db() as conn:
         cur = conn.execute(
             """INSERT INTO memories
@@ -400,10 +408,12 @@ def remember(mem: MemoryIn, background_tasks: BackgroundTasks):
 def recall_all(
     limit:  int = Query(20, le=200),
     offset: int = Query(0,  ge=0),
+    include_retracted: bool = False,
 ):
+    where = "" if include_retracted else "WHERE (retracted_at IS NULL OR retracted_at = '') "
     with db() as conn:
         rows = conn.execute(
-            "SELECT * FROM memories ORDER BY id DESC LIMIT ? OFFSET ?",
+            f"SELECT * FROM memories {where}ORDER BY id DESC LIMIT ? OFFSET ?",
             (limit, offset),
         ).fetchall()
     return [row_to_dict(r) for r in rows]
@@ -414,10 +424,13 @@ def recall(
     layer:  str = "",
     author: str = "",
     search: str = "",
+    include_retracted: bool = False,
     limit:  int = Query(20, le=200),
     offset: int = Query(0,  ge=0),
 ):
     clauses, params = [], []
+    if not include_retracted:
+        clauses.append("(retracted_at IS NULL OR retracted_at = '')")
     if layer:  clauses.append("layer  = ?");  params.append(layer)
     if author: clauses.append("author = ?");  params.append(author)
     if search: clauses.append("content LIKE ?"); params.append(f"%{search}%")
@@ -450,10 +463,10 @@ def search(
     # because one filler word is absent. bm25 ranks multi-term hits first.
     fts_query = " OR ".join(f'"{t}"' for t in terms)
 
-    filters, params = [], []
+    filters, params = ["(m.retracted_at IS NULL OR m.retracted_at = '')"], []
     if author: filters.append("m.author = ?"); params.append(author)
     if layer:  filters.append("m.layer = ?");  params.append(layer)
-    extra = (" AND " + " AND ".join(filters)) if filters else ""
+    extra = (" AND " + " AND ".join(filters))
 
     with db() as conn:
         if HAS_FTS:
@@ -470,7 +483,7 @@ def search(
                 pass  # malformed corner case — fall through to LIKE
         like = " OR ".join(["m.content LIKE ?"] * len(terms))
         rows = conn.execute(
-            f"SELECT m.* FROM memories m WHERE {like}{extra} ORDER BY m.id DESC LIMIT ?",
+            f"SELECT m.* FROM memories m WHERE ({like}){extra} ORDER BY m.id DESC LIMIT ?",
             [f"%{t}%" for t in terms] + params + [limit],
         ).fetchall()
         return [row_to_dict(r) for r in rows]
@@ -499,10 +512,10 @@ def search_semantic(
     # produced no error at all: just confidently-scored wrong answers, with
     # the genuine best match pushed out of the results entirely. The backfill
     # thread re-embeds anything left on an old model, so this self-heals.
-    filters, params = [], [EMBED_MODEL]
+    filters, params = ["(m.retracted_at IS NULL OR m.retracted_at = '')"], [EMBED_MODEL]
     if author: filters.append("m.author = ?"); params.append(author)
     if layer:  filters.append("m.layer = ?");  params.append(layer)
-    extra = (" AND " + " AND ".join(filters)) if filters else ""
+    extra = (" AND " + " AND ".join(filters))
 
     with db() as conn:
         rows = conn.execute(
@@ -528,8 +541,10 @@ def search_semantic(
 
 
 @app.get("/count")
-def count(layer: str = "", author: str = "", search: str = ""):
+def count(layer: str = "", author: str = "", search: str = "", include_retracted: bool = False):
     clauses, params = [], []
+    if not include_retracted:
+        clauses.append("(retracted_at IS NULL OR retracted_at = '')")
     if layer:  clauses.append("layer  = ?");  params.append(layer)
     if author: clauses.append("author = ?");  params.append(author)
     if search: clauses.append("content LIKE ?"); params.append(f"%{search}%")
@@ -546,7 +561,9 @@ def count(layer: str = "", author: str = "", search: str = ""):
 def layers():
     with db() as conn:
         rows = conn.execute(
-            "SELECT layer AS name, COUNT(*) AS count FROM memories GROUP BY layer ORDER BY count DESC"
+            "SELECT layer AS name, COUNT(*) AS count FROM memories "
+            "WHERE (retracted_at IS NULL OR retracted_at = '') "
+            "GROUP BY layer ORDER BY count DESC"
         ).fetchall()
     return {"layers": [dict(r) for r in rows]}
 
@@ -555,7 +572,8 @@ def layers():
 def authors():
     with db() as conn:
         rows = conn.execute(
-            "SELECT author AS name, COUNT(*) AS count FROM memories WHERE author != '' "
+            "SELECT author AS name, COUNT(*) AS count FROM memories "
+            "WHERE author != '' AND (retracted_at IS NULL OR retracted_at = '') "
             "GROUP BY author ORDER BY count DESC"
         ).fetchall()
     return {"authors": [dict(r) for r in rows]}
@@ -571,17 +589,42 @@ def endorse(memory_id: int):
     return {"id": memory_id, "endorsed": row["endorsed"]}
 
 
-@app.delete("/memories/{memory_id}")
-def delete_memory(memory_id: int):
+@app.get("/memories/{memory_id}")
+def get_memory(memory_id: int):
+    """Retrieve a single memory by ID for audit inspection, including retracted memories."""
     with db() as conn:
-        result = conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
-        # SQLite does not enforce the foreign key by default, so deleting a
-        # memory used to leave its vector behind forever — a slow leak, and a
-        # row that can never be reached again.
-        conn.execute("DELETE FROM memory_vectors WHERE memory_id = ?", (memory_id,))
-    if result.rowcount == 0:
+        row = conn.execute("SELECT * FROM memories WHERE id = ?", (memory_id,)).fetchone()
+    if not row:
         raise HTTPException(status_code=404, detail="Memory not found")
-    return {"deleted": memory_id}
+    return row_to_dict(row)
+
+
+@app.delete("/memories/{memory_id}")
+@app.post("/memories/{memory_id}/retract")
+def delete_or_retract_memory(memory_id: int):
+    """Retract a memory from live context while preserving it in the audit record.
+
+    Matches the Agora erasure ruling (agora_answer_erasure.md):
+    a memory may leave the live context (excluded from recall, search, and
+    prompts), but remains permanently intact in the audit record.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with db() as conn:
+        row = conn.execute("SELECT id, retracted_at FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Memory not found")
+        if not row["retracted_at"]:
+            conn.execute("UPDATE memories SET retracted_at = ? WHERE id = ?", (now_iso, memory_id))
+            retracted_at = now_iso
+        else:
+            retracted_at = row["retracted_at"]
+    return {
+        "id": memory_id,
+        "retracted": True,
+        "retracted_at": retracted_at,
+        "audit_preserved": True,
+        "deleted": memory_id,
+    }
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────
@@ -620,7 +663,7 @@ def recall_ranked(
         return []
     fts_query = " OR ".join(f'"{t}"' for t in terms)
 
-    filters, params = [], []
+    filters, params = ["(m.retracted_at IS NULL OR m.retracted_at = '')"], []
     if author:
         # Exact match OR the author field naming this author among others
         # (e.g. "Eli+Coda" for a joint memory) — a shared exchange should
@@ -631,7 +674,7 @@ def recall_ranked(
         filters.append("m.source != 'wandered'")
     filters.append("COALESCE(m.salience, 0.5) >= ?")
     params.append(min_salience)
-    extra = (" AND " + " AND ".join(filters)) if filters else ""
+    extra = (" AND " + " AND ".join(filters))
 
     case_sql = " ".join(f"WHEN '{k}' THEN {v}" for k, v in _SOURCE_WEIGHT.items())
 
@@ -675,6 +718,7 @@ def recall_tiered(author: str, tier: str = "anchor", limit: int = Query(8, le=50
             """SELECT * FROM memories
                WHERE tier = ? AND (author = ? OR author LIKE ?)
                  AND superseded_by IS NULL
+                 AND (retracted_at IS NULL OR retracted_at = '')
                ORDER BY COALESCE(salience, 0.5) DESC, id DESC
                LIMIT ?""",
             (tier, author, f"%{author}%", limit),

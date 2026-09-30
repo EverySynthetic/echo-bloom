@@ -62,20 +62,22 @@ async def vault_page(request: Request, _=Depends(require_auth)):
 
 @router.get("/api/vault")
 async def api_vault(
-    layer:         str = "",
-    author:        str = "",
-    search:        str = "",
-    exclude_layer: str = "",
-    limit:         int = 20,
-    offset:        int = 0,
+    layer:             str = "",
+    author:            str = "",
+    search:            str = "",
+    exclude_layer:     str = "",
+    include_retracted: bool = False,
+    limit:             int = 20,
+    offset:            int = 0,
     _=Depends(require_auth),
 ):
     vault = _vault_url()
     params = {"limit": min(limit, 50), "offset": max(offset, 0)}
-    if layer:         params["layer"]         = layer
-    if author:        params["author"]        = author
-    if search:        params["search"]        = search
-    if exclude_layer: params["exclude_layer"] = exclude_layer
+    if layer:             params["layer"]             = layer
+    if author:            params["author"]            = author
+    if search:            params["search"]            = search
+    if exclude_layer:     params["exclude_layer"]     = exclude_layer
+    if include_retracted: params["include_retracted"] = "true"
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -97,18 +99,20 @@ async def api_vault(
 
 @router.get("/api/vault/count")
 async def api_vault_count(
-    layer:         str = "",
-    author:        str = "",
-    search:        str = "",
-    exclude_layer: str = "",
+    layer:             str = "",
+    author:            str = "",
+    search:            str = "",
+    exclude_layer:     str = "",
+    include_retracted: bool = False,
     _=Depends(require_auth),
 ):
     vault = _vault_url()
     params = {}
-    if layer:         params["layer"]         = layer
-    if author:        params["author"]        = author
-    if search:        params["search"]        = search
-    if exclude_layer: params["exclude_layer"] = exclude_layer
+    if layer:             params["layer"]             = layer
+    if author:            params["author"]            = author
+    if search:            params["search"]            = search
+    if exclude_layer:     params["exclude_layer"]     = exclude_layer
+    if include_retracted: params["include_retracted"] = "true"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{vault}/count", params=params,
@@ -347,6 +351,12 @@ async def api_core_add(request: Request, _=Depends(require_auth)):
 
 @router.delete("/api/vault/core")
 async def api_core_remove(request: Request, _=Depends(require_auth)):
+    """Unflag a core memory from prompt injection for this Kin.
+
+    This removes the text from the Kin's active core_memories configuration list.
+    It does not delete the memory from the vault database; the original record
+    remains completely intact in the vault store.
+    """
     body     = await request.json()
     kin_name = (body.get("kin_name") or "").strip()
     content  = (body.get("content")  or "").strip()
@@ -360,6 +370,42 @@ async def api_core_remove(request: Request, _=Depends(require_auth)):
                 _save_kin_cfg(cfg)
             return {"ok": True, "count": len(core)}
     return {"ok": False, "error": f"Kin '{kin_name}' not found"}
+
+
+@router.get("/api/vault/memories/{memory_id}")
+async def api_vault_get_memory(memory_id: int, _=Depends(require_auth)):
+    """Fetch a single memory by ID from the vault for audit inspection."""
+    vault = _vault_url()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{vault}/memories/{memory_id}",
+                                   timeout=aiohttp.ClientTimeout(total=5)) as r:
+                if r.status == 404:
+                    return {"ok": False, "error": "Memory not found"}
+                data = await r.json()
+                return {"ok": True, "memory": data}
+    except Exception as e:
+        log.warning("vault get memory failed for %d: %s", memory_id, e)
+        return {"ok": False, "error": str(e)}
+
+
+@router.delete("/api/vault/memories/{memory_id}")
+@router.post("/api/vault/memories/{memory_id}/retract")
+async def api_vault_retract(memory_id: int, _=Depends(require_auth)):
+    """Retract a memory from live recall via the vault server.
+    Preserves the memory in the permanent audit record."""
+    vault = _vault_url()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{vault}/memories/{memory_id}/retract",
+                                    timeout=aiohttp.ClientTimeout(total=5)) as r:
+                if r.status == 404:
+                    return {"ok": False, "error": "Memory not found"}
+                data = await r.json()
+                return {"ok": True, **data}
+    except Exception as e:
+        log.warning("vault retraction failed for memory %d: %s", memory_id, e)
+        return {"ok": False, "error": str(e)}
 
 
 # ── Ingestion pipeline ─────────────────────────────────────────────────────────
