@@ -58,7 +58,13 @@ parser = argparse.ArgumentParser(description="Echo Bloom vault server")
 parser.add_argument("--port", type=int, default=8765)
 parser.add_argument("--host", default="0.0.0.0")
 parser.add_argument("--db",   default=str(Path.home() / ".local/share/echo_bloom/vault.db"))
-args, _ = parser.parse_known_args()
+
+if __name__ == "__main__":
+    args = parser.parse_args()
+else:
+    # When imported as a module (e.g. by unit tests), parse empty args so defaults
+    # apply and test runner CLI flags (e.g. unittest) are not rejected.
+    args = parser.parse_args([])
 
 DB_PATH = Path(args.db)
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
