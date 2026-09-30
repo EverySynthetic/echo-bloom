@@ -130,6 +130,30 @@ class HardwareTable(unittest.TestCase):
             ["gemma3:4b", "qwen2.5vl:3b"],
         )
 
+    def test_vram_contention_warning_on_6gb_discrete_gpu(self):
+        warn = ve.vram_contention_warning(6.0, platform="linux")
+        self.assertIsNotNone(warn)
+        self.assertIn("VRAM contention warning", warn)
+        self.assertIn("6.0 GB", warn)
+        self.assertIn("gemma3:4b", warn)
+
+    def test_vram_contention_warning_none_on_8gb_or_above(self):
+        self.assertIsNone(ve.vram_contention_warning(8.0, platform="linux"))
+        self.assertIsNone(ve.vram_contention_warning(12.0, platform="linux"))
+
+    def test_vram_contention_warning_none_below_6gb(self):
+        # < 6GB defaults to single camera anyway
+        self.assertIsNone(ve.vram_contention_warning(4.0, platform="linux"))
+
+    def test_vram_contention_warning_none_on_darwin(self):
+        # Apple Silicon unified memory does not experience discrete VRAM contention
+        self.assertIsNone(ve.vram_contention_warning(6.0, platform="darwin"))
+
+    def test_vram_contention_warning_none_with_single_camera_override(self):
+        self.assertIsNone(
+            ve.vram_contention_warning(6.0, platform="linux", cameras=["gemma3:4b"])
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

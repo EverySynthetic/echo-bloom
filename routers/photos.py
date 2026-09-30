@@ -32,12 +32,20 @@ def _cameras(cfg: dict | None = None) -> list[str]:
     override = cfg.get("vision_models")
     if isinstance(override, str):
         override = [x.strip() for x in override.split(",") if x.strip()]
-    return ve.resolve_cameras(
+    cams = ve.resolve_cameras(
         vram_gb=float(hw.get("vram_gb") or 0),
         ram_gb=float(hw.get("ram_gb") or 0),
         platform=hw.get("platform"),
         override=override if isinstance(override, list) else None,
     )
+    warn = ve.vram_contention_warning(
+        vram_gb=float(hw.get("vram_gb") or 0),
+        platform=hw.get("platform"),
+        cameras=cams,
+    )
+    if warn:
+        log.warning("%s", warn)
+    return cams
 
 
 def describe_image_bytes(raw: bytes, kin: str = "room", host: str | None = None) -> dict:
@@ -129,9 +137,16 @@ async def api_photo_settings(_=Depends(require_auth)):
     missing = ve.missing_cameras(cameras, host=host)
     cam1 = cameras[0] if cameras else None
     cam2 = cameras[1] if len(cameras) > 1 else None
+    hw = get_hw_caps()
+    vram_warn = ve.vram_contention_warning(
+        vram_gb=float(hw.get("vram_gb") or 0),
+        platform=hw.get("platform"),
+        cameras=cameras,
+    )
     return {
         "retention": ps.get_retention(cfg),
         "kept_count": ps.kept_count(),
+        "warning": vram_warn,
         "models": {
             "camera1": cam1,
             "camera2": cam2,

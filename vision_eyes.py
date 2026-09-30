@@ -51,6 +51,33 @@ def default_cameras(vram_gb: float, ram_gb: float = 0.0, platform: str | None = 
     return ["gemma3:4b"]
 
 
+def vram_contention_warning(
+    vram_gb: float,
+    platform: str | None = None,
+    cameras: list[str] | None = None,
+) -> str | None:
+    """Return a warning string if dual vision cameras run on a discrete GPU with < 8 GB VRAM.
+
+    On a 6 GB card (e.g. RTX 3050 Laptop / A15), running dual cameras (gemma3:4b + qwen2.5vl:3b)
+    sequentially while a ~4.7 GB 7B Kin model is resident in VRAM forces Ollama to repeatedly
+    evict and reload models between vision passes and chat turns, causing severe latency.
+    Advises configuring single-camera mode via config 'vision_models': ['gemma3:4b'].
+    """
+    platform = platform or sys.platform
+    if platform == "darwin":
+        return None
+    if 6.0 <= vram_gb < 8.0:
+        cams = cameras if cameras is not None else default_cameras(vram_gb, platform=platform)
+        if len(cams) >= 2:
+            return (
+                f"VRAM contention warning: {vram_gb:.1f} GB VRAM with dual cameras ({cams[0]}, {cams[1]}). "
+                "Running two vision models alongside a resident 7B Kin model may cause repeated "
+                "VRAM model evictions and high latency. Consider setting 'vision_models': ['gemma3:4b'] "
+                "in kin_config.json for single-camera mode."
+            )
+    return None
+
+
 PHOTO_PROMPT = """\
 Describe this image as plain visual facts. Answer with exactly these seven
 labelled lines and nothing else. Write one or two full sentences per line.
