@@ -32,8 +32,11 @@
       <input type="checkbox" id="hide-heartbeat" checked onchange="resetAndLoad()"> hide pulse
     </label>
     <label class="vault-toggle-label">
-      <input type="checkbox" id="show-retracted" onchange="resetAndLoad()"> show retracted
+      <input type="checkbox" id="show-retracted" onchange="resetAndLoad()"> show retracted (audit)
     </label>
+    <span class="vault-erasure-hint" style="color:var(--text-dim); font-size:11px; margin-left:auto;" title="Under the Agora erasure ruling, deleting retracts memories from live context while keeping them in the audit record on disk. A true purge is not in this release.">
+      delete = retract (stays in audit)
+    </span>
   </div>
 
   <!-- Ingest mode controls -->
@@ -441,7 +444,7 @@ function renderEntries(entries, isSemantic) {
     const content = escHtml(e.content || '');
     const isRetracted = !!(e.retracted_at);
     const retractedBadge = isRetracted
-      ? `<span class="mem-retracted" title="Retracted from live recall on ${fmtTs(e.retracted_at)} (preserved in audit record)">retracted</span>` : '';
+      ? `<span class="mem-retracted" title="Retracted from live recall on ${fmtTs(e.retracted_at)} — stays in audit record on disk, not purged">retracted (in audit)</span>` : '';
     const ts      = isSemantic ? '' : `<span class="mem-ts">${fmtTs(e.timestamp || e.created_at)}</span>`;
     const score   = isSemantic && e.score !== undefined
       ? `<span class="mem-score">relevance ${e.score}</span>` : '';
@@ -467,7 +470,7 @@ function renderEntries(entries, isSemantic) {
     const retractBtn = (memDbId && !isRetracted)
       ? `<button class="mem-retract-btn"
            onclick="retractMem(${memDbId}, this)"
-           title="Retract from live recall (stays in audit record)">retract</button>` : '';
+           title="Retract: removes from live recall; stays in audit record on disk (not purged)">retract (stays in audit)</button>` : '';
     return `
 <div class="mem-card${isRetracted ? ' mem-card-retracted' : ''}" id="${id}">
   <div class="mem-meta">
@@ -551,13 +554,13 @@ async function flagCore(kin_name, content, btn) {
 async function retractMem(id, btn) {
   if (!btn.dataset.confirmed) {
     btn.dataset.confirmed = "1";
-    btn.textContent = "confirm retract?";
-    btn.title = "Click again to retract from live context (preserved in audit record)";
+    btn.textContent = "confirm: retract from live? (stays in audit)";
+    btn.title = "Click again to confirm: memory leaves live recall but remains in the permanent audit record on disk";
     setTimeout(() => {
       if (btn.dataset.confirmed) {
         btn.dataset.confirmed = "";
-        btn.textContent = "retract";
-        btn.title = "Retract from live recall (stays in audit record)";
+        btn.textContent = "retract (stays in audit)";
+        btn.title = "Retract: removes from live recall; stays in audit record on disk (not purged)";
       }
     }, 4000);
     return;

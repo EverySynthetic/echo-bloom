@@ -152,3 +152,42 @@ Because the build host lacks real Apple Silicon hardware, a clean unconfigured L
 
 3. **Release Decision:**
    - If dual-camera latency on the A15 laptop exceeds acceptable thresholds (> 45s total turn time), change `default_cameras()` in `vision_eyes.py` so discrete GPUs with `< 8.0 GB` VRAM default to `["gemma3:4b"]` rather than dual cameras.
+
+---
+
+## 4. Delete = Retract (Audit-Preserved Memory Erasure) Walk
+
+**Objective:** Verify that memory deletion under the Agora erasure ruling (`agora_answer_erasure.md`) retracts memories from live recall and prompt injection while preserving them in SQLite for permanent audit, and verify that user-facing UI and documentation explicitly communicate `delete = retract (stays in audit)`.
+
+### Background & Non-Purge Decision
+
+Under the Agora erasure ruling, deleting a memory retracts it from live recall, ranked search, semantic search, and prompt injection, but preserves the record on disk for audit trail integrity.
+**Policy Note:** An owner-only true purge is deliberately NOT in this release and is Don's decision. Do not implement a disk purge endpoint.
+
+### Step-by-Step Walk
+
+1. **Verify UI labels and hints in Vault browser:**
+   - Navigate to `/vault`.
+   - Confirm header controls display the notice: `delete = retract (stays in audit)`.
+   - Confirm filter checkbox is labelled: `show retracted (audit)`.
+   - On an active memory card, confirm the action button is labelled: `retract (stays in audit)`.
+   - Hover over the button and check tooltip: `Retract: removes from live recall; stays in audit record on disk (not purged)`.
+
+2. **Verify inline two-click confirmation:**
+   - Click `retract (stays in audit)`.
+   - Confirm button changes to: `confirm: retract from live? (stays in audit)` with tooltip explaining the memory remains in the permanent audit record.
+   - Confirm clicking again triggers `POST /api/vault/memories/{id}/retract`.
+   - Confirm if 4 seconds elapse without clicking, the button reverts without taking action.
+
+3. **Verify retraction behavior:**
+   - Confirm the retracted memory immediately disappears from the default live feed and semantic search.
+   - Check the `show retracted (audit)` toggle.
+   - Confirm the retracted memory appears with a distinct `retracted (in audit)` badge.
+
+4. **Verify audit persistence on disk (SQLite):**
+   - Query the database directly:
+     ```bash
+     sqlite3 ~/.local/share/echo_bloom/vault.db "SELECT id, author, retracted_at, substr(content,1,40) FROM memories WHERE retracted_at IS NOT NULL;"
+     ```
+   - Confirm the row exists, content is intact, and `retracted_at` holds the ISO timestamp of retraction.
+
