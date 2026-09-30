@@ -13,6 +13,7 @@ Because the build host lacks real Apple Silicon hardware, a clean unconfigured L
 ### Step-by-Step Walk
 
 1. **Clean state verification:**
+   > **DESTRUCTIVE:** Only on a disposable test machine, or back up that folder first; never on a machine with a real Kin.
    ```bash
    # Ensure no leftover Echo Bloom state exists
    rm -rf ~/.local/share/echo_bloom
@@ -72,6 +73,7 @@ Because the build host lacks real Apple Silicon hardware, a clean unconfigured L
 ### Step-by-Step Walk
 
 1. **Prepare clean VM or test partition:**
+   > **DESTRUCTIVE:** Only on a disposable test machine, or back up that folder first; never on a machine with a real Kin.
    ```bash
    # Confirm clean state: no Ollama, no echo_bloom dir
    test ! -d ~/.local/share/echo_bloom && echo "Clean state confirmed"
