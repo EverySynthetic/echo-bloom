@@ -11,7 +11,13 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ## 1.3.6 (unreleased, in progress on the working branch)
 
-Everything on the working branch since 1.3.4 that 1.3.5 didn't carry: the router split, the Agora node bridge, macOS install (written, untested), ambient paired presence, and the talk page changes. Ships after the fresh-install walk.
+Everything on the working branch since 1.3.4 that 1.3.5 didn't carry: the router split, the Agora node bridge, macOS install (written, untested), ambient paired presence, the talk page changes, and photo sharing. Ships after the release verification checklist walks.
+
+**Delete versus audit (Agora erasure ruling).** Echo Bloom advertised `DELETE /memories/{id}` while Agora's erasure ruling (`agora_answer_erasure.md`) requires that memories may be retracted from live context but must permanently remain in the audit record. `DELETE /memories/{id}` and `POST /memories/{id}/retract` now set a `retracted_at` timestamp. Retracted memories are excluded from live recall, ranked search, semantic search, and prompt injection, but remain preserved in SQLite for audit inspection (`GET /memories/{id}`, `/recall?include_retracted=true`). In the vault browser, retracted memories display a `[retracted]` badge, can be inspected via the "show retracted" filter, and provide an inline-confirmed retract action. Core memory unflagging (`DELETE /api/vault/core`) is documented honestly as unflagging from prompt injection without touching the vault database.
+
+**6 GB VRAM Contention Guard.** On 6 GB discrete GPUs (e.g. GTX 1660 Ti / RTX 3050 Laptop), running dual vision models (`gemma3:4b` + `qwen2.5vl:3b`) alongside a resident 4.7 GB 7B Kin model (`qwen2.5:7b`) causes three successive VRAM evictions and reloads per photo turn. Added proactive detection in `vision_eyes.py` and `routers/photos.py` warning the user when contention is present and recommending single-camera mode (`"vision_models": ["gemma3:4b"]`).
+
+**Release Verification Walk Checklist.** Untested procedures for macOS installation and launchd services, clean-box Linux fresh installation, and physical 6 GB laptop benchmarking are documented in `docs/release_checklist_1.3.6.md`.
 
 ## 1.3.5.1
 
