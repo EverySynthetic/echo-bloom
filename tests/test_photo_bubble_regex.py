@@ -14,7 +14,8 @@ import vision_eyes as ve  # noqa: E402
 
 
 def _page_regex():
-    src = open(os.path.join(ROOT, "static", "js", "photo_share.js"), encoding="utf-8").read()
+    with open(os.path.join(ROOT, "static", "js", "photo_share.js"), encoding="utf-8") as f:
+        src = f.read()
     return re.search(r"const photoRegex = (/.*/g);", src).group(1)
 
 

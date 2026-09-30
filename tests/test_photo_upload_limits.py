@@ -81,8 +81,10 @@ class ThePagesDownloadButtonWorks(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
 
     def test_the_page_throws_on_a_stream_error(self):
-        src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                "static", "js", "photo_share.js")).read()
+        js_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "static", "js", "photo_share.js")
+        with open(js_path, encoding="utf-8") as f:
+            src = f.read()
         self.assertIn("if (ev.error) throw new Error(ev.error);", src)
 
 if __name__ == "__main__":
