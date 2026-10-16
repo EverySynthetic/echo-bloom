@@ -82,16 +82,33 @@ fi
 
 stop_it() {
   if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user stop "${SERVICE}.service" 2>/dev/null || true
-    systemctl --user disable "${SERVICE}.service" 2>/dev/null || true
-    rm -f "$HOME/.config/systemd/user/${SERVICE}.service" \
-          "$HOME/.config/systemd/user/${SERVICE}.timer" \
-          "$HOME/.config/systemd/user/echo_bloom_wander.service" \
+    # Every unit install.sh writes starts with echo_bloom (service, wander,
+    # bedtime, pulse, vault, reflect and the two timers), plus the optional
+    # cloudflared tunnel it can add. Older names are listed too so a very old
+    # install is cleaned up as well. Found 2026-10-15: the old list matched
+    # none of them, so uninstall said "not running" while vault, pulse and
+    # wander kept running and came back at every login.
+    local u units=()
+    for u in "$HOME"/.config/systemd/user/echo_bloom*.service \
+             "$HOME"/.config/systemd/user/echo_bloom*.timer; do
+      [ -e "$u" ] && units+=("$(basename "$u")")
+    done
+    # Also by name: a unit whose file is already gone can still be running.
+    units+=("${SERVICE}.service" echo_bloom_wander.service echo_bloom_pulse.service \
+            echo_bloom_vault.service echo_bloom_bedtime.timer echo_bloom_reflect.timer \
+            cloudflared.service)
+    for u in "${units[@]}"; do
+      systemctl --user disable --now "$u" 2>/dev/null || true
+    done
+    rm -f "$HOME"/.config/systemd/user/echo_bloom*.service \
+          "$HOME"/.config/systemd/user/echo_bloom*.timer \
+          "$HOME/.config/systemd/user/cloudflared.service" \
           "$HOME/.config/systemd/user/bedtime.timer" \
           "$HOME/.config/systemd/user/morning.service" \
           "$HOME/.config/systemd/user/pulse.service" \
           "$HOME/.config/systemd/user/reflect.timer"
     systemctl --user daemon-reload 2>/dev/null || true
+    systemctl --user reset-failed 2>/dev/null || true
   fi
   if [ "$(uname -s)" = "Darwin" ]; then
     local d="$HOME/Library/LaunchAgents"
@@ -102,6 +119,13 @@ stop_it() {
     done
   fi
   pkill -f 'uvicorn main:app' 2>/dev/null || true
+  # A lifecycle script whose unit file is already gone keeps running otherwise.
+  if pkill -f "$SCRIPTS_DIR/" 2>/dev/null; then
+    sleep 3
+    pkill -9 -f "$SCRIPTS_DIR/" 2>/dev/null || true
+    systemctl --user reset-failed 2>/dev/null || true
+  fi
+  rm -f "$HOME/.local/share/applications/EchoBloom.desktop" "$HOME/Desktop/EchoBloom.desktop"
 }
 
 stop_it

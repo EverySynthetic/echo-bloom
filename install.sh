@@ -45,6 +45,9 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     echo ""
 fi
 
+# USER is unset under `su -`, cron and some containers; with set -u that killed the
+# install at the linger step, after naming and the password. Found 2026-10-15.
+USER="${USER:-$(id -un)}"
 APP_DIR="$HOME/echo_bloom"
 SERVICE_NAME="echo_bloom"
 PORT=8090
@@ -556,9 +559,16 @@ preflight() {
         local apt_name=$1 pacman_name=$2 dnf_name=$3
         case "$PKG_MGR" in
             pacman) sudo pacman -S --noconfirm "$pacman_name" ;;
-            apt)    sudo apt-get install -y    "$apt_name"    ;;
+            apt)
+                # A fresh Ubuntu/Debian image has no package index: install fails
+                # with "Unable to locate package". Refresh once, best effort.
+                if [[ -z "${_APT_REFRESHED:-}" ]]; then
+                    sudo apt-get update -qq || true
+                    _APT_REFRESHED=1
+                fi
+                sudo apt-get install -y "$apt_name" ;;
             dnf)    sudo dnf install -y        "$dnf_name"    ;;
-            brew)   brew install               "$apt_name"    ;;
+            brew)   brew install "${apt_name/python3-pip/python}" ;;  # pip ships inside brew's python
         esac
     }
 
@@ -594,6 +604,11 @@ preflight() {
             die "Install the Ollama Mac app from https://ollama.com/download , open it once (menu-bar llama), then re-run this installer."
         fi
         info "Installing Ollama (this may take a minute)..."
+        # Ollama's own installer extracts a .zst archive and stops with
+        # "This version requires zstd" when the zstd tool is missing.
+        if ! command -v zstd &>/dev/null; then
+            _install_pkg zstd zstd zstd || warn "Could not install zstd; Ollama's installer may stop and ask for it."
+        fi
         curl -fsSL https://ollama.com/install.sh | sh \
             || die "Ollama install failed. Visit https://ollama.com to install manually, then re-run."
         ok "Ollama installed."
@@ -1858,7 +1873,7 @@ sudo_notice() {
     echo
     echo "  Your password (sudo) is only used for these, and only if they're needed:"
     echo "   - installing missing system packages with your package manager:"
-    echo "     Python 3, pip, git, curl, and Tcl/Tk for the control panel"
+    echo "     Python 3, pip, git, curl, zstd, and Tcl/Tk for the control panel"
     echo "   - installing Ollama with its own installer from ollama.com, which"
     echo "     sets it up as a system service; and starting that service if"
     echo "     starting Ollama as you doesn't work"
