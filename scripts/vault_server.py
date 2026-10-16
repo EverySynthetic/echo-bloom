@@ -54,7 +54,12 @@ except ImportError:
 
 parser = argparse.ArgumentParser(description="Echo Bloom vault server")
 parser.add_argument("--port", type=int, default=8765)
-parser.add_argument("--host", default="0.0.0.0")
+# The vault has no login. It listened on every network interface by default, so
+# anyone on the same Wi-Fi could read and delete every memory with one request
+# (found in the 2026-10-15 clean-box walk). The default is this machine only.
+# To share a vault on a network you trust, pass --host 0.0.0.0 on purpose.
+parser.add_argument("--host", default="127.0.0.1",
+                    help="address to listen on (default 127.0.0.1, this machine only)")
 parser.add_argument("--db",   default=str(Path.home() / ".local/share/echo_bloom/vault.db"))
 args = parser.parse_args()
 
@@ -343,8 +348,36 @@ def _prune_heartbeats():
 # ── App ────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="Echo Bloom Vault", docs_url=None, redoc_url=None)
-app.add_middleware(CORSMiddleware, allow_origins=["*"],
+# CORS used to be "*", so any web page open in a browser on this machine could
+# read the vault from localhost and send the reply anywhere. Only pages served
+# from this machine may talk to it from a browser. Programs (the dashboard,
+# the scripts) send no Origin header and are unaffected.
+_LOCAL_ORIGIN_RE = r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
+_LOCAL_HOSTS     = {"localhost", "127.0.0.1", "::1"}
+_LOOPBACK_BIND   = args.host in _LOCAL_HOSTS
+app.add_middleware(CORSMiddleware, allow_origin_regex=_LOCAL_ORIGIN_RE,
                    allow_methods=["*"], allow_headers=["*"])
+
+
+def _request_host(request) -> str:
+    h = request.headers.get("host", "")
+    if h.startswith("["):                       # [::1]:8765
+        return h[1:].split("]")[0]
+    return h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+
+
+@app.middleware("http")
+async def _guard(request, call_next):
+    from fastapi.responses import JSONResponse
+    import re as _re
+    origin = request.headers.get("origin")
+    if origin and not _re.match(_LOCAL_ORIGIN_RE, origin):
+        return JSONResponse({"detail": "origin not allowed"}, status_code=403)
+    # Bound to this machine only: a request that names any other Host is a
+    # DNS-rebinding attempt (a web page pointing its own domain at 127.0.0.1).
+    if _LOOPBACK_BIND and _request_host(request) not in _LOCAL_HOSTS:
+        return JSONResponse({"detail": "host not allowed"}, status_code=403)
+    return await call_next(request)
 
 
 @app.on_event("startup")
@@ -685,4 +718,8 @@ def recall_tiered(author: str, tier: str = "anchor", limit: int = Query(8, le=50
 if __name__ == "__main__":
     print(f"Echo Bloom Vault — {DB_PATH}")
     print(f"Listening on http://{args.host}:{args.port}")
+    if not _LOOPBACK_BIND:
+        print("WARNING: the vault has no login and is listening beyond this machine. "
+              "Anyone who can reach this port can read and delete every memory. "
+              "Use only on a network you trust, or drop --host.")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
