@@ -9,6 +9,14 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ---
 
+## 1.3.5.2
+
+Found by installing 1.3.5.1 on a clean machine, 2026-10-15. Nothing here is new behaviour; each item is something that was true and described the wrong thing.
+
+- **The memory vault listened on every network interface and had no login.** `GET /recall/all` returned every memory to anyone on the same network, and CORS was `*`, so any web page open on the machine could read it too. It now listens on this machine only (`--host 127.0.0.1`), answers browsers only on localhost, and rejects a foreign `Host` header. Sharing a vault on a trusted network still works with `--host 0.0.0.0`, which prints a warning. `tests/test_vault_exposure.py`.
+- **The installer died under `set -u` when `$USER` was unset**, did not install `zstd` (Ollama's installer needs it), and did not run `apt-get update` before its first apt install.
+- **`uninstall.sh` stopped units that did not exist** and said "not running" while the vault, pulse and wander kept running and stayed enabled. It also left the cloudflared unit and the launchers behind.
+
 ## 1.3.5.1
 
 An installer hotfix from a fresh install on a real 6GB laptop (a GTX 1660 Ti), 2026-09-24. Only the installer and the naming ritual change; the app is 1.3.5.
