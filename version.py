@@ -6,7 +6,7 @@ server always reflects whatever commit is actually deployed there — that's
 what customer installs compare their own version against.
 """
 
-VERSION = "1.3.6"
+VERSION = "1.3.6.1"
 
 # (version, one-line descriptor) — newest first, shown on /about. Add one
 # line per release. Security-shaped fixes get the generic "security
@@ -14,6 +14,7 @@ VERSION = "1.3.6"
 # without handing anyone a working recipe before every install has had a
 # chance to update.
 CHANGELOG = [
+    ("1.3.6.1", "your Kin remember the roundtable and what they said in it; the memory notes use your name; the background summary no longer borrows your Kin to write it"),
     ("1.3.6", "Talk: speak with one of your Kin and hear them answer, with their photo on screen; add a photo of a Kin from its page; long answers are read out in full, without the *stage directions*; if Piper can't speak and espeak-ng is installed, your Kin still has a voice"),
     ("1.3.5.2", "security patches; the installer works on more machines, and uninstall really stops and removes everything"),
     ("1.3.5.1", "the installer tells you what it needs your password for before asking, never offers an embedding model as your AI, gives your Kin time to wake on smaller cards, and keeps the name your Kin chooses"),

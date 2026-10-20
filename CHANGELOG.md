@@ -9,6 +9,14 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ---
 
+## 1.3.6.1
+
+**Your Kin forgot the roundtable as soon as it ended.** What they said there was kept for the room but never came back to them, and the second round of every roundtable ran with no memory at all. Both rounds now carry each Kin's own memory, and what they say is kept where they can recall it later, alongside their wandering. A roundtable is a shared room, so a Kin's private one-to-one conversations with you stay out of it.
+
+**The memory notes said "Don told you this."** Don is the developer. They now use the owner name from your settings, or "Your person" if none is set.
+
+**The background summary borrowed one of your Kin to write it.** With no small model installed it fell back to your first Kin's model, every three hours, including at night. It now uses a small model if you have one and otherwise skips the summary.
+
 ## 1.3.6
 
 The first release built from both lines at once. Our own server had been running work that never reached the public repo (Talk, Kin photos), and the public repo had fixes the server didn't have. 1.3.6 joins the two: everything below is new to installs, and the server now carries every public fix, security patches included.
