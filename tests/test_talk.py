@@ -107,7 +107,7 @@ class TalkVoice(unittest.TestCase):
         src = (ROOT / "main.py").read_text()
         start = src.find("async def api_talk_chat")
         chunk = src[start:start+2200]
-        self.assertNotIn("192.168.1.120", chunk)
+        self.assertNotIn("192.168.", chunk)
         self.assertIn("hold_all_local_wanders", chunk)
 
 
@@ -117,8 +117,11 @@ class TalkVoice(unittest.TestCase):
         Now it's ECHO_BLOOM_THERUG, empty by default; Don's box supplies
         it via the systemd unit, same pattern as ECHO_BLOOM_COMPANION."""
         src = (ROOT / "talk_media.py").read_text()
-        self.assertNotIn('THERUG = "thedude@192.168.1.142"', src)
+        self.assertRegex(src, r'\nTHERUG = os\.environ\.get\("ECHO_BLOOM_THERUG"')
         self.assertIn("ECHO_BLOOM_THERUG", src)
+        # No LAN address or home path of the developer's own boxes anywhere.
+        self.assertNotIn("192.168.", src)
+        self.assertNotIn("/home/", src)
         self.assertIn("1660 SUPER", src)
         self.assertNotIn("RTX 5000", src)
         self.assertNotIn("import easel", src)

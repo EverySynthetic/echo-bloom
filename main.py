@@ -1604,7 +1604,7 @@ async def api_tts(request: Request, _=Depends(require_auth)):
         if audio:
             return _Resp(content=audio, media_type="audio/wav")
         raise HTTPException(503,
-            "No voice engine. therug Piper did not answer and espeak-ng "
+            "No voice engine. Piper did not answer and espeak-ng "
             "isn't installed.")
     except HTTPException:
         raise

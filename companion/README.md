@@ -1,7 +1,8 @@
 # Echo Bloom companion
 
-STT + SadTalker. **Runs on therug.** Frosty and Themess proxy to
-`http://192.168.1.142:8092`. Never import `faster_whisper` on host 3.14.
+STT + SadTalker. **Runs on therug.** Frosty and Themess proxy to it
+through `ECHO_BLOOM_COMPANION` (`http://<companion-host>:8092`); unset, an
+install transcribes locally. Never import `faster_whisper` on host 3.14.
 
 ## Running (2026-09-12)
 

@@ -6,7 +6,7 @@ On Don's own cluster therug speaks and wears the face (Don,
 this degrades to local piper, then espeak, then no voice — never a
 hang and never a crash.
 
-ECHO_BLOOM_THERUG (e.g. "thedude@192.168.1.142") is optional. Unset,
+ECHO_BLOOM_THERUG (e.g. "user@companion-host") is optional. Unset,
 every _ssh/_scp call below fails fast (no 8s connect-timeout tax on
 someone who was never going to have that host) and synthesis falls
 through to a local piper install, and from there to main.py's
@@ -30,10 +30,12 @@ import cluster as cl
 log = logging.getLogger("echo_bloom.talk_media")
 
 THERUG = os.environ.get("ECHO_BLOOM_THERUG", "").strip()
-THERUG_PIPER = "/home/thedude/piper"
-THERUG_SADTALKER = "/home/thedude/SadTalker"
+# Paths on the companion host, not this one. The remote shell expands "~"
+# to the ssh user's home, so the defaults work for any account there.
+THERUG_PIPER = os.environ.get("ECHO_BLOOM_THERUG_PIPER", "~/piper")
+THERUG_SADTALKER = os.environ.get("ECHO_BLOOM_THERUG_SADTALKER", "~/SadTalker")
 FROSTY_OLLAMA = "http://127.0.0.1:11434"
-THERUG_VISION = "http://192.168.1.142:11434"
+THERUG_VISION = os.environ.get("ECHO_BLOOM_THERUG_VISION", "").strip()
 VIDEO_DIR = Path.home() / "kin_video"
 AUDIO_DIR = Path.home() / "kin_audio"
 
