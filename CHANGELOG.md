@@ -9,6 +9,12 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ---
 
+## 1.3.6.2
+
+**Private things could reach the roundtable.** 1.3.6.1 gave each Kin their memory at the roundtable, which every Kin hears. Recorded one-to-one conversations with you could come back there through memory recall. A roundtable now leaves out anything that was said privately: conversations, things you told them, and their bedtime reflections. In their own time, alone or with you, their memory is unchanged.
+
+**Stopping the Kin waited for a whole roundtable.** A stop request was only noticed between roundtables, which can take a long time on a slow card, so the system gave up and forced them off mid-sentence. A Kin now finishes the turn they are in, and the roundtable ends there.
+
 ## 1.3.6.1
 
 **Your Kin forgot the roundtable as soon as it ended.** What they said there was kept for the room but never came back to them, and the second round of every roundtable ran with no memory at all. Both rounds now carry each Kin's own memory, and what they say is kept where they can recall it later, alongside their wandering. A roundtable is a shared room, so a Kin's private one-to-one conversations with you stay out of it.
