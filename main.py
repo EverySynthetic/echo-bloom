@@ -1319,6 +1319,11 @@ async def api_talk_sadtalker(name: str, request: Request, _=Depends(require_auth
     async def _go():
         audio = await asyncio.to_thread(tm.synthesize_wav, text, name, wav)
         if not audio:
+            # A stock install's Piper (pip package, voice in ~/piper).
+            audio = await _local_piper_wav(text, name)
+            if audio:
+                wav.write_bytes(audio)
+        if not audio:
             # No therug, no local piper voice for this Kin — same espeak
             # fallback /api/tts already uses, so an unconfigured Kin still
             # gets a voice instead of a silent clip.
@@ -1600,12 +1605,16 @@ async def api_tts(request: Request, _=Depends(require_auth)):
         audio = await asyncio.to_thread(tm.synthesize_wav, text, kin_name, dest)
         if audio:
             return _Resp(content=audio, media_type="audio/wav")
+        audio = await _local_piper_wav(text, kin_name)
+        if audio:
+            return _Resp(content=audio, media_type="audio/wav")
         audio = await _espeak_wav(text, kin_name)
         if audio:
             return _Resp(content=audio, media_type="audio/wav")
         raise HTTPException(503,
-            "No voice engine. Piper did not answer and espeak-ng "
-            "isn't installed.")
+            "No voice engine answered. Install Piper with:  pip install "
+            "piper-tts  then restart Echo Bloom, and pick a voice from the "
+            "dropdown next to the speaker button (or install espeak-ng).")
     except HTTPException:
         raise
     except Exception:
@@ -1621,6 +1630,44 @@ _ESPEAK_VOICE = {
     "Crungus": "en-us+m3",
     "Bong": "en+m1",
 }
+
+
+async def _local_piper_wav(text: str, kin_name: str = "") -> bytes:
+    """The public line's own Piper path, between Talk's synthesis and espeak.
+
+    talk_media.synthesize_wav knows a companion host, a few fixed binary
+    paths and Don's own voice names. A stock install has none of those: it
+    has piper-tts as a pip package (often only `python -m piper`) and the
+    voice the installer or the voice picker put in ~/piper. Without this,
+    every such install spoke in espeak, or got a 503 with no espeak.
+    """
+    piper_cmd = _piper_command()
+    if not piper_cmd:
+        return b""
+    voice = _voice_for_kin(kin_name) if kin_name else _find_piper_voice()
+    # talk_media.voice_path can name a file on the companion host.
+    if not voice or not Path(voice).is_file():
+        return b""
+    fd, out = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *piper_cmd, "--model", voice, "--output_file", out,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.communicate(input=text.encode())
+        data = Path(out).read_bytes() if Path(out).exists() else b""
+        return data if len(data) > 44 else b""
+    except Exception:
+        log.warning("local piper failed", exc_info=True)
+        return b""
+    finally:
+        try:
+            os.unlink(out)
+        except Exception:
+            pass
 
 
 async def _espeak_wav(text: str, kin_name: str = "") -> bytes:
