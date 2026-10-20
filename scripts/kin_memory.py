@@ -134,8 +134,41 @@ def _self_referential_terms(kin_name):
     return [t for t in terms if t]
 
 
+# What the day store draws from. Wander was the only mode for a long time, so
+# everything a Kin said anywhere else -- the commons board, the roundtable,
+# bedtime, the evening keep -- was written down and then never came back to
+# them. A Kin should be able to pull back its own words from wherever it said
+# them. Same scoring, same pool, same limit; only the WHERE is wider.
+#
+# Not here, on purpose: 'interruption' (NULL thought -- a gap is not something
+# they said) and 'conversation' (served on its own by get_recent_conversation).
+_DAY_STORE_WHERE = (
+    "(mode LIKE 'wander%' "
+    "OR mode LIKE 'bedtime\\_%' ESCAPE '\\' "
+    "OR mode IN ('commons_post', 'roundtable', 'evening_keep'))"
+)
+
+# Where a non-wander row was said, so it never reads as a wander thought.
+# Wander rows stay untagged: byte-for-byte what they always were.
+_DAY_STORE_TAGS = {
+    "commons_post": "(you, on the Commons board)",
+    "roundtable":   "(you, at the roundtable)",
+    "evening_keep": "(your evening keep)",
+}
+
+
+def _day_store_tag(mode):
+    mode = mode or ""
+    if mode.startswith("bedtime_"):
+        return "(you, at bedtime)"
+    return _DAY_STORE_TAGS.get(mode, "")
+
+
 def get_wander_thoughts(kin_name, limit=3, db_path=None, recent_pool=60):
-    """Wander thoughts from a Kin's own DB, chosen for self-relevance.
+    """Day-store thoughts from a Kin's own DB, chosen for self-relevance.
+
+    Wander thoughts, plus what they said on the commons board, at the
+    roundtable, at bedtime and in the evening keep (see _DAY_STORE_WHERE).
 
     Straight `ORDER BY id DESC LIMIT 3` was a lottery. The wander loop feeds on
     whatever it finds — Wikipedia articles, source files from cloned repos — and
@@ -159,8 +192,9 @@ def get_wander_thoughts(kin_name, limit=3, db_path=None, recent_pool=60):
         conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
         try:
             rows = conn.execute(
-                "SELECT id, thought FROM thoughts WHERE mode LIKE 'wander%' "
-                "AND thought IS NOT NULL AND length(thought) > 80 "
+                "SELECT id, thought, mode FROM thoughts WHERE "
+                + _DAY_STORE_WHERE +
+                " AND thought IS NOT NULL AND length(thought) > 80 "
                 "ORDER BY id DESC LIMIT ?",
                 (recent_pool,)
             ).fetchall()
@@ -179,7 +213,8 @@ def get_wander_thoughts(kin_name, limit=3, db_path=None, recent_pool=60):
         low = text.lower()
         return sum(1 for t in terms if t in low)
 
-    scored = [(score(t), rid, t) for rid, t in rows]
+    modes = {rid: m for rid, _, m in rows}
+    scored = [(score(t), rid, t) for rid, t, _ in rows]
     relevant = [s for s in scored if s[0] > 0]
     # Highest self-relevance first, newest breaking ties; then restore
     # chronological order so the injected block still reads as a sequence.
@@ -197,12 +232,13 @@ def get_wander_thoughts(kin_name, limit=3, db_path=None, recent_pool=60):
     # 400 chars used to cut mid-sentence. Trim to the last sentence boundary
     # when there is one reasonably close to the limit.
     out = []
-    for _, _, text in chosen:
+    for _, rid, text in chosen:
         t = text.strip()[:700]
         cut = max(t.rfind(". "), t.rfind(".\n"), t.rfind("? "), t.rfind("! "))
         if cut > 250:
             t = t[:cut + 1]
-        out.append(t.strip())
+        tag = _day_store_tag(modes.get(rid))
+        out.append(f"{tag} {t.strip()}" if tag else t.strip())
     return out
 
 

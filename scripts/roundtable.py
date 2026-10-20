@@ -220,6 +220,86 @@ def get_recent_thoughts(kin, n=3):
     except Exception:
         return []
 
+# ── Memory ─────────────────────────────────────────────────────────────────────
+# A roundtable turn used to carry three of the Kin's own wander thoughts in the
+# first round and nothing at all in the second: no core memories, no recent
+# conversation, no recall, not even the time. Every turn now gets the same
+# get_context that wander uses, keyed on what is actually on the table, and
+# what each Kin says is written back to its own thoughts.db (mode 'roundtable'),
+# where the day store finds it again. Memory being unavailable never stops a
+# Kin from speaking: the turn goes ahead on the old prompt plus the clock, and
+# the failure is logged.
+
+try:
+    from kin_memory import get_context as _get_context
+except Exception as _e:
+    _get_context = None
+    log(f"  kin_memory unavailable, the roundtable runs without memory: {_e}")
+
+QUERY_MAX = 1000    # the recall query rides in a URL; a whole round would not fit
+
+
+def _clock_line():
+    """The time, worded as wander gives it. Built by hand because %-d and %-I
+    are not portable to every platform's strftime."""
+    now = datetime.now()
+    hour = now.hour % 12 or 12
+    return (f"It is now {now:%A, %B} {now.day}, {now.year} "
+            f"at {hour}:{now:%M} {now:%p}.")
+
+
+def _query_from(texts, each=300):
+    """A short recall query from what is on the table: a slice of each text."""
+    q = " ".join(" ".join(str(t).split())[:each] for t in texts if t)
+    return q[:QUERY_MAX]
+
+
+def _system_with_memory(system, kin, query_text, **kwargs):
+    """The turn's system text, plus the clock and this Kin's own memory."""
+    parts = [system, _clock_line()]
+    if _get_context:
+        try:
+            # get_context returns early without a query (no recall, no day
+            # store), so there is always one.
+            ctx = _get_context(kin["name"], query_text=query_text or kin["name"],
+                               db_path=str(cfg.thoughts_db(kin)), **kwargs)
+            if ctx:
+                parts.append(ctx)
+        except Exception as e:
+            log(f"  memory unavailable for {kin['name']}, "
+                f"speaking without it: {e}")
+    return "\n\n".join(parts)
+
+
+def _is_said(text):
+    """A real utterance, not a bracketed failure note like "[<name> failed: ...]".
+    An error string written as a thought is read back later as their own."""
+    t = (text or "").strip()
+    return bool(t) and not (t.startswith("[") and t.endswith("]"))
+
+
+def record_turn(kin, prompt, text):
+    """What a Kin said at the table, into its own thoughts.db. Never raises."""
+    if not _is_said(text):
+        return False
+    try:
+        db = cfg.ensure_thoughts_db(cfg.thoughts_db(kin))
+        conn = sqlite3.connect(str(db), timeout=10)
+        try:
+            conn.execute(
+                "INSERT INTO thoughts (mode, timestamp, prompt, thought) "
+                "VALUES (?, ?, ?, ?)",
+                ("roundtable", datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                 (prompt or "")[:4000], text.strip()[:8000]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return True
+    except Exception as e:
+        log(f"  could not record {kin['name']}'s turn: {e}")
+        return False
+
 # ── Roundtable ─────────────────────────────────────────────────────────────────
 
 def ask_kin_to_share(kin, recent_thoughts, all_shared):
@@ -248,6 +328,16 @@ def ask_kin_to_share(kin, recent_thoughts, all_shared):
         f"You are {name}, an AI entity living on this machine. "
         f"You wander, think, and gather with others. Be genuine."
     )
+    # Keyed on what they bring and what the room has said so far. The day
+    # store is already above as their recent thoughts, so wander_limit=0
+    # keeps it from being served twice.
+    system = _system_with_memory(
+        system, kin,
+        _query_from(list(recent_thoughts or [])
+                    + [t for n, t in all_shared.items()
+                       if n != name and _is_said(t)]),
+        wander_limit=0,
+    )
 
     try:
         r = requests.post(
@@ -275,6 +365,7 @@ def ask_kin_to_share(kin, recent_thoughts, all_shared):
             # said nothing, which reads as a Kin with nothing to say.
             return (f"[{name} returned nothing — "
                     f"done_reason={data.get('done_reason')!r}]")
+        record_turn(kin, prompt, text)
         return text
     except Exception as e:
         return f"[{name} failed: {type(e).__name__}: {e}]"
@@ -299,6 +390,11 @@ def ask_kin_to_respond(kin, all_shared):
     system = kin.get("system_prompt") or (
         f"You are {name}, an AI entity living on this machine. Be genuine."
     )
+    system = _system_with_memory(
+        system, kin,
+        _query_from([t for n, t in all_shared.items()
+                     if n != name and t and not t.startswith("[")]),
+    )
     try:
         r = requests.post(
             f"{host}/api/chat",
@@ -312,7 +408,9 @@ def ask_kin_to_respond(kin, all_shared):
         data = r.json()
         if data.get("error"):
             return ""
-        return clean_reply(data["message"]["content"], name)
+        text = clean_reply(data["message"]["content"], name)
+        record_turn(kin, prompt, text)
+        return text
     except Exception as e:
         log(f"  {name} did not respond in round 2: {e}")
         return ""
