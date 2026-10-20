@@ -148,6 +148,51 @@ _DAY_STORE_WHERE = (
     "OR mode IN ('commons_post', 'roundtable', 'evening_keep'))"
 )
 
+# ── Shared rooms ───────────────────────────────────────────────────────────────
+# A shared room (the roundtable, a board every Kin reads) carries each Kin's own
+# memory but not their private speech: one-to-one talks with their person,
+# interruptions, and bedtime (bedtime tells them no one else sees it). Wander,
+# their earlier posts and table turns, the evening keep, core memories, the
+# machine reflection and ordinary experienced and inferred memory still come
+# along. One switch, shared_room, set by shared rooms only; every private
+# caller is unchanged.
+_SHARED_DAY_STORE_WHERE = (
+    "(mode LIKE 'wander%' "
+    "OR mode IN ('commons_post', 'roundtable', 'evening_keep'))"
+)
+
+# Vault rows that are private speech. cluster.py stores every chat as
+# layer 'conversation', domain 'conversation', tags 'conversation,owner,<owner>'.
+# An imported one-to-one history may carry tags 'copilot_era,...'. The 'told'
+# register is headed "<owner> told you this:" -- the owner's words to this Kin --
+# so it stays out of a shared room whole.
+_PRIVATE_LAYERS = {"conversation"}
+_PRIVATE_DOMAINS = {"conversation"}
+_PRIVATE_TAGS = {"conversation", "owner", "copilot_era"}
+_SHARED_ROOM_SOURCES_OUT = {"told"}
+
+
+def _is_private_row(row):
+    """True if a vault row (ranked, tiered, search hit or Qdrant payload) is
+    private speech -- or does not say what it is. Fails closed: a row with no
+    layer cannot be shown to be fit for a shared room, so it is not."""
+    if not isinstance(row, dict):
+        return True
+    layer = str(row.get("layer") or "").strip().lower()
+    if not layer or layer in _PRIVATE_LAYERS or layer.startswith("bedtime"):
+        return True
+    if str(row.get("domain") or "").strip().lower() in _PRIVATE_DOMAINS:
+        return True
+    tags = {t.strip().lower() for t in str(row.get("tags") or "").split(",")}
+    if tags & _PRIVATE_TAGS:
+        return True
+    return str(row.get("source") or "").strip().lower() in _SHARED_ROOM_SOURCES_OUT
+
+
+def _shared_room_rows(rows):
+    """Only the rows fit for a room the other Kin can hear. Order kept."""
+    return [r for r in (rows or []) if not _is_private_row(r)]
+
 # Where a non-wander row was said, so it never reads as a wander thought.
 # Wander rows stay untagged: byte-for-byte what they always were.
 _DAY_STORE_TAGS = {
@@ -164,11 +209,13 @@ def _day_store_tag(mode):
     return _DAY_STORE_TAGS.get(mode, "")
 
 
-def get_wander_thoughts(kin_name, limit=3, db_path=None, recent_pool=60):
+def get_wander_thoughts(kin_name, limit=3, db_path=None, recent_pool=60,
+                        shared_room=False):
     """Day-store thoughts from a Kin's own DB, chosen for self-relevance.
 
     Wander thoughts, plus what they said on the commons board, at the
     roundtable, at bedtime and in the evening keep (see _DAY_STORE_WHERE).
+    shared_room=True leaves bedtime out (_SHARED_DAY_STORE_WHERE).
 
     Straight `ORDER BY id DESC LIMIT 3` was a lottery. The wander loop feeds on
     whatever it finds — Wikipedia articles, source files from cloned repos — and
@@ -193,7 +240,7 @@ def get_wander_thoughts(kin_name, limit=3, db_path=None, recent_pool=60):
         try:
             rows = conn.execute(
                 "SELECT id, thought, mode FROM thoughts WHERE "
-                + _DAY_STORE_WHERE +
+                + (_SHARED_DAY_STORE_WHERE if shared_room else _DAY_STORE_WHERE) +
                 " AND thought IS NOT NULL AND length(thought) > 80 "
                 "ORDER BY id DESC LIMIT ?",
                 (recent_pool,)
@@ -275,7 +322,16 @@ def get_recent_conversation(kin_name, limit=4, db_path=None):
                 pass
 
 
-def _vault_text_search(kin_name, query_text, limit):
+def _fallback_hits(rows, limit, shared_room):
+    """Search rows to text. A shared room asked for 3x the limit; filter it
+    down here by the row's own fields (the endpoints cannot filter)."""
+    rows = [m for m in rows if isinstance(m, dict) and m.get("content")]
+    if shared_room:
+        rows = _shared_room_rows(rows)[:limit]
+    return [m["content"].strip() for m in rows]
+
+
+def _vault_text_search(kin_name, query_text, limit, shared_room=False):
     """Keyword recall via the vault's FTS index.
 
     The floor under both semantic paths below — no embed model or Qdrant
@@ -285,18 +341,19 @@ def _vault_text_search(kin_name, query_text, limit):
     try:
         r = requests.get(
             f"{_vault_url()}/search",
-            params={"query": query_text, "author": kin_name, "limit": limit},
+            params={"query": query_text, "author": kin_name,
+                    "limit": limit * 3 if shared_room else limit},
             timeout=8,
         )
         r.raise_for_status()
-        return [m["content"].strip() for m in r.json() if m.get("content")]
+        return _fallback_hits(r.json(), limit, shared_room)
     except Exception as e:
         log.warning("vault text search failed for %s (%s): %s",
                     kin_name, _vault_url(), e)
         return []
 
 
-def _vault_semantic_search(kin_name, query_text, limit):
+def _vault_semantic_search(kin_name, query_text, limit, shared_room=False):
     """Vector recall via the vault's own embedded search (vault_server.py's
     /search-semantic) — no separate Qdrant server needed, just Ollama, which
     every Echo Bloom install already has. This is what a stock customer
@@ -305,23 +362,24 @@ def _vault_semantic_search(kin_name, query_text, limit):
     try:
         r = requests.get(
             f"{_vault_url()}/search-semantic",
-            params={"query": query_text, "author": kin_name, "limit": limit},
+            params={"query": query_text, "author": kin_name,
+                    "limit": limit * 3 if shared_room else limit},
             timeout=30,
         )
         r.raise_for_status()
-        return [m["content"].strip() for m in r.json() if m.get("content")]
+        return _fallback_hits(r.json(), limit, shared_room)
     except Exception as e:
         log.info("vault semantic search unavailable for %s (%s): %s "
                  "— falling back to vault text search",
                  kin_name, _vault_url(), e)
-        return _vault_text_search(kin_name, query_text, limit)
+        return _vault_text_search(kin_name, query_text, limit, shared_room)
 
 
-def get_vault_memories(kin_name, query_text, limit=5):
+def get_vault_memories(kin_name, query_text, limit=5, shared_room=False):
     """Relevant vault memories for this Kin. Qdrant when configured (the
     author's own cluster), the vault's own embedded vector search otherwise
     (every stock install), keyword search as the last resort. Returns list
-    of strings."""
+    of strings. shared_room=True drops private speech by the row's fields."""
     if not query_text:
         return []
     try:
@@ -342,7 +400,7 @@ def get_vault_memories(kin_name, query_text, limit=5):
             f"{_qdrant_url()}/collections/{_collection()}/points/search",
             json={
                 "vector":       vector,
-                "limit":        limit,
+                "limit":        limit * 3 if shared_room else limit,
                 "filter":       {"must": [{"key": "author", "match": {"value": kin_name}}]},
                 "with_payload": True,
             },
@@ -350,11 +408,8 @@ def get_vault_memories(kin_name, query_text, limit=5):
         )
         r2.raise_for_status()
         results = r2.json().get("result", [])
-        return [
-            hit["payload"]["content"].strip()
-            for hit in results
-            if hit.get("payload", {}).get("content")
-        ]
+        return _fallback_hits([hit.get("payload") for hit in results],
+                              limit, shared_room)
     except Exception as e:
         # This is the path that silently returned nothing while the embed call
         # timed out — the Kin then answered with no memory and no explanation.
@@ -363,7 +418,7 @@ def get_vault_memories(kin_name, query_text, limit=5):
         log.info("qdrant unavailable for %s (embed=%s qdrant=%s): %s "
                  "— falling back to vault semantic search",
                  kin_name, _embed_url(), _qdrant_url(), e)
-        return _vault_semantic_search(kin_name, query_text, limit)
+        return _vault_semantic_search(kin_name, query_text, limit, shared_room)
 
 
 def _get_context_legacy(kin_name, query_text="", wander_limit=3, vault_limit=5,
@@ -597,15 +652,22 @@ def get_interruption_tag(kin_name, db_path=None, within_hours=36):
 
 def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
                 include_reflection=True, db_path=None, conversation_limit=4,
-                token_budget=1400, current_domain=None):
+                token_budget=1400, current_domain=None, shared_room=False):
     """
     Memory context for a Kin, labeled by provenance and fitted to a token
     budget rather than a fixed number of slots.
 
     Signature is a superset of v1 — existing call sites keep working.
     Falls back to the legacy assembly if the vault has no ranked recall.
+
+    shared_room=True (see "Shared rooms" above): no recent conversation
+    whatever conversation_limit says, no bedtime rows from the day store, and
+    no private-speech rows from the vault (_is_private_row). Default False:
+    every private caller gets exactly what it got before.
     """
     parts = []
+    if shared_room:
+        conversation_limit = 0
     char_budget = token_budget * CHARS_PER_TOKEN
     seen = set()
 
@@ -648,6 +710,8 @@ def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
 
     # 3. Standing tier — slow-rotating, usage-extended.
     standing = _tiered_recall(kin_name, tier="standing", limit=4)
+    if shared_room:
+        standing = _shared_room_rows(standing)
     if standing:
         kept = _fit(standing, int(char_budget * 0.15), seen)
         block = _format_register(kept, "Things that stay with you:",
@@ -660,16 +724,22 @@ def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
         return "\n\n".join(p for p in parts if p)
 
     # 4. Dynamic tier — ranked recall, split into labeled registers.
-    ranked = _ranked_recall(kin_name, query_text, limit=30)
+    # A shared room asks for twice the rows and drops private speech here, by
+    # the row's own fields (the vault endpoint has no such filter), then keeps
+    # the usual 30. Dropped rows never reach _fit, so they spend no budget.
+    ranked = _ranked_recall(kin_name, query_text, limit=60 if shared_room else 30)
+    if shared_room and ranked is not None:
+        ranked = _shared_room_rows(ranked)[:30]
 
     if ranked is None:
         # Older vault: fall back to the previous behaviour rather than nothing.
-        vault = get_vault_memories(kin_name, query_text, limit=vault_limit)
+        vault = get_vault_memories(kin_name, query_text, limit=vault_limit,
+                                   shared_room=shared_room)
         if vault:
             lines = "\n".join(f"- {m}" for m in vault)
             parts.append(f"Memories that may be relevant:\n{lines}")
         wander = get_wander_thoughts(kin_name, limit=wander_limit,
-                                     db_path=db_path)
+                                     db_path=db_path, shared_room=shared_room)
         if wander:
             lines = "\n".join(f"- {t}" for t in wander)
             parts.append("Things you thought while wandering — yours alone, "

@@ -240,5 +240,164 @@ class TestRoundtableMemory(unittest.TestCase):
         self.assertNotRegex((SCRIPTS / "roundtable.py").read_text(), r"strftime\([^)]*%-")
 
 
+# ── shared rooms: their own memory, never their private speech ────────────────
+# A shared room (the roundtable, a board every Kin reads) must not carry a
+# Kin's one-to-one talks with their person, interruptions or bedtime. One
+# switch, shared_room; every private caller unchanged.
+def vrow(i, content, layer="episodic", source="experienced", tags="", domain="general"):
+    return {"id": i, "content": content, "layer": layer, "source": source,
+            "tags": tags, "domain": domain, "timestamp": "2026-10-19 10:00:00"}
+
+
+PRIVATE_VAULT = [
+    vrow(1, "CONVO-VAULT Sam: how are you holding up? Ada: better, the bench is warm.",
+         layer="conversation", tags="conversation,owner,sam", domain="conversation"),
+    vrow(2, "TOLD-VAULT Sam said this to you alone, about the bench.", source="told"),
+    vrow(3, "COPILOT-VAULT an imported one-to-one, about the bench.", tags="copilot_era,Greeting"),
+    vrow(4, "OWNERTAG-VAULT a one-to-one with the owner, about the bench.", layer="session",
+         tags="Owner"),
+    {"id": 5, "content": "NOLAYER-VAULT a row that does not say what it is, about the bench.",
+     "source": "experienced"},
+]
+PRIVATE_VAULT_MARKERS = ("CONVO-VAULT", "TOLD-VAULT", "COPILOT-VAULT", "OWNERTAG-VAULT",
+                         "NOLAYER-VAULT")
+ORDINARY_VAULT = [
+    vrow(10, "ORDINARY-EXPERIENCED the bench was warm when the fans came on."),
+    vrow(11, "ORDINARY-INFERRED the bench holds heat because the shelf above it does.",
+         layer="reflection", source="inferred"),
+]
+
+
+class TestSharedRoomMemory(TestDayStore):
+    """Reuses TestDayStore's temp store; its four tests run again here too."""
+    def setUp(self):
+        super().setUp()
+        flood = [vrow(100 + i, f"CONVO-VAULT flood {i} " + "about the bench " * 30,
+                      layer="conversation", tags="conversation,owner,sam") for i in range(10)]
+        self.km._ranked_recall = lambda *a, **k: flood + PRIVATE_VAULT + ORDINARY_VAULT
+        self.km._tiered_recall = lambda kin, tier="anchor", limit=6: [
+            vrow(20, "CONVO-VAULT standing", layer="conversation", tags="conversation,owner,sam"),
+            vrow(21, "ORDINARY-STANDING the house is ours to keep.", layer="core")]
+
+    def shared(self, **kw):
+        return self.km.get_context("Ada", query_text="the bench", db_path=self.db,
+                                   conversation_limit=0, shared_room=True, **kw)
+
+    def test_shared_day_store_leaves_bedtime_out_and_keeps_the_rest(self):
+        got = "\n".join(self.km.get_wander_thoughts("Ada", limit=50, db_path=self.db,
+                                                    shared_room=True))
+        self.assertNotIn("Bedtime:", got)
+        for keep in ("(you, on the Commons board)", "(you, at the roundtable)",
+                     "(your evening keep)", DAY_ROWS[0][1]):
+            self.assertIn(keep, got)
+
+    def test_shared_ranked_and_standing_leave_private_rows_out(self):
+        ctx = self.shared()
+        for m in PRIVATE_VAULT_MARKERS:
+            self.assertNotIn(m, ctx)
+        for keep in ("ORDINARY-EXPERIENCED", "ORDINARY-INFERRED", "ORDINARY-STANDING"):
+            self.assertIn(keep, ctx, "ordinary memory still comes along, budget not eaten")
+        self.assertNotIn("Sam told you this:", ctx)
+
+    def test_shared_room_forces_no_conversation_even_if_asked(self):
+        ctx = self.km.get_context("Ada", query_text="the bench", db_path=self.db,
+                                  conversation_limit=4, shared_room=True)
+        self.assertNotIn("Recent conversation", ctx)
+        self.assertNotIn("CONVERSATION-ROW", ctx)
+
+    def test_shared_fallback_leaves_private_rows_and_bedtime_out(self):
+        self.km._ranked_recall = lambda *a, **k: None          # an older vault
+        rows_ = PRIVATE_VAULT + ORDINARY_VAULT
+
+        class R:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return [dict(r) for r in rows_]
+
+        def post(*a, **k):
+            raise ConnectionError("no embed model here")
+        # TestDayStore stubbed get_vault_memories away; use a fresh copy of the
+        # real one, its I/O stubbed and its config the temp one.
+        fresh = load_by_path(SCRIPTS / "kin_memory.py", "kin_memory_fallback_under_test")
+        fresh._CONFIG_PATH = self.km._CONFIG_PATH
+        fresh.requests = types.SimpleNamespace(post=post, get=lambda *a, **k: R())
+        self.km.get_vault_memories = fresh.get_vault_memories
+        ctx = self.shared(wander_limit=5)
+        for m in (*PRIVATE_VAULT_MARKERS, "(you, at bedtime)"):
+            self.assertNotIn(m, ctx)
+        self.assertIn("ORDINARY-EXPERIENCED", ctx)
+        self.assertIn("(you, on the Commons board)", ctx)
+        private = self.km.get_context("Ada", query_text="the bench", db_path=self.db,
+                                      wander_limit=5)
+        self.assertIn("CONVO-VAULT", private, "the private fallback is unchanged")
+        self.assertIn("(you, at bedtime)", private)
+
+    def test_private_context_is_unchanged(self):
+        ctx = self.km.get_context("Ada", query_text="the bench", db_path=self.db)
+        self.assertIn("CONVO-VAULT", ctx)
+        self.assertIn("Sam told you this:", ctx)
+        self.assertIn("Recent conversation", ctx)
+
+
+class TestRoundtableSharedRoom(TestRoundtableMemory):
+    """Reuses TestRoundtableMemory's stubs; its tests run again here too."""
+    def test_both_rounds_ask_for_a_shared_room(self):
+        self.rt.ask_kin_to_share(self.kin, ["I wandered through a manual on fans."], {})
+        self.rt.ask_kin_to_respond(self.kin, {"Bel": "Heat rises."})
+        self.rt._system_with_memory("sys", self.kin, "q", conversation_limit=4)
+        self.assertEqual(len(self.asked), 3)
+        for _, _, kw in self.asked:
+            self.assertIs(kw.get("shared_room"), True)
+            self.assertEqual(kw.get("conversation_limit"), 0, "forced, whatever was passed")
+
+    def test_round_one_recent_thoughts_ask_for_a_shared_room(self):
+        seen = []
+        self.rt._get_wander_thoughts = lambda name, **kw: seen.append(kw) or []
+        self.rt.get_recent_thoughts(self.kin, n=3)
+        self.assertIs(seen[0].get("shared_room"), True)
+
+
+class TestRoundtableStopsBetweenKin(TestRoundtableMemory):
+    """A stop is honoured between Kin, never mid-turn and never only at the
+    end of the whole roundtable. What was said is still handed off."""
+    def setUp(self):
+        super().setUp()
+        self.rt.KIN_LIST = [{"name": n, "model": "stub-model", "db": self.db}
+                            for n in ("Ann", "Ben", "Cat")]
+        self.rt.running = True
+        self.calls, self.handed = [], []
+        self.rt.get_recent_thoughts = lambda kin, n=3: []
+        self.rt.kin_presence = types.SimpleNamespace(
+            record_thought_return=lambda name, text, **kw: self.handed.append((name, text)))
+
+    def test_stop_during_round_one_asks_no_further_kin_and_skips_round_two(self):
+        def share(kin, recent, shared):
+            self.calls.append(("share", kin["name"]))
+            self.rt.running = False
+            return f"{kin['name']} said a thing."
+        self.rt.ask_kin_to_share = share
+        self.rt.ask_kin_to_respond = lambda kin, s: self.calls.append(("respond", kin["name"])) or "r"
+        self.assertEqual(self.rt.run_roundtable(1), {"Ann": "Ann said a thing."})
+        self.assertEqual(self.calls, [("share", "Ann")])
+        self.assertEqual(self.handed, [("Ann", "Ann said a thing.")])
+        self.assertTrue(any("stop requested" in m and "Ann" in m for m in self.logs))
+        self.assertFalse(any("Second pass" in m for m in self.logs))
+
+    def test_stop_during_round_two_ends_it_there(self):
+        self.rt.ask_kin_to_share = lambda kin, r, s: self.calls.append(("share", kin["name"])) or "s"
+
+        def respond(kin, shared):
+            self.calls.append(("respond", kin["name"]))
+            self.rt.running = False
+            return "r"
+        self.rt.ask_kin_to_respond = respond
+        self.rt.run_roundtable(1)
+        self.assertEqual(self.calls[-1], ("respond", "Ann"))
+        self.assertEqual(len(self.calls), 4)
+        self.assertEqual([n for n, _ in self.handed], ["Ann", "Ben", "Cat"])
+
+
 if __name__ == "__main__":
     unittest.main()

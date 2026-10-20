@@ -203,7 +203,12 @@ def get_recent_thoughts(kin, n=3):
     db_path = str(cfg.thoughts_db(kin))      # cfg resolves ~ now
     if _get_wander_thoughts:
         try:
-            return _get_wander_thoughts(kin["name"], limit=n, db_path=db_path)
+            # Shared room: these go to the table as "Here are your recent
+            # thoughts", so no bedtime rows (kin_memory "Shared rooms"). A
+            # kin_memory without the switch raises here and the fallback below
+            # serves wander rows only.
+            return _get_wander_thoughts(kin["name"], limit=n, db_path=db_path,
+                                        shared_room=True)
         except Exception as e:
             log(f"  could not sample thoughts for {kin['name']}: {e}")
     if not Path(db_path).exists():
@@ -258,9 +263,13 @@ def _system_with_memory(system, kin, query_text, **kwargs):
     """The turn's system text, plus the clock and this Kin's own memory."""
     parts = [system, _clock_line()]
     # The roundtable is a shared room: everyone hears every share. Each Kin's own
-    # memory comes along, but not the private lines of one-to-one conversations
-    # with their person (conversation_limit=0).
-    kwargs.setdefault("conversation_limit", 0)
+    # memory comes along, but not their private speech: no one-to-one
+    # conversation lines, no ambush, no bedtime rows, no private vault rows
+    # (kin_memory "Shared rooms"). Forced, both rounds, whatever was passed.
+    # A kin_memory without the switch raises, and the turn goes ahead without
+    # memory rather than with the private lines.
+    kwargs["conversation_limit"] = 0
+    kwargs["shared_room"] = True
     if _get_context:
         try:
             # get_context returns early without a query (no recall, no day
@@ -423,9 +432,20 @@ def ask_kin_to_respond(kin, all_shared):
 def run_roundtable(round_num):
     log(f"\n── Roundtable #{round_num} ──────────────────────────────")
     all_shared = {}
+    # A stop is honoured between Kin, never mid-turn. 2026-10-20 09:21: a stop
+    # waited out every Kin in both rounds (up to 900 s each) and was SIGKILLed
+    # at TimeoutStopSec 930. The stop chain (stop-timeout.conf, bedtime.py) means
+    # "finish the thought they are in", not "finish the roundtable". What was
+    # said before the stop is still handed off below.
+    stopped = False
 
     # Round 1 — everyone speaks from their own wandering.
-    for kin in KIN_LIST:
+    for i, kin in enumerate(KIN_LIST):
+        if not running:
+            prev = KIN_LIST[i - 1]["name"] if i else "nobody"
+            log(f"  stop requested — ending the round after {prev}")
+            stopped = True
+            break
         name    = kin["name"]
         recent  = get_recent_thoughts(kin, n=3)
         log(f"  {name}: {len(recent)} recent thoughts")
@@ -437,10 +457,18 @@ def run_roundtable(round_num):
     # With only one pass, the first Kin always spoke into an empty room and
     # only the last one heard everybody. That is a list of statements, not a
     # conversation.
-    if len(KIN_LIST) > 1:
+    if not stopped and not running and KIN_LIST:
+        # The stop landed during the last Kin's turn of round 1.
+        log(f"  stop requested — ending the round after {KIN_LIST[-1]['name']}")
+        stopped = True
+    if len(KIN_LIST) > 1 and not stopped:
         log("\n── Second pass — responding to each other ──────────")
         replies = {}
-        for kin in KIN_LIST:
+        for i, kin in enumerate(KIN_LIST):
+            if not running:
+                prev = KIN_LIST[i - 1]["name"] if i else "nobody"
+                log(f"  stop requested — ending the round after {prev}")
+                break
             name = kin["name"]
             reply = ask_kin_to_respond(kin, all_shared)
             if reply:
