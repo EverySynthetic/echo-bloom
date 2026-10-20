@@ -360,7 +360,7 @@ class ChatStreamError(Exception):
 
 
 async def stream_chat(kin_name, message, history=None, system_extra=None,
-                      keep_alive="30m", memory=True, record=True):
+                      keep_alive="30m", memory=True, record=True, host=None):
     """
     Stream a chat response from a Kin via Ollama.
     Yields text chunks as they arrive.
@@ -429,7 +429,7 @@ async def stream_chat(kin_name, message, history=None, system_extra=None,
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                f"{kin['host']}/api/chat",
+                f"{(host or kin['host']).rstrip('/')}/api/chat",
                 json={
                     "model":    kin["model"],
                     "messages": messages,

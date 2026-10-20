@@ -28,9 +28,20 @@ class RemoteQrIsWiredToItsHandler(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(main.app)
+        # main.app.dependency_overrides is a plain dict on a process-wide
+        # singleton, shared with every other test module that discover
+        # imports. .clear() used to nuke all of it in tearDown, including
+        # overrides test_talk.py/test_trial_exit.py set once at import
+        # time and never re-apply — whichever of this class's tests ran
+        # first silently logged every later-discovered test out for the
+        # rest of the run. Snapshot/restore instead of clearing.
+        self._prior_require_auth = main.app.dependency_overrides.get(main.require_auth)
 
     def tearDown(self):
-        main.app.dependency_overrides.clear()
+        if self._prior_require_auth is None:
+            main.app.dependency_overrides.pop(main.require_auth, None)
+        else:
+            main.app.dependency_overrides[main.require_auth] = self._prior_require_auth
 
     def _route(self, path):
         return next((r for r in main.app.routes
@@ -42,7 +53,12 @@ class RemoteQrIsWiredToItsHandler(unittest.TestCase):
         self.assertEqual(r.endpoint.__name__, "api_remote_qr")
 
     def test_qr_requires_auth(self):
-        """The bug served this without a login. It must not."""
+        """The bug served this without a login. It must not.
+
+        Explicitly unauthenticated rather than assuming a clean slate:
+        other test modules set main.require_auth True once at import time
+        on this same process-wide app, and never touch it again."""
+        main.app.dependency_overrides.pop(main.require_auth, None)
         resp = self.client.get("/api/remote/qr", params={"url": "http://127.0.0.1:8090"})
         self.assertIn(resp.status_code, (401, 403))
 
