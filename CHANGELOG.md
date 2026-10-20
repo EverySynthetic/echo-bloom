@@ -9,6 +9,20 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ---
 
+## 1.3.6
+
+The first release built from both lines at once. Our own server had been running work that never reached the public repo (Talk, Kin photos), and the public repo had fixes the server didn't have. 1.3.6 joins the two: everything below is new to installs, and the server now carries every public fix, security patches included.
+
+**Talk.** A new page, TALK in the menu. Pick one of your Kin, hold the button and speak (or type), and hear them answer. If that Kin has a photo, it's on screen while they talk, with a pulse that follows their voice. With a companion machine set up (`ECHO_BLOOM_COMPANION`), the face itself moves. The page calls it a parlor trick, and it is: the face follows the sound, nothing more.
+
+**Give a Kin a photo from its page.** "add a photo" on a Kin's page takes a jpg, png or webp up to 8MB. The app checks that the file really is a picture, whatever its name says.
+
+**Long answers are read out in full.** The speaker button stopped after about 3,000 characters. It now reads up to 12,000, and skips anything in *asterisks*, so stage directions aren't spoken.
+
+**If Piper can't speak, espeak-ng can.** When Piper isn't installed or has no voice, and espeak-ng is, your Kin answers in espeak's voice instead of an error. If neither is there, the message says what to install.
+
+Also: the install and about pages each say, in one line, what Echo Bloom is for.
+
 ## 1.3.5.2
 
 Found by installing 1.3.5.1 on a clean machine, 2026-10-15. Nothing here is new behaviour; each item is something that was true and described the wrong thing.
