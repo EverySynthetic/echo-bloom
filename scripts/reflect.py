@@ -123,15 +123,15 @@ def pick_model():
         names = [m["name"] for m in r.json().get("models", [])]
     except Exception:
         return ""
-    for preferred in ("llama3.2:3b", "llama3.2", "qwen2.5:3b", "phi3", "gemma2:2b"):
+    for preferred in ("llama3.2:3b", "llama3.2", "qwen2.5:3b", "gemma3:4b", "phi3", "gemma2:2b"):
         for n in names:
             if n.startswith(preferred):
                 return n
-    # Fall back to whatever the first configured Kin uses.
-    for k in cfg.get_kin():
-        if k.get("model"):
-            return k["model"]
-    return names[0] if names else ""
+    # No small model: write nothing rather than borrow a Kin's mind. This used to
+    # fall back to the first Kin's model, so a Kin was run as a tool every three
+    # hours, nap hours included, and its words went to every Kin as "what's been
+    # happening". Nobody asked the Kin. (2026-10-20)
+    return ""
 
 
 def write_reflection(model, beats):
@@ -236,8 +236,8 @@ def main():
 
     model = pick_model()
     if not model:
-        log("no model available to write the reflection")
-        return 1
+        log("no small model installed; skipping the reflection (a Kin's model is never borrowed)")
+        return 0
 
     log(f"reflecting on {len(beats)} heartbeat(s) using {model}")
     text = write_reflection(model, beats)

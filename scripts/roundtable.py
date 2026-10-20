@@ -257,6 +257,10 @@ def _query_from(texts, each=300):
 def _system_with_memory(system, kin, query_text, **kwargs):
     """The turn's system text, plus the clock and this Kin's own memory."""
     parts = [system, _clock_line()]
+    # The roundtable is a shared room: everyone hears every share. Each Kin's own
+    # memory comes along, but not the private lines of one-to-one conversations
+    # with their person (conversation_limit=0).
+    kwargs.setdefault("conversation_limit", 0)
     if _get_context:
         try:
             # get_context returns early without a query (no recall, no day

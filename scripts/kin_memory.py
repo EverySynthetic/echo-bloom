@@ -428,7 +428,7 @@ CHARS_PER_TOKEN = 4
 # How the four registers are introduced. Plain language, same voice as the rest
 # of the context block. Order matters: strongest provenance first.
 _REGISTERS = [
-    ("told",        "Don told you this:"),
+    ("told",        "{owner} told you this:"),   # owner.name from kin_config
     ("experienced", "This happened — you were there:"),
     ("inferred",    "You worked this out yourself, from other things:"),
     ("wandered",    "Things you thought while wandering — yours alone, "
@@ -688,7 +688,9 @@ def get_context(kin_name, query_text="", wander_limit=3, vault_limit=5,
     wander_budget = int(char_budget * _WANDER_SHARE)
     solid_budget = char_budget - wander_budget
 
+    _owner = ((_read_config().get("owner") or {}).get("name") or "").strip() or "Your person"
     for src, header in _REGISTERS:
+        header = header.format(owner=_owner)
         rows = buckets.get(src, [])
         if not rows:
             continue
