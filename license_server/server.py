@@ -26,6 +26,7 @@ import hmac
 import hashlib
 import smtplib
 import sqlite3
+import logging
 from email.mime.text import MIMEText
 from pathlib import Path
 from datetime import datetime
@@ -320,8 +321,45 @@ async def health():
     return {"ok": True, "trials": trials, "blacklisted": blacklist, "keys_issued": keys}
 
 
+def _hash_key(key: str) -> str:
+    return hashlib.sha256(key.strip().encode("utf-8")).hexdigest()
+
+
+def _key_revoked_by_hash(key_hash: str):
+    """True/False for a known key, None for an unknown one. Installs from
+    1.3.6.4 send only sha256(key) in the X-Key-Hash header, never the key."""
+    with _db() as conn:
+        rows = conn.execute("SELECT key, revoked FROM issued_keys").fetchall()
+    for row in rows:
+        if row["key"] and hmac.compare_digest(_hash_key(row["key"]), key_hash):
+            return bool(row["revoked"])
+    return None
+
+
+class _DropQueryString(logging.Filter):
+    """The access log keeps method, path and status, never what follows "?".
+    Installs before 1.3.6.4 put the license key (which holds the buyer's
+    email) in the /version query string, and they keep doing so until they
+    update; this keeps it out of the log either way."""
+
+    def filter(self, record):
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str) and "?" in args[2]:
+            record.args = args[:2] + (args[2].split("?", 1)[0] + "?…",) + args[3:]
+        return True
+
+
+def _log_config():
+    import copy
+    from uvicorn.config import LOGGING_CONFIG
+    cfg = copy.deepcopy(LOGGING_CONFIG)
+    cfg.setdefault("filters", {})["drop_query"] = {"()": _DropQueryString}
+    cfg["handlers"]["access"].setdefault("filters", []).append("drop_query")
+    return cfg
+
+
 @app.get("/version")
-async def version(key: str = ""):
+async def version(request: Request, key: str = ""):
     # This server's own VERSION is always whatever's actually deployed, so
     # customer installs compare against it rather than a separately-tracked
     # release number that could drift out of sync.
@@ -331,12 +369,11 @@ async def version(key: str = ""):
     # check for updates, so a revoked key stops working the next time that
     # install is online — no separate check-in, no change to offline use.
     out = {"version": VERSION}
-    if key:
-        with _db() as conn:
-            row = conn.execute(
-                "SELECT revoked FROM issued_keys WHERE key = ?", (key,)
-            ).fetchone()
-        out["key_revoked"] = bool(row and row["revoked"])
+    key_hash = (request.headers.get("x-key-hash") or "").strip().lower()
+    if not key_hash and key:
+        key_hash = _hash_key(key)          # installs older than 1.3.6.4
+    if len(key_hash) == 64 and all(c in "0123456789abcdef" for c in key_hash):
+        out["key_revoked"] = bool(_key_revoked_by_hash(key_hash))
     return out
 
 
@@ -682,4 +719,4 @@ async def admin_resend(request: Request, x_admin_token: str = Header(default="")
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 9000))
     print(f"[license-server] Starting on :{port}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port, log_config=_log_config())

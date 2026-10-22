@@ -90,7 +90,12 @@ Your key is emailed to you automatically when you purchase. If you need a key or
 
 ## Architecture
 
-Echo Bloom runs entirely on your hardware. Nothing leaves your machine unless you configure it to. The vault, the memories, the wander thoughts — all local.
+Echo Bloom runs on your hardware. The vault, the memories, the wander thoughts and your conversations are all local; nothing uploads them anywhere.
+
+What does leave the machine, and when:
+- **Trial and update checks** go to license.everysynthetic.org: a one-way fingerprint of the machine when the trial starts, and a version check when the dashboard opens. Since 1.3.6.4 a purchased key is never sent, only a one-way hash of it, in a header.
+- **Web reading while wandering:** now and then a Kin sends a short search phrase (2–8 words) to Project Gutenberg, Wikipedia, arXiv, the Stanford Encyclopedia of Philosophy, or PubMed for health topics. Turn it off, or limit which folders the Kin read, under WANDERING on the dashboard.
+- **Only when you choose:** buying a license (Stripe), sending a problem report (you see exactly what is sent first), pasting a link for a Kin to read, remote access, an outside AI service you give a key for, and model or voice downloads.
 
 - **Backend:** FastAPI + Uvicorn
 - **Inference:** Ollama (any model)

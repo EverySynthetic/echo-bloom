@@ -93,6 +93,22 @@
   </section>
 
   <!-- Kin cards -->
+  <!-- Wandering: web reading and folders (1.3.6.4) -->
+  <section class="wander-section">
+    <div class="section-header">WANDERING</div>
+    <label class="wander-web" style="display:block;margin:6px 0">
+      <input type="checkbox" id="wander-web">
+      Let my Kin look things up on the web while they wander (Project Gutenberg, Wikipedia, arXiv,
+      the Stanford Encyclopedia of Philosophy, PubMed). Only a short search phrase leaves this computer.
+    </label>
+    <div style="margin:6px 0">Folders my Kin may read while wandering, one per line. Hidden folders are always skipped.</div>
+    <textarea id="wander-roots" rows="3" spellcheck="false" style="width:100%;font-family:inherit"></textarea>
+    <div class="control-row">
+      <button class="ctrl-btn" onclick="saveWanderSettings()">SAVE</button>
+      <span id="wander-status" class="wander-status" style="margin-left:10px"></span>
+    </div>
+  </section>
+
   <section class="kin-section">
     <div class="section-header">THE KIN</div>
     <div class="kin-grid">
@@ -412,6 +428,28 @@ checkRoundtable();
 setInterval(checkRoundtable, 30000);
 
 // ── Nap / wake ───────────────────────────────────────────────────────────────
+
+function setWanderStatus(msg, bad) {
+  const el = document.getElementById('wander-status');
+  if (el) { el.textContent = msg; el.style.color = bad ? '#e05a5a' : ''; }
+}
+async function loadWanderSettings() {
+  try {
+    const d = await ebFetch('/api/wander-settings');
+    document.getElementById('wander-web').checked = !!d.web;
+    document.getElementById('wander-roots').value = (d.roots || []).join('\n');
+  } catch (e) { setWanderStatus(e.message, true); }
+}
+async function saveWanderSettings() {
+  const roots = document.getElementById('wander-roots').value.split('\n').map(x => x.trim()).filter(Boolean);
+  const web = document.getElementById('wander-web').checked;
+  try {
+    await ebFetch('/api/wander-settings', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({web, roots})});
+    setWanderStatus('Saved. It applies the next time your Kin start wandering.', false);
+  } catch (e) { setWanderStatus(e.message, true); }
+}
+document.addEventListener('DOMContentLoaded', loadWanderSettings);
 
 async function napGpu() {
   setRtAction('Pausing wanders and evicting resident models — can take up to a minute if something is mid-generation…');

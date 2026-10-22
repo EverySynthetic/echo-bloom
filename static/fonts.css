@@ -1,0 +1,6 @@
+/* JetBrains Mono 2.304 (SIL Open Font License 1.1, see /static/fonts/OFL.txt),
+   served from this install so no page load reaches a font server. */
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 300; font-display: swap; src: url("/static/fonts/JetBrainsMono-Light.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("/static/fonts/JetBrainsMono-Regular.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 500; font-display: swap; src: url("/static/fonts/JetBrainsMono-Medium.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 700; font-display: swap; src: url("/static/fonts/JetBrainsMono-Bold.woff2") format("woff2"); }

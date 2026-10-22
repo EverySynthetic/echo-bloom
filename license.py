@@ -291,12 +291,13 @@ def check_latest_version(timeout: int = 4) -> str | None:
     try:
         url = f"{TRIAL_SERVER}/version"
         saved = load_saved_key()
+        headers = {"User-Agent": "EchoBloom/1.0"}
         if saved:
-            url += f"?key={urllib.parse.quote(saved)}"
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "EchoBloom/1.0"},
-        )
+            # Only a one-way hash of the key leaves this machine, and in a
+            # header. Before 1.3.6.4 the whole key rode in the URL, and a key
+            # carries the buyer's email; URLs end up in server and proxy logs.
+            headers["X-Key-Hash"] = key_hash(saved)
+        req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode())
         if saved and "key_revoked" in data:
@@ -313,6 +314,11 @@ def check_latest_version(timeout: int = 4) -> str | None:
         return data.get("version")
     except Exception:
         return None
+
+
+def key_hash(key: str) -> str:
+    """sha256 hex of a license key: what the update check sends instead of the key."""
+    return hashlib.sha256(key.strip().encode("utf-8")).hexdigest()
 
 
 # ── Server registration ────────────────────────────────────────────────────────

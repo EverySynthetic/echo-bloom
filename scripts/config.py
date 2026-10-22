@@ -45,6 +45,27 @@ def get_kin(name=None):
     return None
 
 
+def wander_settings(cfg_dict=None):
+    """What wandering Kin may do, from kin_config.json.
+
+    "wander_web":   false stops the Kin looking things up on the web while
+                    they wander (Gutenberg, Wikipedia, arXiv, Stanford
+                    Encyclopedia, PubMed). Default true, as before 1.3.6.4.
+    "wander_roots": the folders the Kin may read while wandering. Default:
+                    the home folder, as before. Hidden folders are always
+                    skipped.
+    """
+    c = load() if cfg_dict is None else (cfg_dict or {})
+    web = c.get("wander_web", True) is not False
+    roots = []
+    for r in c.get("wander_roots") or []:
+        if isinstance(r, str) and r.strip():
+            roots.append(str(_resolve(r.strip())))
+    if not roots:
+        roots = [str(Path.home())]
+    return {"web": web, "roots": roots}
+
+
 def get_owner():
     return load().get("owner", {})
 

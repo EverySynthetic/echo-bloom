@@ -55,7 +55,9 @@ DB_PATH   = cfg.ensure_thoughts_db(cfg.thoughts_db(kin))
 LOG_FILE  = SPACE / "wander.log"
 PRONOUN   = kin.get("pronoun", "they")
 
-WANDER_ROOTS = [str(Path.home())]
+_WANDER = cfg.wander_settings()
+WANDER_ROOTS = _WANDER["roots"]   # kin_config.json "wander_roots"; default: home folder
+WANDER_WEB   = _WANDER["web"]     # kin_config.json "wander_web": false turns web reading off
 
 # Spaces belonging to the other Kin — worth more than a random library file.
 _OTHER_KIN_PATHS = []
@@ -728,7 +730,7 @@ def _maybe_reach_beyond_the_walls():
     _web_thought_count += 1
     if _web_thought_count % WEB_FETCH_INTERVAL != 0:
         return
-    if fetch_gutenberg is None:
+    if fetch_gutenberg is None or not WANDER_WEB:
         return
     try_web_fetch(_last_thought)
 

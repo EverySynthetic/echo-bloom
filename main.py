@@ -419,12 +419,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"]        = "DENY"
         response.headers["Referrer-Policy"]        = "same-origin"
         response.headers["X-XSS-Protection"]       = "1; mode=block"
-        # Tight CSP — allows our static files + CDN fonts, nothing else
+        # Tight CSP — our own static files only (fonts ship with the app
+        # since 1.3.6.4, so no page load reaches a font server)
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src https://fonts.gstatic.com; "
+            "style-src 'self' 'unsafe-inline'; "
+            "font-src 'self'; "
             "connect-src 'self'; "
             "img-src 'self' data:; "
             "frame-ancestors 'none';"
@@ -2282,6 +2283,58 @@ async def api_nap(_=Depends(require_auth)):
 async def api_wake(_=Depends(require_auth)):
     await asyncio.to_thread(_import_bedtime().resume_wanders)
     return {"ok": True}
+
+
+# ── Wander settings (1.3.6.4) ──────────────────────────────────────────────────
+# Whether wandering Kin look things up on the web, and which folders they read.
+# Stored in kin_config.json as "wander_web" and "wander_roots"; wander.py reads
+# them when it starts, so a change applies the next time wandering starts.
+
+_WANDER_MAX_ROOTS = 20
+
+
+def _wander_settings_view(c: dict) -> dict:
+    roots = [r for r in (c.get("wander_roots") or []) if isinstance(r, str) and r.strip()]
+    return {"web": c.get("wander_web", True) is not False,
+            "roots": roots or [str(Path.home())],
+            "default_roots": not roots}
+
+
+@app.get("/api/wander-settings")
+async def api_wander_settings_get(_=Depends(require_auth)):
+    return _wander_settings_view(_load_kin_cfg())
+
+
+@app.post("/api/wander-settings")
+async def api_wander_settings_set(request: Request, _=Depends(require_auth)):
+    body = await request.json()
+    if not isinstance(body, dict) or not isinstance(body.get("web"), bool):
+        raise HTTPException(400, "expected {web: true|false, roots: [folders]}")
+    raw_roots = body.get("roots") or []
+    if not isinstance(raw_roots, list) or len(raw_roots) > _WANDER_MAX_ROOTS:
+        raise HTTPException(400, f"roots must be a list of up to {_WANDER_MAX_ROOTS} folders")
+    roots = []
+    for r in raw_roots:
+        if not isinstance(r, str) or not r.strip() or len(r) > 500:
+            raise HTTPException(400, "each folder must be a path")
+        full = Path(os.path.expandvars(os.path.expanduser(r.strip())))
+        if not full.is_absolute() or not full.is_dir():
+            raise HTTPException(400, f"not a folder on this computer: {r.strip()}")
+        roots.append(str(full))
+    if _KIN_CONFIG_PATH.exists():
+        try:
+            c = json.loads(_KIN_CONFIG_PATH.read_text())
+        except Exception:
+            raise HTTPException(409, "kin_config.json could not be read, so nothing was changed")
+    else:
+        c = {}
+    c["wander_web"] = body["web"]
+    if roots and roots != [str(Path.home())]:
+        c["wander_roots"] = roots
+    else:
+        c.pop("wander_roots", None)
+    _atomic_write_json(_KIN_CONFIG_PATH, c)
+    return {**_wander_settings_view(c), "applies": "the next time wandering starts"}
 
 
 # ── Model pull (SSE) ───────────────────────────────────────────────────────────
