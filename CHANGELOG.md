@@ -9,6 +9,15 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ---
 
+## 1.3.6.4
+
+**Privacy.** Three things left your machine that did not need to, and the docs said less than the truth about what leaves at all.
+
+- **The update check sent your whole license key.** Every time the dashboard opened, the key (which carries the email you bought with) went to the license server inside the web address, and web addresses end up in logs. Now only a one-way hash of the key is sent, in a header, and the license server no longer writes the end of any web address to its log.
+- **Fonts came from Google.** Each page load asked Google's font servers for the typeface, so Google saw your address every time. The font now ships with Echo Bloom.
+- **Web reading had no off switch.** Your Kin look things up while they wander (a short search phrase to Project Gutenberg, Wikipedia, arXiv, the Stanford Encyclopedia of Philosophy, or PubMed). The new WANDERING panel on the dashboard turns that off, and lets you choose which folders your Kin read. Nothing changes unless you change it.
+- The README and install page now say exactly what leaves your machine and when.
+
 ## 1.3.6.3
 
 **Security patches.** The model download button only talks to Ollama now: it accepts an address and Ollama's port (or the port you set for that machine), and models from Ollama's own library or Hugging Face. Nothing else changes for you; pulling a model to a new machine during setup works as before.

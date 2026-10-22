@@ -6,7 +6,7 @@ server always reflects whatever commit is actually deployed there — that's
 what customer installs compare their own version against.
 """
 
-VERSION = "1.3.6.3"
+VERSION = "1.3.6.4"
 
 # (version, one-line descriptor) — newest first, shown on /about. Add one
 # line per release. Security-shaped fixes get the generic "security
@@ -14,6 +14,7 @@ VERSION = "1.3.6.3"
 # without handing anyone a working recipe before every install has had a
 # chance to update.
 CHANGELOG = [
+    ("1.3.6.4", "privacy: the update check no longer sends your license key; fonts load from your own machine instead of Google; new WANDERING settings let you turn off your Kin's web reading and choose which folders they read"),
     ("1.3.6.3", "security patches"),
     ("1.3.6.2", "privacy: what your Kin said to you in private stays out of the roundtable; stopping the Kin no longer waits for a whole roundtable to finish"),
     ("1.3.6.1", "your Kin remember the roundtable and what they said in it; the memory notes use your name; the background summary no longer borrows your Kin to write it"),
