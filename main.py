@@ -2286,13 +2286,75 @@ async def api_wake(_=Depends(require_auth)):
 
 # ── Model pull (SSE) ───────────────────────────────────────────────────────────
 
+_PULL_HOST_SHAPE = "host must look like http://<address>:<port>"
+_HOSTNAME_RE = re.compile(r"[A-Za-z0-9._%:-]{1,253}")
+# A model name may name its registry ("hf.co/user/repo:q4"). An unknown registry
+# can serve a crafted layer, and Ollama 0.34.2-0.34.x writes it where the server
+# later loads it (CVE-2026-103663). Only the registries people actually pull
+# from are accepted; a plain name ("gemma3:12b") uses Ollama's own.
+_PULL_REGISTRIES = {"registry.ollama.ai", "ollama.com", "hf.co", "huggingface.co"}
+_MODEL_RE = re.compile(r"[A-Za-z0-9._:/@+-]{1,200}")
+
+
+def _pull_target(raw) -> str:
+    """The Ollama base URL /api/pull-model may talk to, or HTTPException(400).
+
+    The route used to take any string and POST to "<string>/api/pull", so a
+    logged-in session could aim this server at any address, port and path on
+    its network. Now the URL is rebuilt from scheme, host and port only, and
+    the port must be Ollama's default (11434) or the port a configured node
+    lists for that same host. Typing a new machine's address during setup
+    still works; pointing the route at a router page or a database does not.
+    """
+    from urllib.parse import urlsplit
+    s = str(raw or "").strip() or "http://localhost:11434"
+    if "://" not in s:
+        s = "http://" + s
+    try:
+        u = urlsplit(s)
+        port = u.port
+    except ValueError:
+        raise HTTPException(400, _PULL_HOST_SHAPE)
+    host = u.hostname or ""
+    if (u.scheme not in ("http", "https") or not host or u.username or u.password
+            or u.path not in ("", "/") or u.query or u.fragment
+            or not _HOSTNAME_RE.fullmatch(host)):
+        raise HTTPException(400, _PULL_HOST_SHAPE)
+    port = port or 11434
+    allowed = {11434}
+    for n in cl.NODES:
+        if str(n.get("ip", "")).strip().lower() == host and n.get("ollama_port"):
+            try:
+                allowed.add(int(n["ollama_port"]))
+            except (TypeError, ValueError):
+                pass
+    if port not in allowed:
+        raise HTTPException(400, f"port {port} is not an Ollama port for {host}")
+    shown = f"[{host}]" if ":" in host else host
+    return f"{u.scheme}://{shown}:{port}"
+
+
+def _pull_model_name(raw) -> str:
+    """A model name Ollama may pull, or HTTPException(400). See _PULL_REGISTRIES."""
+    model = str(raw or "").strip()
+    if not model:
+        raise HTTPException(400, "model required")
+    if not _MODEL_RE.fullmatch(model) or ".." in model or model.startswith("/"):
+        raise HTTPException(400, "that does not look like a model name")
+    first, sep, _rest = model.partition("/")
+    if sep and ("." in first or ":" in first or first.lower() == "localhost"):
+        if first.lower() not in _PULL_REGISTRIES:
+            raise HTTPException(400, f"models can be pulled from Ollama or Hugging Face, not {first}")
+    return model
+
+
 @app.post("/api/pull-model")
 async def api_pull_model(request: Request, _=Depends(require_auth)):
     body = await request.json()
-    host  = str(body.get("host", "http://localhost:11434")).rstrip("/")
-    model = str(body.get("model", "")).strip()
-    if not model:
-        raise HTTPException(400, "model required")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "expected a JSON object")
+    host  = _pull_target(body.get("host", "http://localhost:11434"))
+    model = _pull_model_name(body.get("model", ""))
 
     async def pull_stream() -> AsyncGenerator[bytes, None]:
         try:
