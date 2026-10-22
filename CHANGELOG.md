@@ -9,6 +9,10 @@ described the wrong thing. None of them crashed anywhere a user could see.
 
 ---
 
+## 1.3.6.3
+
+**Security patches.** The model download button only talks to Ollama now: it accepts an address and Ollama's port (or the port you set for that machine), and models from Ollama's own library or Hugging Face. Nothing else changes for you; pulling a model to a new machine during setup works as before.
+
 ## 1.3.6.2
 
 **Private things could reach the roundtable.** 1.3.6.1 gave each Kin their memory at the roundtable, which every Kin hears. Recorded one-to-one conversations with you could come back there through memory recall. A roundtable now leaves out anything that was said privately: conversations, things you told them, and their bedtime reflections. In their own time, alone or with you, their memory is unchanged.
