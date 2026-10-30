@@ -547,6 +547,11 @@ async def stripe_webhook(request: Request):
         return {"ok": True, "skipped": etype}
 
     session = event.get("data", {}).get("object", {})
+    # 2026-10-30: the same Stripe account now also sells Creakboard subscriptions (its own licence server answers those).
+    # Every checkout reaches this endpoint, so without this a Creakboard buyer was emailed a permanent Echo Bloom key.
+    # Creakboard's payment links stamp metadata app=creakboard and run in subscription mode; Echo Bloom is one-time.
+    if (session.get("metadata") or {}).get("app") == "creakboard" or session.get("mode") == "subscription":
+        return {"ok": True, "skipped": "not_echo_bloom"}
     pstatus = session.get("payment_status")
     if pstatus not in ("paid", "no_payment_required"):
         # 200 so Stripe does not retry; async_payment_succeeded follows if it clears.
