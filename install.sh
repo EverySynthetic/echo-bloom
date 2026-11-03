@@ -1931,8 +1931,14 @@ _eb_restart_running() {
 }
 
 _eb_refresh_scripts() {   # copy the new lifecycle scripts into place; same files install copies, nothing else
-    local src="$APP_DIR/scripts" dst="$HOME/.local/share/echo_bloom/scripts" shared
+    local src="$APP_DIR/scripts" dst="$HOME/.local/share/echo_bloom/scripts" shared from="${1:-}"
     [[ -d "$src" ]] || return 0
+    # Keep the scripts that were running before, so the update can be undone completely.
+    EB_SCRIPTS_BACKUP=""
+    if [[ -n "$from" && -d "$dst" ]]; then
+        EB_SCRIPTS_BACKUP="$dst.bak-$(echo "$from" | cut -c1-12)"
+        [[ -e "$EB_SCRIPTS_BACKUP" ]] || cp -a "$dst" "$EB_SCRIPTS_BACKUP"
+    fi
     mkdir -p "$dst"
     cp -r "$src"/. "$dst/"
     for shared in kin_presence.py license.py; do
@@ -1960,9 +1966,11 @@ update_flow() {
         echo "  Run the full installer instead:  bash $0 --install"
         return 1
     fi
-    if [[ -n "$(git -C "$APP_DIR" status --porcelain 2>/dev/null)" ]]; then
-        warn "You have your own changes in $APP_DIR, so the code was left exactly as it is."
-        echo "  Nothing was changed. Commit or stash them if you want updates."
+    # Only edited Echo Bloom files block an update. Extra files and folders in the app folder (old Kin
+    # folders, backups) do not: git refuses the update on its own if a new file would land on one of them.
+    if [[ -n "$(git -C "$APP_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+        warn "Some Echo Bloom files in $APP_DIR were edited on this computer, so the update left everything as it was."
+        echo "  Nothing was changed. To see which files:  git -C $APP_DIR status"
         return 0
     fi
     info "Checking for updates..."
@@ -2011,11 +2019,14 @@ update_flow() {
         info "Some libraries changed. Installing them..."
         install_deps
     fi
-    _eb_refresh_scripts
+    _eb_refresh_scripts "$before"
     _eb_restart_running
     echo
     ok "Updated${vnew:+ to $vnew}."
     echo "  To go back:  git -C $APP_DIR reset --hard $(echo "$before" | cut -c1-12)"
+    if [[ -n "${EB_SCRIPTS_BACKUP:-}" ]]; then
+        echo "  The scripts from before are kept in $EB_SCRIPTS_BACKUP"
+    fi
     return 0
 }
 

@@ -12,7 +12,7 @@ def sh(*a, cwd=None, env=None):
 
 class Box:
     """origin repo + a 'user' HOME that has Echo Bloom installed from it."""
-    def __init__(self, existing=True):
+    def __init__(self, existing=True, shallow=False):
         self.root = Path(tempfile.mkdtemp(prefix="eb_update_test_"))
         self.home, self.stubs, self.origin = self.root / "home", self.root / "stubs", self.root / "origin.git"
         self.log = self.root / "calls.log"; self.log.write_text("")
@@ -26,7 +26,10 @@ class Box:
         g("add", "-A"); g("commit", "-q", "-m", "first release")
         sh("git", "clone", "-q", "--bare", str(work), str(self.origin))
         self.work = work
-        sh("git", "clone", "-q", str(self.origin), str(self.home / "echo_bloom"))
+        if shallow:   # how install.sh really installs the app: git clone --depth 1
+            sh("git", "clone", "-q", "--depth", "1", "file://" + str(self.origin), str(self.home / "echo_bloom"))
+        else:
+            sh("git", "clone", "-q", str(self.origin), str(self.home / "echo_bloom"))
         if existing:
             (self.home / ".config/kin_app").mkdir(parents=True); (self.home / ".config/kin_app/config.json").write_text("{}")
         self._stubs()
@@ -127,7 +130,7 @@ class UpdateMode(unittest.TestCase):
     def test_own_changes_are_never_overwritten(self):
         self.b.release(); (self.b.home / "echo_bloom/main.py").write_text("my edit\n")
         before = self.b.head(); rc, out = self.b.run("--yes")
-        self.assertEqual(rc, 0); self.assertEqual(self.b.head(), before); self.assertIn("your own changes", out)
+        self.assertEqual(rc, 0); self.assertEqual(self.b.head(), before); self.assertIn("were edited on this computer", out)
         self.assertEqual((self.b.home / "echo_bloom/main.py").read_text(), "my edit\n")
 
     def test_libraries_reinstalled_only_when_requirements_changed(self):
@@ -146,6 +149,31 @@ class UpdateMode(unittest.TestCase):
         shutil.rmtree(self.b.origin); before = self.b.head()
         rc, out = self.b.run("--yes")
         self.assertNotEqual(rc, 0); self.assertIn("Nothing was changed", out); self.assertEqual(self.b.head(), before)
+
+
+    def test_leftover_files_do_not_block_the_update(self):
+        # Themess's live copy (11-03) had eli_space/, bong_space/ and old .bak files beside the code.
+        app = self.b.home / "echo_bloom"
+        self.b.write(app, "eli_space/avatar/eli.png", "png"); self.b.write(app, "install.sh.pre-1.3.5.1", "old")
+        self.b.release(); before = self.b.head()
+        rc, out = self.b.run("--yes")
+        self.assertEqual(rc, 0, out); self.assertNotEqual(self.b.head(), before)
+        self.assertEqual((app / "eli_space/avatar/eli.png").read_text(), "png")      # left exactly where it was
+
+    def test_scripts_from_before_are_kept(self):
+        self.b.release(version="1.1.0", script="print('v2')\n"); self.b.run("--yes")
+        mid = self.b.head()
+        self.b.release(version="1.2.0", script="print('v3')\n", subject="third"); rc, out = self.b.run("--yes")
+        self.assertEqual(rc, 0, out)
+        scripts = self.b.home / ".local/share/echo_bloom/scripts"
+        bak = Path(str(scripts) + ".bak-" + mid[:12])
+        self.assertEqual((scripts / "hello.py").read_text(), "print('v3')\n")
+        self.assertEqual((bak / "hello.py").read_text(), "print('v2')\n"); self.assertIn(str(bak), out)
+
+
+class UpdateModeShallow(UpdateMode):
+    """The same tests on a --depth 1 clone, which is what a real install has."""
+    def setUp(self): self.b = Box(shallow=True); self.addCleanup(self.b.cleanup)
 
 
 if __name__ == "__main__":
