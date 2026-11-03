@@ -49,6 +49,82 @@ $form.Font            = $F_MD
 $form.TopMost         = $true
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Update mode: Echo Bloom is already here
+# ─────────────────────────────────────────────────────────────────────────────
+# A person who runs the setup again gets ONE page: what is new, and Update now.
+# No welcome, no list of what gets installed, no remote-access page, no "name your AI".
+# The installer worker below already skips Python, Ollama and ffmpeg when they exist.
+$script:UPDATE_MODE = $false
+$script:UPDATE_INFO = $null
+$script:EB_RAW      = 'https://raw.githubusercontent.com/EverySynthetic/echo-bloom/main'
+
+function Get-EbVersionFromText ([string]$Text) {
+    if ($Text -match '(?m)^\s*VERSION\s*=\s*[''"]([^''"]+)[''"]') { return $Matches[1] }
+    return $null
+}
+
+function Compare-EbVersion ([string]$A, [string]$B) {
+    $pa = @(($A -split '[^0-9]+') | Where-Object { $_ -ne '' } | ForEach-Object { [int]$_ })
+    $pb = @(($B -split '[^0-9]+') | Where-Object { $_ -ne '' } | ForEach-Object { [int]$_ })
+    $n = [Math]::Max($pa.Count, $pb.Count)
+    for ($i = 0; $i -lt $n; $i++) {
+        $x = if ($i -lt $pa.Count) { $pa[$i] } else { 0 }
+        $y = if ($i -lt $pb.Count) { $pb[$i] } else { 0 }
+        if ($x -lt $y) { return -1 }
+        if ($x -gt $y) { return 1 }
+    }
+    return 0
+}
+
+# One line per release newer than $LocalVersion: "1.3.6.4  Privacy". Reads the first bold phrase under each "## version" heading.
+function Get-EbChangeLines ([string]$Changelog, [string]$LocalVersion, [int]$Max = 8) {
+    $out = New-Object System.Collections.Generic.List[string]
+    $cur = $null; $took = $false
+    foreach ($line in ($Changelog -split "`r?`n")) {
+        if ($line -match '^##\s+(\d[\d\.]*)') {
+            $cur = $Matches[1]; $took = $false
+            if ((Compare-EbVersion $cur $LocalVersion) -le 0) { break }
+            continue
+        }
+        if ($cur -and -not $took -and $line -match '^\*\*(.+?)\*\*') {
+            $out.Add(('{0}  {1}' -f $cur, $Matches[1].Trim().TrimEnd('.'))); $took = $true
+            if ($out.Count -ge $Max) { break }
+        }
+    }
+    return @($out)
+}
+
+function Test-EbInstalled {
+    return ((Test-Path "$($script:APP_DIR)\main.py") -and (Test-Path "$($script:APP_DIR)\version.py"))
+}
+
+# The fetcher is a variable so tests can replace it. Default: plain HTTPS GET, 15 s.
+$script:EbFetch = {
+    param([string]$Url)
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
+    return (Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 15).Content
+}
+
+# -> @{ State = 'newer'|'current'|'error'; Local; Remote; Lines; Message }
+function Get-EbUpdateInfo {
+    $local = $null
+    try { $local = Get-EbVersionFromText (Get-Content "$($script:APP_DIR)\version.py" -Raw -ErrorAction Stop) } catch {}
+    try {
+        $remoteTxt = & $script:EbFetch "$($script:EB_RAW)/version.py"
+        $remote = Get-EbVersionFromText ([string]$remoteTxt)
+    } catch {
+        return @{ State = 'error'; Local = $local; Remote = $null; Lines = @(); Message = "Could not reach the update server. Check your internet and try again. Nothing was changed." }
+    }
+    if (-not $remote) { return @{ State = 'error'; Local = $local; Remote = $null; Lines = @(); Message = "The update server answered with something unexpected. Nothing was changed." } }
+    if ($local -and (Compare-EbVersion $remote $local) -le 0) {
+        return @{ State = 'current'; Local = $local; Remote = $remote; Lines = @(); Message = '' }
+    }
+    $lines = @()
+    try { $lines = Get-EbChangeLines ([string](& $script:EbFetch "$($script:EB_RAW)/CHANGELOG.md")) $(if ($local) { $local } else { '0' }) } catch {}
+    return @{ State = 'newer'; Local = $local; Remote = $remote; Lines = $lines; Message = '' }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Shared install state
 # ─────────────────────────────────────────────────────────────────────────────
 $script:PYTHON          = $null
@@ -278,7 +354,8 @@ $pg3.Controls.Add($script:pg3_done)
 # ─────────────────────────────────────────────────────────────────────────────
 $pg4 = New-Page
 
-$pg4.Controls.Add((New-Lbl 'READY' 40 55 480 56 $C_GREEN $F_READY))
+$script:pg4_title = New-Lbl 'READY' 40 55 480 56 $C_GREEN $F_READY
+$pg4.Controls.Add($script:pg4_title)
 
 $pg4_body = New-Object System.Windows.Forms.Label
 $pg4_body.Text      = "Echo Bloom is installed and running in the background.`n`nYour browser will open to finish setup — name your AI, choose a model, and you're live."
@@ -291,7 +368,7 @@ $pg4.Controls.Add($pg4_body)
 $script:pg4_body = $pg4_body
 
 $pg4_open = New-Btn 'OPEN ECHO BLOOM  →' 320 355 200 36
-$pg4_open.Add_Click({ Show-Page 5 })
+$pg4_open.Add_Click({ if ($script:UPDATE_MODE) { Complete-Install } else { Show-Page 5 } })
 $pg4.Controls.Add($pg4_open)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -333,9 +410,57 @@ $script:pg5_setup.Add_Click({
 $pg5.Controls.Add($script:pg5_setup)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PAGE 6 — Update (only shown when Echo Bloom is already installed)
+# ─────────────────────────────────────────────────────────────────────────────
+$pgU = New-Page
+$script:pgU_title = New-Lbl 'UPDATE' 40 40 480 56 $C_GREEN $F_READY
+$pgU.Controls.Add($script:pgU_title)
+$script:pgU_ver   = New-Lbl '' 40 106 480 24 $C_FG $F_BOLD
+$pgU.Controls.Add($script:pgU_ver)
+$script:pgU_body  = New-Lbl '' 40 138 480 150 $C_FG $F_MD
+$pgU.Controls.Add($script:pgU_body)
+$script:pgU_note  = New-Lbl '' 40 296 480 44 $C_DIM $F_SM
+$pgU.Controls.Add($script:pgU_note)
+$script:pgU_close = New-Btn 'NOT NOW' 40 355 140 36 $C_BORDER $C_DIM
+$script:pgU_close.Add_Click({ $form.Close() })
+$pgU.Controls.Add($script:pgU_close)
+$script:pgU_go = New-Btn 'UPDATE NOW  →' 340 355 180 36
+$script:pgU_go.Add_Click({
+    if ($script:UPDATE_INFO -and $script:UPDATE_INFO.State -eq 'newer') { Show-Page 3 } else { $form.Close() }
+})
+$pgU.Controls.Add($script:pgU_go)
+
+function Set-UpdatePage ($Info) {
+    $script:UPDATE_INFO = $Info
+    switch ($Info.State) {
+        'newer' {
+            $script:pgU_title.Text = 'UPDATE'
+            $script:pgU_ver.Text   = ('Echo Bloom {0}  →  {1}' -f $(if ($Info.Local) { $Info.Local } else { 'installed' }), $Info.Remote)
+            $script:pgU_body.Text  = if ($Info.Lines.Count) { "What is new:`n`n" + (($Info.Lines | ForEach-Object { "  •  $_" }) -join "`n") } else { 'A newer version is ready.' }
+            $script:pgU_note.Text  = "Your AI, its memory and your settings are not touched.`nEcho Bloom restarts for a few seconds."
+            $script:pgU_go.Text    = 'UPDATE NOW  →'; $script:pgU_go.Visible = $true; $script:pgU_close.Text = 'NOT NOW'
+        }
+        'current' {
+            $script:pgU_title.Text = 'UP TO DATE'
+            $script:pgU_ver.Text   = ('Echo Bloom {0}' -f $Info.Local)
+            $script:pgU_body.Text  = 'You already have the newest version. Nothing to do.'
+            $script:pgU_note.Text  = ''
+            $script:pgU_go.Visible = $false; $script:pgU_close.Text = 'CLOSE'
+        }
+        default {
+            $script:pgU_title.Text = "CAN'T CHECK"
+            $script:pgU_ver.Text   = ''
+            $script:pgU_body.Text  = $Info.Message
+            $script:pgU_note.Text  = ''
+            $script:pgU_go.Visible = $false; $script:pgU_close.Text = 'CLOSE'
+        }
+    }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Add pages to form
 # ─────────────────────────────────────────────────────────────────────────────
-$form.Controls.AddRange(@($pg1, $pg2, $pg3, $pg4, $pg5))
+$form.Controls.AddRange(@($pg1, $pg2, $pg3, $pg4, $pg5, $pgU))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Navigation
@@ -346,6 +471,7 @@ function Show-Page ([int]$n) {
     $pg3.Visible = ($n -eq 3)
     $pg4.Visible = ($n -eq 4)
     $pg5.Visible = ($n -eq 5)
+    $pgU.Visible = ($n -eq 6)
 
     # Pages 4 and 5 open or sit beside a browser. TopMost here covers checkout.
     if ($n -ge 4) { $form.TopMost = $false }
@@ -353,6 +479,11 @@ function Show-Page ([int]$n) {
     if ($n -eq 3 -and -not $script:installStarted) {
         $script:installStarted = $true
         Start-InstallWorker
+    }
+
+    if ($n -eq 4 -and $script:UPDATE_MODE) {
+        $script:pg4_title.Text = 'UPDATED'
+        $script:pg4_body.Text  = "Echo Bloom was updated and is running again.`n`nYour AI, its memory and your settings were not changed."
     }
 
     if ($n -eq 4 -and -not $script:launchStarted) {
@@ -1163,5 +1294,11 @@ $form.Add_FormClosing({
     try { if ($script:psInstall)   { $script:psInstall.Dispose() } } catch {}
 })
 
-Show-Page 1
+if (-not $env:EB_FRESH -and (Test-EbInstalled)) {
+    $script:UPDATE_MODE = $true
+    Set-UpdatePage (Get-EbUpdateInfo)
+    Show-Page 6
+} else {
+    Show-Page 1
+}
 [System.Windows.Forms.Application]::Run($form)

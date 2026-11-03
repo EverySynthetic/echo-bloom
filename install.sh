@@ -5,6 +5,21 @@
 
 set -euo pipefail
 
+# Flags. A person normally passes none: the script works out whether this is a first install or an update.
+#   --check        say what an update would change, change nothing
+#   --yes, -y      do not ask "Update now?" (the app's Update button uses this)
+#   --install      run the full first-time install again, even if Echo Bloom is already here
+#   --which-mode   print "update" or "install" and stop
+EB_YES=false; EB_CHECK=false; EB_FORCE_INSTALL=false; EB_WHICH=false
+for _eb_arg in "$@"; do
+    case "$_eb_arg" in
+        --yes|-y) EB_YES=true ;;
+        --check) EB_CHECK=true ;;
+        --install|--reinstall) EB_FORCE_INSTALL=true ;;
+        --which-mode) EB_WHICH=true ;;
+    esac
+done
+
 # Are we on a real terminal? This MUST be answered before the tee redirect
 # below, because after it fd 1 is a pipe and [[ -t 1 ]] is false forever. The
 # whiptail detection used to run after the redirect, so it was always false and
@@ -12,7 +27,7 @@ set -euo pipefail
 if [ -t 1 ] && [ -w /dev/tty ]; then REAL_TTY=true; else REAL_TTY=false; fi
 
 # Log everything to /tmp so crashes leave a trail
-INSTALL_LOG="/tmp/echo_bloom_install.log"
+INSTALL_LOG="${EB_INSTALL_LOG:-/tmp/echo_bloom_install.log}"
 exec > >(tee -a "$INSTALL_LOG") 2>&1
 echo "=== Echo Bloom install $(date) ==="
 
@@ -20,7 +35,7 @@ echo "=== Echo Bloom install $(date) ==="
 trap 'echo "INSTALL EXIT: line $LINENO, exit $?" >> "$INSTALL_LOG"' EXIT
 
 # Installer needs an interactive terminal for model selection and password setup.
-if [ ! -t 0 ]; then
+if [ ! -t 0 ] && ! $EB_YES && ! $EB_CHECK && ! $EB_WHICH; then
     echo ""
     echo "  Echo Bloom installer requires an interactive terminal."
     echo "  Download it first, then run it, so it can ask you questions:"
@@ -1871,6 +1886,147 @@ SVCEOF
     fi
     echo
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATE MODE
+# Echo Bloom is already here: show what changed, ask once, update the files.
+# No model menu, no naming, no password, no remote-access setup, no system packages.
+# Your AI, its memory and its settings are not touched. Only the web app and its
+# helpers are restarted, and only the ones already running; the Kin keep going
+# and pick up new scripts the next time they start (so nobody is woken at night).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# An install is "here" when the app is on disk and a past install left its settings behind.
+_eb_find_app_dir() {
+    local here
+    here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "")"
+    if [[ -n "$here" && -f "$here/main.py" && -d "$here/.git" ]]; then echo "$here"; return 0; fi
+    if [[ -f "$APP_DIR/main.py" && -d "$APP_DIR/.git" ]]; then echo "$APP_DIR"; return 0; fi
+    return 1
+}
+is_existing_install() {
+    _eb_find_app_dir >/dev/null || return 1
+    [[ -f "$HOME/.config/kin_app/config.json" || -d "$HOME/.local/share/echo_bloom" || -d "$HOME/.config/kin_app" ]]
+}
+
+_eb_app_version() {   # version string of a revision of version.py, or "?"
+    git -C "$1" show "$2:version.py" 2>/dev/null | sed -n 's/^VERSION *= *["'"'"']\([^"'"'"']*\)["'"'"'].*/\1/p' | head -1
+}
+
+# Restart only what is already running. Never start or stop the Kin's own processes.
+_eb_restart_running() {
+    local restarted=() u
+    if command -v systemctl &>/dev/null && ! $IS_MACOS; then
+        for u in "$SERVICE_NAME" echo_bloom_vault echo_bloom_pulse; do
+            if systemctl --user is-active --quiet "$u" 2>/dev/null; then
+                systemctl --user restart "$u" 2>/dev/null && restarted+=("$u") || warn "Could not restart $u. Restart it by hand if something looks off."
+            fi
+        done
+    elif $IS_MACOS && command -v launchctl &>/dev/null; then
+        for u in $(launchctl list 2>/dev/null | awk '{print $3}' | grep -E "^${LAUNCHD_PREFIX:-com.everysynthetic.echobloom}\.(app|vault|pulse)\b" || true); do
+            launchctl kickstart -k "gui/$(id -u)/$u" 2>/dev/null && restarted+=("$u") || true
+        done
+    fi
+    if (( ${#restarted[@]} )); then ok "Restarted: ${restarted[*]}"; else info "Nothing needed a restart."; fi
+}
+
+_eb_refresh_scripts() {   # copy the new lifecycle scripts into place; same files install copies, nothing else
+    local src="$APP_DIR/scripts" dst="$HOME/.local/share/echo_bloom/scripts" shared
+    [[ -d "$src" ]] || return 0
+    mkdir -p "$dst"
+    cp -r "$src"/. "$dst/"
+    for shared in kin_presence.py license.py; do
+        if [[ -f "$APP_DIR/$shared" ]]; then cp "$APP_DIR/$shared" "$dst/"; fi
+    done
+    chmod +x "$dst"/*.py 2>/dev/null || true
+    if [[ -f "$APP_DIR/verify_deploy.py" ]] && command -v python3 &>/dev/null; then
+        if python3 "$APP_DIR/verify_deploy.py" "$dst" --require license,kin_presence >/dev/null 2>&1; then
+            ok "Scripts updated."
+        else
+            warn "Scripts were copied but one of them cannot start. Details: python3 $APP_DIR/verify_deploy.py $dst"
+        fi
+    else
+        ok "Scripts updated."
+    fi
+}
+
+update_flow() {
+    APP_DIR="$(_eb_find_app_dir)"
+    echo
+    echo -e "${BOLD}Echo Bloom update${NC}"
+    echo
+    if ! git -C "$APP_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+        warn "This copy of Echo Bloom was not installed with git, so it cannot update itself. Nothing was changed."
+        echo "  Run the full installer instead:  bash $0 --install"
+        return 1
+    fi
+    if [[ -n "$(git -C "$APP_DIR" status --porcelain 2>/dev/null)" ]]; then
+        warn "You have your own changes in $APP_DIR, so the code was left exactly as it is."
+        echo "  Nothing was changed. Commit or stash them if you want updates."
+        return 0
+    fi
+    info "Checking for updates..."
+    if ! git -C "$APP_DIR" fetch --quiet 2>/dev/null; then
+        warn "Could not reach the update server. Nothing was changed. Check your internet and try again."
+        return 1
+    fi
+    local up before count vnow vnew
+    up="$(git -C "$APP_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo "origin/main")"
+    if ! git -C "$APP_DIR" rev-parse --verify --quiet "${up}^{commit}" >/dev/null; then
+        warn "Could not tell where updates come from for this copy. Nothing was changed."
+        echo "  Run the full installer instead:  bash $0 --install"
+        return 1
+    fi
+    before="$(git -C "$APP_DIR" rev-parse HEAD)"
+    count="$(git -C "$APP_DIR" rev-list --count "HEAD..$up" 2>/dev/null || echo 0)"
+    if [[ "$count" == "0" ]]; then
+        ok "Echo Bloom is up to date."
+        return 0
+    fi
+    vnow="$(_eb_app_version "$APP_DIR" HEAD)"; vnew="$(_eb_app_version "$APP_DIR" "$up")"
+    echo
+    echo "  ${count} change(s) are ready${vnow:+: version $vnow}${vnew:+ to $vnew}:"
+    git -C "$APP_DIR" log --format='    - %s' "HEAD..$up" 2>/dev/null | head -12
+    (( count > 12 )) && echo "    ...and $((count - 12)) more"
+    echo
+    echo "  Your AI, its memory and its settings are not touched."
+    echo "  The app restarts for a few seconds. Your Kin keep running."
+    echo
+    if $EB_CHECK; then
+        echo "  (--check: nothing was changed.)"
+        return 0
+    fi
+    if ! $EB_YES; then
+        local ans
+        read -rp "  Update now? [Y/n] " ans
+        [[ "${ans:-Y}" =~ ^[Nn] ]] && { echo "  Nothing was changed."; return 0; }
+    fi
+    if ! git -C "$APP_DIR" merge --ff-only --quiet "$up" 2>/dev/null; then
+        warn "The update could not be applied cleanly. Nothing was changed."
+        return 1
+    fi
+    mkdir -p "$HOME/.local/share/echo_bloom"
+    echo "$before" > "$HOME/.local/share/echo_bloom/last_update_from.txt"
+    if ! git -C "$APP_DIR" diff --quiet "$before" HEAD -- requirements.txt 2>/dev/null; then
+        info "Some libraries changed. Installing them..."
+        install_deps
+    fi
+    _eb_refresh_scripts
+    _eb_restart_running
+    echo
+    ok "Updated${vnew:+ to $vnew}."
+    echo "  To go back:  git -C $APP_DIR reset --hard $(echo "$before" | cut -c1-12)"
+    return 0
+}
+
+if $EB_WHICH; then
+    if ! $EB_FORCE_INSTALL && is_existing_install; then echo update; else echo install; fi
+    exit 0
+fi
+if ! $EB_FORCE_INSTALL && is_existing_install; then
+    update_flow
+    exit $?
+fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN
