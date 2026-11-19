@@ -54,15 +54,15 @@ _OFFLINE_GRACE_DAYS = 3
 
 def get_fingerprint() -> str:
     """
-    Stable hardware fingerprint. Cached after first call.
+    Stable hardware fingerprint.
     Uses /etc/machine-id (set at OS install, requires no root, survives reboots).
     Falls back to MAC-based UUID if unavailable.
-    """
-    if FINGERPRINT_PATH.exists():
-        fp = FINGERPRINT_PATH.read_text().strip()
-        if fp:
-            return fp
 
+    Recomputed from the OS identity whenever one is readable. The cache file
+    used to win outright, so writing any value to it (and deleting the trial
+    token) bought a fresh trial. It is only trusted when there is no stable OS
+    identity, because then it is the only stable thing there is.
+    """
     parts = []
     try:
         machine_id = Path("/etc/machine-id").read_text().strip()
@@ -91,6 +91,14 @@ def get_fingerprint() -> str:
             pass
 
     if not parts:
+        try:
+            cached = FINGERPRINT_PATH.read_text().strip()
+        except Exception:
+            cached = ""
+        if cached:
+            return cached
+
+    if not parts:
         # Last resort. Neither /etc/machine-id nor MachineGuid was readable, so
         # identity now rests on whichever adapter uuid.getnode() picks, which
         # can change when a VPN or VM adapter is added or removed. Silent, this
@@ -103,8 +111,13 @@ def get_fingerprint() -> str:
         parts.append(str(uuid.getnode()))
 
     fp = hashlib.sha256("|".join(parts).encode()).hexdigest()
-    FINGERPRINT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    FINGERPRINT_PATH.write_text(fp)
+    try:
+        current = FINGERPRINT_PATH.read_text().strip()
+    except Exception:
+        current = ""
+    if current != fp:
+        FINGERPRINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        FINGERPRINT_PATH.write_text(fp)
     return fp
 
 
@@ -223,6 +236,11 @@ def _parse_trial_token(token: str) -> dict:
         return {"state": "invalid", "reason": result.get("reason")}
 
     payload = result["payload"]
+
+    # Tokens are issued per fingerprint; one copied from another machine (or
+    # minted for a fingerprint written into machine_id) is not this machine's.
+    if payload.get("fingerprint") != get_fingerprint():
+        return {"state": "invalid", "reason": "trial token belongs to another machine"}
 
     if payload.get("denied"):
         return {"state": "denied", "reason": payload.get("reason", "blacklisted")}
