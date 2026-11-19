@@ -38,10 +38,12 @@ MAX_FIELD = 20_000
 _REDACT = [
     (re.compile(r"\bEB1-[A-Za-z0-9_\-\.]+", re.I), "EB1-[redacted]"),
     (re.compile(r"\bxai-[A-Za-z0-9]{20,}", re.I), "xai-[redacted]"),
-    (re.compile(r"\bsk-[A-Za-z0-9]{20,}", re.I), "sk-[redacted]"),
+    (re.compile(r"\bsk([-_])[A-Za-z0-9_\-]{16,}", re.I), r"sk\1[redacted]"),
+    (re.compile(r"\bgsk_[A-Za-z0-9_\-]{10,}", re.I), "gsk_[redacted]"),
+    (re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=\-]{16,}", re.I), "Bearer [redacted]"),
     (re.compile(r"\bwhsec_[A-Za-z0-9]{20,}", re.I), "whsec_[redacted]"),
     (re.compile(r"\beyJ[A-Za-z0-9_\-]{30,}\.[A-Za-z0-9_\-\.]+"), "[redacted token]"),
-    (re.compile(r"(password|passwd|secret|token|api[_-]?key)\s*[=:]\s*\S+", re.I),
+    (re.compile(r'(password|passwd|secret|token|api[_-]?key)"?\s*[=:]\s*\S+', re.I),
      r"\1=[redacted]"),
 ]
 
