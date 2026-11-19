@@ -246,6 +246,13 @@ def _parse_trial_token(token: str) -> dict:
         return {"state": "denied", "reason": payload.get("reason", "blacklisted")}
 
     expires = payload.get("expires", 0)
+    if not isinstance(expires, int) or expires <= 0:
+        # The server never issues a trial without an expiry. Unsigned (no
+        # cryptography) that read as "never expires".
+        return {"state": "invalid", "reason": "trial token has no expiry"}
+    if result.get("unverified"):
+        # Unsigned: no longer than a real trial started at this install's first run.
+        expires = min(expires, _first_seen() + TRIAL_DAYS * 86400)
     now     = _now()
     if expires and now > expires:
         return {"state": "expired"}
