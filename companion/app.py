@@ -127,8 +127,12 @@ async def animate(
             {"ok": False, "error": "sadtalker not in this image yet"}, 503)
     tmp = Path(tempfile.mkdtemp(prefix="st_"))
     try:
-        wav_path = tmp / (wav.filename or "in.wav")
-        img_path = tmp / (image.filename or "face.png")
+        # Client filenames are ignored: they could be absolute or contain "..".
+        wav_path = tmp / "in.wav"
+        ext = Path(image.filename or "").suffix.lower()
+        if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+            ext = ".png"
+        img_path = tmp / ("face" + ext)
         wav_path.write_bytes(await wav.read())
         img_path.write_bytes(await image.read())
         out_dir = tmp / "out"
