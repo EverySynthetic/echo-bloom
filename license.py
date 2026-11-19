@@ -456,7 +456,10 @@ def ensure_trial_start():
     """
     existing = _read_trial_token()
 
-    if existing is not None:
+    # An unreadable token (torn write, corrupted file) is re-fetched: the
+    # server's /register-trial is idempotent and hands back the same token.
+    # Leaving it in place read as "expired" forever.
+    if existing is not None and existing.get("state") != "invalid":
         # Already have a token. If it was from offline grace, try to upgrade to server token.
         if existing.get("offline"):
             _try_upgrade_offline_token()
@@ -468,25 +471,43 @@ def ensure_trial_start():
 
     TRIAL_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    if result.get("offline"):
-        # Server unreachable — grant offline grace, measured from first run.
-        # This used to be time.time() + 3 days, recomputed every time the token
-        # was rewritten. Because an expired offline token was deleted (and then
-        # re-registration failed and wrote a fresh one), staying offline renewed
-        # the trial forever.
-        expiry = _first_seen() + _OFFLINE_GRACE_DAYS * 86400
-        TRIAL_TOKEN_PATH.write_text(_offline_token(expiry, fp))
+    if not result.get("offline") and _store_server_result(result):
         return
 
-    _store_server_result(result)
+    # Server unreachable, OR it answered with something that is not a real
+    # verdict (429 from the per-IP limiter, a 5xx, a proxy's HTML error page).
+    # Either way we know nothing about this machine, so grant offline grace,
+    # measured from first run. Storing nothing here used to report "expired"
+    # to a brand-new customer. The grace token is retried against the server
+    # by _try_upgrade_offline_token.
+    #
+    # Measured from first run, not time.time() + 3 days: that was recomputed
+    # every time the token was rewritten, and because an expired offline token
+    # was deleted (and then re-registration failed and wrote a fresh one),
+    # staying offline renewed the trial forever.
+    expiry = _first_seen() + _OFFLINE_GRACE_DAYS * 86400
+    _write_token(_offline_token(expiry, fp))
 
 
 _UPGRADE_RETRY_SECS   = 600
 _last_upgrade_attempt = 0.0
 
 
-def _store_server_result(result: dict) -> None:
+def _write_token(text: str) -> None:
+    """Write trial_token atomically. A torn plain write_text read as invalid,
+    which locked the customer out."""
+    TRIAL_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = TRIAL_TOKEN_PATH.with_name(f".{TRIAL_TOKEN_PATH.name}.{os.getpid()}.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, TRIAL_TOKEN_PATH)
+
+
+def _store_server_result(result: dict) -> bool:
     """Persist a /register-trial response, trusting only what it should.
+
+    Returns True when the server gave a real verdict (a stored token, a
+    genuine denial, or a signed refusal such as "trial expired"); False when
+    the response told us nothing, so the caller can fall back to grace.
 
     Two holes closed here. The token used to be written verbatim, so a fake
     server (ECHO_BLOOM_LICENSE_SERVER points anywhere) could hand back an
@@ -505,22 +526,26 @@ def _store_server_result(result: dict) -> None:
     if result.get("ok") and token:
         if not str(token).startswith("EBT-"):
             log.warning("license server returned a non-EBT token - ignoring it")
-            return
+            return False
         if _CRYPTO_OK and not _verify_signed_token(str(token), "EBT-")["valid"]:
             log.warning("license server returned an EBT token that failed signature check")
-            return
-        TRIAL_TOKEN_PATH.write_text(str(token))
-        return
+            return False
+        _write_token(str(token))
+        return True
 
     reason = str(result.get("reason", "") or "")
     genuine = bool(result.get("denied")) or any(
         w in reason.lower() for w in ("blacklist", "not eligible", "revoked", "banned")
     )
     if genuine:
-        TRIAL_TOKEN_PATH.write_text(f"DENIED:{reason or 'blacklisted'}")
-    else:
-        log.warning("trial registration did not succeed (%s) - will retry next launch",
-                    reason or "no reason given")
+        _write_token(f"DENIED:{reason or 'blacklisted'}")
+        return True
+    if token and _verify_signed_token(str(token), "EBT-")["valid"]:
+        # A signed refusal (e.g. "trial expired") is a real answer, not an outage.
+        return True
+    log.warning("trial registration did not succeed (%s) - will retry next launch",
+                reason or "no reason given")
+    return False
 
 
 def _try_upgrade_offline_token():
