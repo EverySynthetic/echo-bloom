@@ -1702,8 +1702,33 @@ def _utf8_env() -> dict:
     return env
 
 
+def _argv_matches(argv: list[str], pattern: str) -> bool:
+    """Does this process RUN pattern, rather than merely mention it?
+
+    "roundtable.py" matches `python -u …/roundtable.py --interval 30`, not
+    `vim roundtable.py` or `less roundtable.py.log`. "cloudflared tunnel"
+    matches `cloudflared tunnel --url …`. A substring of the joined command
+    line matched all of them, so Stop sent SIGTERM to an editor.
+    """
+    from pathlib import PureWindowsPath   # splits on both / and \
+    words = [w.lower() for w in pattern.split()]
+    if not argv or not words:
+        return False
+    head = list(argv)
+    prog = PureWindowsPath(head[0]).name.lower()
+    if prog.endswith(".exe"):
+        prog = prog[:-4]
+    if prog.startswith("python"):
+        # The script is the first non-option argument (skips -u and friends).
+        head = [a for a in head[1:] if not a.startswith("-")]
+        if not head:
+            return False
+        prog = PureWindowsPath(head[0]).name.lower()
+    return [prog] + [a.lower() for a in head[1:len(words)]] == words
+
+
 def _find_pids(pattern: str) -> list[int]:
-    """PIDs whose command line contains pattern.
+    """PIDs of processes running pattern (see _argv_matches).
 
     pgrep does not exist on Windows, which is why the roundtable controls used
     to look broken there. psutil is preferred and cross-platform; pgrep stays as
@@ -1718,10 +1743,10 @@ def _find_pids(pattern: str) -> list[int]:
         pids = []
         for proc in psutil.process_iter(["pid", "cmdline"]):
             try:
-                cmdline = " ".join(proc.info.get("cmdline") or [])
+                argv = list(proc.info.get("cmdline") or [])
             except Exception:
                 continue
-            if pattern in cmdline and proc.info["pid"] != os.getpid():
+            if _argv_matches(argv, pattern) and proc.info["pid"] != os.getpid():
                 pids.append(proc.info["pid"])
         return pids
 
