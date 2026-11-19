@@ -478,9 +478,12 @@ def _first_seen() -> int:
     extend the grace period.
     """
     val = _read_stamp("first_run")
-    if val:
-        return val
     now = _now()
+    if val and val <= now:
+        return val
+    # Missing, or dated in the future: nothing legitimate writes a first run
+    # ahead of every time this machine has seen, and a far-future stamp turned
+    # the grace cap below into no cap. Pin it to now, persistently.
     _write_stamp("first_run", now)
     return now
 
