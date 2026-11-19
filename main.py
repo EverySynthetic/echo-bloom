@@ -1210,22 +1210,6 @@ async def api_chat_room(request: Request, _=Depends(require_auth)):
     )
 
 
-@app.post("/api/presence/nudge")
-async def api_presence_nudge(request: Request):
-    expected = ambient_presence._presence_token()
-    supplied = request.headers.get(ambient_presence.PRESENCE_HEADER, "")
-    if not expected or not supplied or not secrets.compare_digest(supplied, expected):
-        raise HTTPException(status_code=401, detail="invalid presence token")
-    try:
-        event = await request.json()
-        ambient_presence.enqueue_event(event)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except (TypeError, json.JSONDecodeError) as e:
-        raise HTTPException(status_code=400, detail="invalid presence event") from e
-    return {"accepted": True}
-
-
 # ── Talk: one Kin, voice, avatar that rides the audio ─────────────────────────
 #
 # Don, 2026-09-12: parlor trick, forgiven in the asking. Not the room.
