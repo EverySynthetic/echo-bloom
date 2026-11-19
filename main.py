@@ -516,14 +516,18 @@ def get_client_ip(request: Request) -> str:
     if peer not in _LOOPBACK:
         # Direct connection. Its headers are self-reported; the socket is not.
         return peer
-    cf = request.headers.get("CF-Connecting-IP")
-    if cf:
-        return cf.strip()
+    # X-Forwarded-For's last hop first. Caddy, nginx and Cloudflare's edge all
+    # append the address they saw, so the last entry is vouched for. A local
+    # Caddy/nginx/tailscale serve passes a client-sent CF-Connecting-IP through
+    # untouched, so preferring it gave every guess a fresh limiter bucket.
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
         # Proxies APPEND the real client, so the LAST hop is the one the
         # nearest proxy vouched for. The first entry is the client's claim.
         return forwarded.split(",")[-1].strip()
+    cf = request.headers.get("CF-Connecting-IP")
+    if cf:
+        return cf.strip()
     return peer
 
 
