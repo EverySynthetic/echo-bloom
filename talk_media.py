@@ -22,6 +22,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -58,6 +60,7 @@ SPEAKERS = {
 # Kin nobody's configured yet still gets a shot at real piper audio
 # instead of going straight to espeak.
 _GENERIC_VOICE = "en_US-lessac-high.onnx"
+VOICE_NAME_RE = re.compile(r"[A-Za-z0-9_.-]+\.onnx")
 
 # Local lookup only so tests and leftover callers can resolve a filename.
 _PIPER_DIRS = [
@@ -72,6 +75,10 @@ def _voice_filename(kin_name: str) -> str:
     voice-picker UI already writes to), then Don's personal shortcut,
     then a generic downloadable voice — always something to try."""
     configured = cl.KIN_BY_NAME.get(kin_name, {}).get("voice")
+    if configured and not VOICE_NAME_RE.fullmatch(configured):
+        # It ends up in a remote shell command and a local path.
+        log.warning("ignoring invalid voice %r for %s", configured, kin_name)
+        configured = None
     return configured or VOICES.get(kin_name) or _GENERIC_VOICE
 
 
@@ -108,7 +115,7 @@ def voice_path(kin_name: str) -> Path | None:
     """Filename for the Kin. Prefers therug; falls back to a local copy
     of the same onnx so tests still resolve without ssh."""
     fname = _voice_filename(kin_name)
-    r = _ssh(f"test -f {THERUG_PIPER}/{fname} && echo ok", timeout=10)
+    r = _ssh(f"test -f {THERUG_PIPER}/{shlex.quote(fname)} && echo ok", timeout=10)
     if r.returncode == 0 and b"ok" in r.stdout:
         return Path(THERUG_PIPER) / fname
     for d in _PIPER_DIRS:
@@ -220,7 +227,7 @@ def synthesize_wav(text: str, kin_name: str, dest: Path) -> bytes:
 
     if THERUG:
         remote_wav = f"/tmp/talk_{os.getpid()}.wav"
-        model = f"{THERUG_PIPER}/{fname}"
+        model = f"{THERUG_PIPER}/{shlex.quote(fname)}"
         argv = [
             "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", THERUG,
             f"cd {THERUG_PIPER} && ./piper --model {model} --output_file {remote_wav}"

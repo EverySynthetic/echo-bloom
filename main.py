@@ -1517,6 +1517,8 @@ async def api_get_kin_voice(name: str, _=Depends(require_auth)):
 async def api_set_kin_voice(name: str, request: Request, _=Depends(require_auth)):
     body       = await request.json()
     voice_file = (body.get("voice_file") or "").strip()
+    if voice_file and not tm.VOICE_NAME_RE.fullmatch(voice_file):
+        return {"ok": False, "error": "voice_file must be a plain .onnx filename"}
     cfg = _load_kin_cfg()
     for k in cfg.get("kin", []):
         if k.get("name") == name:
