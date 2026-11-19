@@ -3469,9 +3469,23 @@ async def api_onboard_autosave(request: Request, _=Depends(require_auth)):
             existing = {}
 
     kin_list = body.get("kin", existing.get("kin", []))
+    existing_kin_by_name = {k.get("name"): k for k in existing.get("kin", [])}
     for k in kin_list:
         if "name" in k:
             k["name"] = _sanitize_kin_name(k["name"])
+        # Same per-Kin merge as /api/onboard/save. The client sends its
+        # page-load snapshot, so a wholesale replace reverted anything saved
+        # since (core memories, voice) from another tab or the naming ritual.
+        prev = existing_kin_by_name.get(k.get("name"), {})
+        if "core_memories" in k or "core_memories" in prev:
+            merged_core = list(prev.get("core_memories") or [])
+            for m in (k.get("core_memories") or []):
+                if m and m not in merged_core:
+                    merged_core.append(m)
+            k["core_memories"] = merged_core[:20]
+        for field, value in prev.items():
+            if field not in k:
+                k[field] = value
 
     # Merge onto the EXISTING config rather than replacing it. Rebuilding the
     # dict from four known keys silently dropped qdrant_url, embed_url,
