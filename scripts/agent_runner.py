@@ -99,7 +99,7 @@ HELP_SYSTEM = (
     "| psub). Windows: powershell -ExecutionPolicy Bypass -Command \"iwr "
     "-useb https://everysynthetic.org/install_wizard.ps1 | iex\". macOS is "
     "early access and uses launchd instead of systemd; the install log is at "
-    "/tmp/echo_bloom_install.log.\n\n"
+    "~/.local/state/echo_bloom/install.log.\n\n"
 
     "REMOTE ACCESS -- reaching the dashboard from outside the house\n"
     "Two options, both on the dashboard under REMOTE ACCESS.\n"

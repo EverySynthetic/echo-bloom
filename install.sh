@@ -26,8 +26,13 @@ done
 # every whiptail branch in this file was dead code on every machine ever.
 if [ -t 1 ] && [ -w /dev/tty ]; then REAL_TTY=true; else REAL_TTY=false; fi
 
-# Log everything to /tmp so crashes leave a trail
-INSTALL_LOG="${EB_INSTALL_LOG:-/tmp/echo_bloom_install.log}"
+# Log everything so crashes leave a trail. Private to this user: the log
+# carries the remote setup code, and a fixed /tmp path was readable by (or
+# pre-creatable by) every other account on the machine.
+INSTALL_LOG="${EB_INSTALL_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/echo_bloom/install.log}"
+mkdir -p "$(dirname "$INSTALL_LOG")" 2>/dev/null || true
+( umask 077; : >> "$INSTALL_LOG" ) 2>/dev/null || true
+chmod 600 "$INSTALL_LOG" 2>/dev/null || true
 exec > >(tee -a "$INSTALL_LOG") 2>&1
 echo "=== Echo Bloom install $(date) ==="
 
