@@ -158,6 +158,10 @@ def _sign_denial(fingerprint: str, reason: str) -> str:
 
 
 def generate_license_key(email: str, key_type: str = "permanent", days: int = 0) -> str:
+    if key_type == "trial" and days <= 0:
+        # expires=0 means permanent to the client: a "trial" with no days
+        # would never end.
+        raise ValueError("a trial key needs days > 0")
     now     = int(time.time())
     expires = (now + days * 86400) if key_type == "trial" and days > 0 else 0
     return _sign({
@@ -582,6 +586,8 @@ async def admin_generate(request: Request, x_admin_token: str = Header(default="
     days     = int(body.get("days", 0))
     if not email:
         raise HTTPException(status_code=400, detail="email required")
+    if key_type == "trial" and days <= 0:
+        raise HTTPException(status_code=400, detail="trial keys need days > 0")
 
     key = generate_license_key(email, key_type, days)
     with _db() as conn:
