@@ -115,6 +115,24 @@ def _load_public_key():
     return Ed25519PublicKey.from_public_bytes(raw)
 
 
+def _b64d_canonical(s: str) -> bytes:
+    """Decode unpadded base64url, rejecting any non-canonical spelling.
+
+    urlsafe_b64decode silently drops characters outside the alphabet, so a key
+    with one junk character inserted still verified while hashing differently
+    from the issued key -- and revocation is keyed on that hash.
+    """
+    raw = base64.urlsafe_b64decode(s + "==")
+    if base64.urlsafe_b64encode(raw).rstrip(b"=").decode() != s:
+        raise ValueError("non-canonical base64")
+    return raw
+
+
+def _norm_key(key: str) -> str:
+    """A key with all whitespace removed (keys pasted from email may wrap)."""
+    return "".join(key.split())
+
+
 def _verify_signed_token(token: str, prefix: str) -> dict:
     """Verify any Ed25519-signed token with the given prefix."""
     if not _CRYPTO_OK:
@@ -151,8 +169,8 @@ def _verify_signed_token(token: str, prefix: str) -> dict:
         if "." not in rest:
             return {"valid": False, "reason": "malformed token"}
         payload_b64, sig_b64 = rest.rsplit(".", 1)
-        payload_bytes = base64.urlsafe_b64decode(payload_b64 + "==")
-        sig_bytes     = base64.urlsafe_b64decode(sig_b64     + "==")
+        payload_bytes = _b64d_canonical(payload_b64)
+        sig_bytes     = _b64d_canonical(sig_b64)
         pub = _load_public_key()
         pub.verify(sig_bytes, payload_bytes)
         return {"valid": True, "payload": json.loads(payload_bytes.decode())}
@@ -170,7 +188,7 @@ def verify_key(key: str) -> dict:
     Returns {"valid": True, "type": "permanent"|"trial", "email": "...", "days_left": N|None}
          or {"valid": False, "reason": "..."}
     """
-    result = _verify_signed_token(key.strip(), "EB1-")
+    result = _verify_signed_token(_norm_key(key), "EB1-")
     if not result["valid"]:
         return result
 
@@ -305,7 +323,7 @@ def check_latest_version(timeout: int = 4) -> str | None:
                 REVOKED_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
                 REVOKED_KEY_PATH.write_text(saved)
                 invalidate_status_cache()
-            elif REVOKED_KEY_PATH.exists() and REVOKED_KEY_PATH.read_text().strip() == saved:
+            elif REVOKED_KEY_PATH.exists() and _norm_key(REVOKED_KEY_PATH.read_text()) == _norm_key(saved):
                 # Admin un-revoked it — clear the local marker the same way it
                 # was set, so a mistaken revoke is fully reversible without
                 # the customer having to touch a file by hand.
@@ -317,8 +335,11 @@ def check_latest_version(timeout: int = 4) -> str | None:
 
 
 def key_hash(key: str) -> str:
-    """sha256 hex of a license key: what the update check sends instead of the key."""
-    return hashlib.sha256(key.strip().encode("utf-8")).hexdigest()
+    """sha256 hex of a license key: what the update check sends instead of the key.
+
+    Whitespace-normalised, the same way verify_key reads the key, so a space
+    or newline inserted into a revoked key still hashes to the revoked key."""
+    return hashlib.sha256(_norm_key(key).encode("utf-8")).hexdigest()
 
 
 # ── Server registration ────────────────────────────────────────────────────────
@@ -684,7 +705,7 @@ def _compute_status(allow_network: bool = True) -> dict:
     # Purchased key wins over everything
     saved = load_saved_key()
     if saved:
-        if REVOKED_KEY_PATH.exists() and REVOKED_KEY_PATH.read_text().strip() == saved:
+        if REVOKED_KEY_PATH.exists() and _norm_key(REVOKED_KEY_PATH.read_text()) == _norm_key(saved):
             return {"state": "revoked"}
         result = verify_key(saved)
         if result["valid"]:
