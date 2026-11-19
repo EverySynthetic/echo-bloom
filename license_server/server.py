@@ -92,6 +92,10 @@ def _init_db():
                 source       TEXT,
                 delivered    INTEGER DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS stripe_sessions (
+                session_id   TEXT PRIMARY KEY,
+                processed    INTEGER NOT NULL
+            );
         """)
         # Additive migration for databases created before `delivered` existed.
         try:
@@ -509,7 +513,9 @@ async def problem_report(request: Request):
 
 @app.post("/stripe")
 async def stripe_webhook(request: Request):
-    """Fires on checkout.session.completed — fully automated key delivery."""
+    """Fires on checkout.session.completed (and .async_payment_succeeded, which
+    must also be subscribed in the Stripe dashboard for delayed payment
+    methods) — fully automated key delivery."""
     payload    = await request.body()
     sig_header = request.headers.get("stripe-signature", "")
 
@@ -530,14 +536,23 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail="invalid json")
 
     etype = event.get("type", "")
-    # Only checkout.session.completed. Handling payment_intent.succeeded too
+    # Only Checkout session events. Handling payment_intent.succeeded too
     # meant one Checkout purchase issued TWO keys and sent two emails when both
     # events were subscribed — and on its own a PaymentIntent carries no
     # top-level email, so it silently issued nothing.
-    if etype != "checkout.session.completed":
+    # async_payment_succeeded is how a delayed method (bank debit) that was
+    # still "unpaid" at checkout.session.completed reports that it cleared.
+    if etype not in ("checkout.session.completed",
+                     "checkout.session.async_payment_succeeded"):
         return {"ok": True, "skipped": etype}
 
     session = event.get("data", {}).get("object", {})
+    pstatus = session.get("payment_status")
+    if pstatus not in ("paid", "no_payment_required"):
+        # 200 so Stripe does not retry; async_payment_succeeded follows if it clears.
+        print(f"[license-server] checkout session not paid yet ({pstatus}) — no key issued")
+        return {"ok": True, "skipped": f"payment_status={pstatus}"}
+
     email   = (
         (session.get("customer_details") or {}).get("email")
         or session.get("customer_email")
@@ -554,7 +569,18 @@ async def stripe_webhook(request: Request):
 
     key = generate_license_key(email, "permanent")
     delivered = 0
+    # One key per Checkout session. Stripe redelivers on any timeout or 5xx,
+    # and every redelivery used to mint and email another key.
+    session_id = session.get("id") or event.get("id")
     with _db() as conn:
+        if session_id:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO stripe_sessions (session_id, processed) VALUES (?,?)",
+                (session_id, int(time.time())),
+            )
+            if cur.rowcount == 0:
+                print(f"[license-server] Stripe session {session_id} already processed — not issuing again")
+                return {"ok": True, "duplicate": True}
         conn.execute(
             "INSERT INTO issued_keys (email, key_type, issued, key, source) VALUES (?,?,?,?,?)",
             (email, "permanent", int(time.time()), key, "stripe"),
